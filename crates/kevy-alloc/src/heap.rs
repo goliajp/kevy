@@ -106,7 +106,6 @@ pub struct Heap {
     /// can be compared with its class's average occupancy.
     pub(crate) class_live: [u32; NCLASSES],
     pub(crate) live_bytes: u64,
-    pub(crate) rounding_bytes: u64,
     /// Foreign frees awaiting batched shipment home. The free fast path
     /// only ever appends here — the cross-core traffic all lives in the
     /// flush. See `outbound.rs` for why this shape and not tcache-style
@@ -191,7 +190,6 @@ impl Heap {
             spans_in_class: [0; NCLASSES],
             class_live: [0; NCLASSES],
             live_bytes: 0,
-            rounding_bytes: 0,
             outbound: Outbound::new(),
             bins: [[0; BINS]; NCLASSES],
             free_spans: 0,
@@ -253,6 +251,7 @@ impl Heap {
     /// unsafe { heap.dealloc(p, 24, 16) };
     /// # Ok::<(), &str>(())
     /// ```
+    #[inline]
     pub fn alloc(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
         match class::index_of(size, align) {
             Some(c) => self.alloc_small(c, size),
@@ -313,10 +312,7 @@ impl Heap {
         if unsafe { seg.as_ref() }.owner != self.id {
             return false;
         }
-        let slot = class::size_of(a) as u64;
         self.live_bytes = self.live_bytes - old_size as u64 + new_size as u64;
-        self.rounding_bytes =
-            self.rounding_bytes - (slot - old_size as u64) + (slot - new_size as u64);
         true
     }
 
@@ -338,6 +334,7 @@ impl Heap {
     /// assert_eq!(heap.snapshot().live, 0);
     /// # Ok::<(), &str>(())
     /// ```
+    #[inline]
     pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>, size: usize, align: usize) {
         match class::index_of(size, align) {
             // SAFETY: this fn is `unsafe`; its contract already requires that `ptr` came
@@ -363,10 +360,24 @@ impl Heap {
     /// the lowest-first densification that page-granular reclaim feeds
     /// on — resident went 1.98× → 2.38× with the cache in place. The
     /// allocator's reason to exist outranks a cache that pays nothing.
-    fn alloc_small(&mut self, c: usize, size: usize) -> Option<NonNull<u8>> {
+    ///
+    /// Only the claimed-word handout is inline; everything past it is out
+    /// of line so the fast path carries no frame beyond its own.
+    #[inline]
+    pub(crate) fn alloc_small(&mut self, c: usize, size: usize) -> Option<NonNull<u8>> {
+        let Some(slot) = self.pop_claimed(c) else {
+            // a tail call, so nothing on the hit path needs a saved register
+            return self.alloc_refill(c, size);
+        };
+        self.live_bytes += size as u64;
+        Some(slot)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn alloc_refill(&mut self, c: usize, size: usize) -> Option<NonNull<u8>> {
         let slot = self.pop_slot(c).or_else(|| self.slow_path(c))?;
         self.live_bytes += size as u64;
-        self.rounding_bytes += (class::size_of(c) - size) as u64;
         Some(slot)
     }
 
@@ -460,12 +471,14 @@ impl Heap {
         Some(())
     }
 
+    #[inline(never)]
     fn alloc_large(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
         crate::large::alloc(size, align)
     }
 
     /// # Safety
     /// See [`Self::dealloc`].
+    #[inline(never)]
     unsafe fn dealloc_large(&mut self, ptr: NonNull<u8>, size: usize) {
         // SAFETY: delegated to the caller's contract.
         unsafe { crate::large::dealloc(ptr, size) };

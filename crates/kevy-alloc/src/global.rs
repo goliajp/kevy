@@ -120,11 +120,15 @@ fn is_over_aligned(layout: Layout) -> bool {
 //    allocates — which is the premise the reference in `with_heap`
 //    rests on in turn.
 unsafe impl GlobalAlloc for KevyAlloc {
+    /// One class lookup picks the path: a class means neither
+    /// over-aligned nor past the small range, so the common case tests
+    /// size and alignment once and the rest is out of line.
+    #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if is_over_aligned(layout) {
-            return alloc_over_aligned(layout);
-        }
-        match with_heap(|h| h.alloc(layout.size(), layout.align())) {
+        let Some(c) = class::index_of(layout.size(), layout.align()) else {
+            return alloc_unclassed(layout);
+        };
+        match with_heap(|h| h.alloc_small(c, layout.size())) {
             Some(Some(p)) => p.as_ptr(),
             _ => core::ptr::null_mut(),
         }
@@ -186,19 +190,47 @@ unsafe impl GlobalAlloc for KevyAlloc {
         }
     }
 
+    #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let Some(p) = NonNull::new(ptr) else { return };
-        if is_over_aligned(layout) {
-            // SAFETY: produced by `alloc_over_aligned` with this layout.
-            unsafe { dealloc_over_aligned(p, layout) };
+        let Some(c) = class::index_of(layout.size(), layout.align()) else {
+            // SAFETY: delegated to `GlobalAlloc`'s contract.
+            unsafe { dealloc_unclassed(p, layout) };
             return;
-        }
+        };
         with_heap(|h| {
             // SAFETY: delegated to `GlobalAlloc`'s contract — same
-            // layout the allocation was made with.
-            unsafe { h.dealloc(p, layout.size(), layout.align()) };
+            // layout, so the same class the allocation was served from.
+            unsafe { h.dealloc_small(p, c, layout.size()) };
         });
     }
+}
+
+/// A layout with no size class: over-aligned, or a direct mapping.
+#[inline(never)]
+fn alloc_unclassed(layout: Layout) -> *mut u8 {
+    if is_over_aligned(layout) {
+        return alloc_over_aligned(layout);
+    }
+    match with_heap(|h| h.alloc(layout.size(), layout.align())) {
+        Some(Some(p)) => p.as_ptr(),
+        _ => core::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `ptr` must come from [`alloc_unclassed`] with the same layout.
+#[inline(never)]
+unsafe fn dealloc_unclassed(ptr: NonNull<u8>, layout: Layout) {
+    if is_over_aligned(layout) {
+        // SAFETY: produced by `alloc_over_aligned` with this layout.
+        unsafe { dealloc_over_aligned(ptr, layout) };
+        return;
+    }
+    with_heap(|h| {
+        // SAFETY: delegated to the caller's contract.
+        unsafe { h.dealloc(ptr, layout.size(), layout.align()) };
+    });
 }
 
 /// Serve an alignment stricter than a size class can offer by

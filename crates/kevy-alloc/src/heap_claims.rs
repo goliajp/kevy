@@ -12,9 +12,10 @@ use crate::segment::Segment;
 
 use super::Heap;
 
-/// One claimed word of one span, held heap-locally. `base` is the
-/// span's data base, precomputed so the handout path performs no
-/// segment-header access at all.
+/// One claimed word of one span, held heap-locally. `lo` and `len` are
+/// the address range of the word's slots, clipped to the span, so that
+/// neither handing a slot out nor taking one back reads a segment
+/// header or works out span and slot indices.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Claim {
     pub(crate) seg: NonNull<Segment>,
@@ -22,12 +23,14 @@ pub(crate) struct Claim {
     pub(crate) word: u8,
     pub(crate) claimed: u64,
     pub(crate) taken: u64,
-    pub(crate) base: *mut u8,
+    pub(crate) lo: *mut u8,
+    pub(crate) len: usize,
 }
 
 impl Heap {
     /// Hand out the lowest available bit of the claimed word. Fully
     /// heap-local: no segment-header access on this path.
+    #[inline]
     pub(super) fn pop_claimed(&mut self, c: usize) -> Option<NonNull<u8>> {
         let cl = self.claims[c].as_mut()?;
         let avail = cl.claimed & !cl.taken;
@@ -36,8 +39,10 @@ impl Heap {
         }
         let b = avail.trailing_zeros();
         cl.taken |= 1u64 << b;
-        let i = u32::from(cl.word) * 64 + b;
-        NonNull::new(cl.base.wrapping_add(i as usize * class::size_of(c)))
+        // SAFETY: a claimed bit is a slot of the claimed word, so the
+        // offset stays inside `lo..lo + len`, a range of a mapped span,
+        // which is never at address zero.
+        Some(unsafe { NonNull::new_unchecked(cl.lo.add(b as usize * class::size_of(c))) })
     }
 
     /// Retire any outstanding claim, then claim the lowest holed word
@@ -68,9 +73,12 @@ impl Heap {
             self.tally.returned -= u64::from(gone) * slot;
         }
         self.stamp_claim(seg, span_ix as usize, word, claimed);
-        // SAFETY: same header liveness as above.
-        let base = unsafe { seg.as_ref() }.span_base(span_ix as usize);
-        self.claims[c] = Some(Claim { seg, span_ix, word, claimed, taken: 0, base });
+        let first = usize::from(word) * 64;
+        let len = (class::slots_per_span(c) - first).min(64) * class::size_of(c);
+        // SAFETY: same header liveness as above; `first` is a slot of this
+        // span because the word has a hole, so the offset stays inside it.
+        let lo = unsafe { seg.as_ref().span_base(span_ix as usize).add(first * class::size_of(c)) };
+        self.claims[c] = Some(Claim { seg, span_ix, word, claimed, taken: 0, lo, len });
         Some(())
     }
 

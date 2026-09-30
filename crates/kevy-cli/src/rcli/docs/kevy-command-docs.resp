@@ -3902,12 +3902,12 @@ $58
 XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP
 $10
 complexity
-$103
-STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
+$170
+STREAM: O(1). GROUPS: O(G*N + G log G) — 'lag' is a linear walk of every entry, once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name
 $6
 compat
-$207
-differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
+$323
+differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated (GROUPS lists 'lag' before 'entries-read', and answers 0 where Redis answers nil for a group that has read nothing), and CONSUMERS omits 'inactive'
 $5
 flags
 *1
@@ -3966,8 +3966,8 @@ $68
 XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
 $10
 complexity
-$95
-summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)
+$126
+summary: O(P*C + C log C) — the per-consumer tally is a linear find per PEL row, then sorted by name. extended: O(log P + K)
 $6
 compat
 $4

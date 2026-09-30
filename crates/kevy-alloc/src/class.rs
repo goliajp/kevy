@@ -207,15 +207,42 @@ pub fn index_of(size: usize, align: usize) -> Option<usize> {
         return None;
     }
     let base = LOOKUP[size.div_ceil(GRAIN)] as usize;
-    if align <= MIN_ALIGN || CLASSES[base].is_multiple_of(align as u32) {
+    // SAFETY: `LOOKUP_IS_SOUND` proves every entry is a class index at
+    // compile time. Saying so lets every table indexed by the result
+    // drop its bounds check, and this sits on every allocation and free.
+    unsafe { core::hint::assert_unchecked(base < NCLASSES) };
+    // An alignment is a power of two, so past 8 and within the native
+    // range it is 16; a constant divisor keeps a `div` off this path.
+    if align <= MIN_ALIGN || CLASSES[base].is_multiple_of(MAX_NATIVE_ALIGN as u32) {
         return Some(base);
     }
     // Only the 8-stepped region can miss, and there the next class up is
     // always a multiple of 16.
     let next = base + 1;
-    debug_assert!(next < NCLASSES && CLASSES[next].is_multiple_of(align as u32));
+    // SAFETY: `LOOKUP_IS_SOUND` proves the class above any class that is
+    // not a multiple of 16 exists.
+    unsafe { core::hint::assert_unchecked(next < NCLASSES) };
+    debug_assert!(CLASSES[next].is_multiple_of(align as u32));
     Some(next)
 }
+
+/// Compile-time proof of the two facts `index_of` hands the optimiser:
+/// every lookup entry is a class index, and wherever the 16-aligned path
+/// steps up a class, that class exists and is a multiple of 16.
+const LOOKUP_IS_SOUND: () = {
+    let table = build_lookup();
+    let mut i = 0;
+    while i < LOOKUP_LEN {
+        let c = table[i] as usize;
+        assert!(c < NCLASSES);
+        assert!(
+            CLASSES[c].is_multiple_of(16)
+                || (c + 1 < NCLASSES && CLASSES[c + 1].is_multiple_of(16))
+        );
+        i += 1;
+    }
+};
+const _: () = LOOKUP_IS_SOUND;
 
 /// Slot size for a class index.
 /// # Examples
