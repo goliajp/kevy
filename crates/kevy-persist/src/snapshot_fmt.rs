@@ -53,7 +53,8 @@ pub(crate) const OP_HFTTL: u8 = 7;
 /// v7+ only.
 pub(crate) const OP_SEGSTUB: u8 = 8;
 /// The auxiliary frame beside the keyspace: `[parts u32 LE][bytes]…`, at
-/// most one, the last record before `OP_EOF`. Any version.
+/// most one, after `OP_EOF`, where a reader from before it stops. Any
+/// version.
 pub(crate) const OP_AUX: u8 = 9;
 
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
