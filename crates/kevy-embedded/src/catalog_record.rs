@@ -100,6 +100,32 @@ impl CatalogRegs {
         }
     }
 
+    /// Take a catalog frame a host feeds back from the log it keeps
+    /// itself ([`Store::apply_frame`]): when it is newer than what the
+    /// store holds, or whenever this store has recorded no catalog of its
+    /// own. The second case is the open-time restore, which for such a
+    /// host arrives after the open has already given the store its
+    /// lineage; a native open takes the same frame before that. A
+    /// malformed frame is skipped.
+    #[cfg(feature = "persist")]
+    pub(crate) fn adopt_fed(&self, frame: &Argv) {
+        let mut held = self.at.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some((at, icat, vcat, tcat)) = decode(frame) else { return };
+        if held.1 == 0 || at > *held {
+            self.install(icat, vcat, tcat);
+            *held = at;
+        }
+    }
+
+    /// The frame a host's compacted image carries, once this store holds
+    /// a recorded catalog: `None` while nothing has been recorded, so an
+    /// image of a store that never declared an index is only its keys.
+    #[cfg(feature = "persist")]
+    pub(crate) fn fed_aux(&self) -> Option<Argv> {
+        let at = self.at();
+        (at.1 > 0).then(|| Argv::from(self.frame(at)))
+    }
+
     /// Install each catalog that differs from the one held; the shards
     /// rebuild what changed on their next touch.
     fn install(&self, icat: Catalog, vcat: ViewCatalog, tcat: TableCatalog) {

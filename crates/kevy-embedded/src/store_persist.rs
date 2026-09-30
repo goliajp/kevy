@@ -158,11 +158,21 @@ impl Store {
     /// Speaks the same verb set `Store::open` replays from an on-disk
     /// AOF; unknown verbs are skipped (forward compatibility with logs
     /// written by a newer kevy). Keyed verbs route to the owning shard;
-    /// `FLUSHALL`/`FLUSHDB` reach every shard. The frame is **not**
+    /// `FLUSHALL`/`FLUSHDB` reach every shard. A catalog frame (the
+    /// declared indexes, views and tables) replaces the store's catalog
+    /// when it is newer, or when the store has recorded none of its own,
+    /// and the indexes rebuild from the keyspace. The frame is **not**
     /// re-appended to any AOF — this is the read-back half of the pump,
     /// so re-logging would double-apply on the next replay.
     pub fn apply_frame(&self, args: &Argv) {
         let Some(verb) = args.first() else { return };
+        // the index, view and table catalog is store-wide state, not a
+        // key: it is taken whole when newer, as a native open takes it
+        #[cfg(feature = "index")]
+        if crate::shard_restore::is_catalog(args) {
+            self.guard.catalog.adopt_fed(args);
+            return;
+        }
         if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
             for shard in self.shards.iter() {
                 crate::replay::apply(&mut lock_write(shard).store, args);
@@ -181,20 +191,29 @@ impl Store {
     /// AOF rewrite puts on disk). The write half of host-mediated
     /// persistence: hosts without a filesystem hand this buffer to their
     /// own storage, replacing the accumulated append log, and feed it
-    /// back through [`Self::apply_frame`] on the next open.
+    /// back through [`Self::apply_frame`] on the next open. Once the store
+    /// has recorded an index, view or table catalog, the image ends the
+    /// first shard's commands with the catalog frame.
     ///
     /// Each shard is frozen copy-on-write and serialized off-lock, so
     /// concurrent readers and writers on other shards are not blocked
     /// for the duration of the dump.
     pub fn dump_aof_buf(&self) -> Vec<u8> {
         let mut out = Vec::new();
+        // the catalog, once one was recorded, rides the first shard's
+        // image, the way a native rewrite keeps it beside the keyspace
+        #[cfg(feature = "index")]
+        let aux = self.guard.catalog.fed_aux();
+        #[cfg(not(feature = "index"))]
+        let aux: Option<Argv> = None;
         for (i, shard) in self.shards.iter().enumerate() {
             let view = lock_write(shard).store.collect_snapshot();
+            let image = kevy_persist::WithAux::new(&view, if i == 0 { aux.as_ref() } else { None });
             // V2, like every other rewrite output: the wasm door's
             // host-mediated pump replays both formats, and its dump is
             // the log's upgrade point (mirroring the native
             // first-rewrite upgrade).
-            let (buf, _keys) = kevy_persist::dump_store_to_buf(&view, kevy_persist::AofFormat::V2);
+            let (buf, _keys) = kevy_persist::dump_store_to_buf(&image, kevy_persist::AofFormat::V2);
             if i == 0 {
                 out = buf;
             } else {

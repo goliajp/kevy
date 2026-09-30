@@ -14,13 +14,15 @@ is unchanged. What changes:
   `GEODIST`, …). A read with `BLOCK` answers `ERR the embedded engine cannot
   block; call without BLOCK`: a tab has one thread, and parking it would
   freeze the page. The module is 602 KB gzipped, up from 539 KB without them.
-- **Writes through `cmd` persist.** Until now they never reached the log,
+- **Writes through `cmd` persist.** Since 4.0.0 they never reached the log,
   and were lost at the next `open()` unless a compaction had run. They now
   reach it as the frames a native AOF would hold (an `XADD *` with the id it
   chose, a group read with the deliveries it made), so a stream and its
-  consumer groups survive a reload. Index, view and table definitions are
-  recorded but not restored by the browser replay; run `IDX.CREATE` again
-  after `open()`.
+  consumer groups survive a reload.
+- **Declared indexes, views and tables survive a reload.** Since 5.2.0,
+  when the browser build gained them, they were lost at every `open()`:
+  the rows came back without the indexes over them. The log and the compacted image now carry the catalog, and the
+  reload rebuilds the indexes from the replayed keys.
 
 - **A hash field's own TTL survives log compaction.** Since 3.0.0 the log
   image the loader writes when it compacts carried every value and key TTL
