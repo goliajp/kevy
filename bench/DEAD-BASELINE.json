@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 26983,
+  "dead_regions": 26986,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -1850,7 +1850,7 @@
     "kevy_embedded::pubsub_bus::PubsubBus::remove_pattern": 11,
     "kevy_embedded::reaper::begin_rewrite": 3,
     "kevy_embedded::reaper::concurrent_auto_rewrite": 24,
-    "kevy_embedded::reaper::spawn_reaper": 1,
+    "kevy_embedded::reaper::spawn_reaper": 2,
     "kevy_embedded::replay::apply": 158,
     "kevy_embedded::replay::apply_expire": 1,
     "kevy_embedded::replay::apply_expireat": 1,
@@ -1861,6 +1861,7 @@
     "kevy_embedded::replay::apply_pairs_strip::": 2,
     "kevy_embedded::replay::apply_pop": 21,
     "kevy_embedded::replay::apply_set": 1,
+    "kevy_embedded::replay::apply_view::": 2,
     "kevy_embedded::replay::apply_zadd": 4,
     "kevy_embedded::replay::parse_f64": 1,
     "kevy_embedded::replay::parse_i64": 1,
@@ -5029,6 +5030,20 @@
       ],
       "reason": "tests_cold.rs:128, the `_ => false` arm of `assert!(matches!(seg, ColdError::Seg(..)))`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
       "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_embedded::reaper::spawn_reaper"
+      ],
+      "reason": "reaper.rs:44, the browser-only `TtlReaperMode::Background if cfg!(all(target_arch = \"wasm32\", target_os = \"unknown\"))` arm: the guard is a constant false on Linux, so the arm is compiled and never runs; an attribute cfg would leave its arguments and the thread loop unused in the browser build",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_embedded::replay::apply_view::"
+      ],
+      "reason": "replay.rs:38 and :42, the empty-argv and unserved-family returns: the same two regions that were dead in replay::apply, whose body moved into the generic apply_view (65c39d4f5); replay::apply's 158 dead regions left the set with it. A replayed frame always has a verb, and the default build serves every family",
+      "delta": 2
     }
   ]
 }
