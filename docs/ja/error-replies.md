@@ -102,6 +102,7 @@ kevyのエラーはRESPのsimple-error文字列——`-<PREFIX> <message>\r\n`�
 |---|---|---|
 | `ERR <VERB> '<name>': bad arguments — run COMMAND DOCS <VERB> for the syntax` | IDX./VIEW. verbの引数パースが失敗した | `COMMAND DOCS <verb>`が完全な構文文字列を返す |
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | クエリが存在しないインデックスを名指しした | `IDX.LIST`／`VIEW.LIST`がカタログを列挙する |
+| `ERR IDX.REBUILD '<name>': IDX.REBUILD applies to range, unique, ann and global indexes; this is a <kind> index` | `IDX.REBUILD`がtextまたはaggのインデックスを名指しした（詰め直すものがない） | 対応は不要。行から作り直すなら`IDX.DROP`のあと`IDX.CREATE` |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | クエリが作成後バックフィルとレースした | `IDX.LIST`の`state`をポーリング。docs/migration.md参照 |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | 構築がメモリ予算に当たった | `maxmemory`を上げるか`IDX.DROP` |
 | `FEEDRESYNC <gen> <tail>` | FEEDカーソルがもうサービスできない（世代の増加か、バックログ超過） | 新しいスナップショット＋返されたカーソルから消費を再開。docs/cdc.md参照 |

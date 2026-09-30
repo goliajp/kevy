@@ -8,7 +8,7 @@ use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
 use super::wire::{
     decode_gstats_arg, encode_agg_chunk, encode_hydration_row, encode_stats_chunk, peek_hydration,
 };
-use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
+use super::{ST_BADARGS, ST_BUILDING, ST_CLAUSE, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
 
@@ -197,14 +197,28 @@ pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     }
 }
 
-/// `IDX.REBUILD <name>` (ANN tombstone compaction).
+/// `IDX.REBUILD <name>` on a local index: a range or unique index packs
+/// its leaves, an ANN index compacts its tombstones; a text or aggregate
+/// index is refused by kind.
 pub(super) fn op_rebuild(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    match index_runtime::with_ready_ann(ctx, name, |g| g.rebuild()) {
-        Ok(()) => vec![ST_OK],
+    match index_runtime::rebuild_local(ctx, name) {
+        Ok(None) => vec![ST_OK],
+        Ok(Some(kind)) => {
+            let mut chunk = vec![ST_CLAUSE];
+            chunk.extend_from_slice(
+                format!(
+                    "IDX.REBUILD applies to range, unique, ann and global indexes; this is a {} index",
+                    kind.tag()
+                )
+                .as_bytes(),
+            );
+            chunk
+        }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
