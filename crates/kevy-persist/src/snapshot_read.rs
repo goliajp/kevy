@@ -209,10 +209,24 @@ fn load_segstub_record<R: Read>(
     r.read_exact(&mut seq)?;
     let mut weight = [0u8; 4];
     r.read_exact(&mut weight)?;
-    if keep(&key) {
-        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+    if !keep(&key) {
+        return Ok(());
     }
-    Ok(())
+    // the browser build keeps no row segments, so a snapshot that points
+    // into them cannot be loaded there
+    #[cfg(target_arch = "wasm32")]
+    return {
+        let _ = (store, seq, weight);
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot holds a cold-row record, and this target has no row segments",
+        ))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+        Ok(())
+    }
 }
 
 /// One `OP_HFTTL` record: `[key][field][deadline_ms: u64 LE]`.
