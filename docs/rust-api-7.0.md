@@ -138,7 +138,7 @@ let batch = store.changes_since(from, 100, &[])?;
 - `AuditSection`, `FeedSection` and `MetricsSection` are exported at the
   crate root. Enums and `ConfigError` are `#[non_exhaustive]`.
 - The new fields for encrypted links and the proxy-friendly cluster are in
-  the [upgrade guide](upgrading-6.4-to-7.0.md#7-kevy-config-new-fields-on-the-section-structs).
+  the [upgrade guide](upgrading-6.4-to-7.0.md#10-kevy-config-new-fields-on-the-section-structs).
 
 ## kevy-store
 
@@ -405,7 +405,7 @@ Types:
   `run_restore` → `pack(a, b).map(|_| ())` / `unpack(..)`. `link::Link`
   is sealed. `Source`, `Health`, `Shape` and the report structs are
   `#[non_exhaustive]`. The bare-word tool functions are gone
-  ([upgrade guide §8](upgrading-6.4-to-7.0.md#8-kevy-cli-tools-answer-behind---kevy-only)).
+  ([upgrade guide §12](upgrading-6.4-to-7.0.md#12-kevy-cli-tools-answer-behind---kevy-only)).
 
 ## Cluster and election crates
 
