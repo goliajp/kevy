@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`COPY … REPLACE` and a cross-shard `RENAME` over an existing key
+  replay and replicate to the value the client saw.** The server records
+  the placed value as the commands that rebuild it, and those commands
+  add to a key rather than replace it. So a restart from the AOF, and
+  every replica, merged the value into what the destination held (a hash
+  kept its old fields, a list or set its old members), or kept the old
+  value when its type differed and answered `WRONGTYPE` from then on.
+  This has affected `COPY` since 6.0.0, on one shard or across two, and
+  a `RENAME` whose two keys live on different shards since 5.0.0. A
+  `DEL` of the destination is now recorded before the value. An AOF
+  rewrite and a snapshot were not affected: both write the value as it
+  is in memory.
+
 - **Embedded `COPY` copies a key of any type, as the server does.** Since
   2.0.13 `Store::copy` and the embedded `COPY` verb read the source as a
   string, so a hash, list, set, sorted set or stream source answered
