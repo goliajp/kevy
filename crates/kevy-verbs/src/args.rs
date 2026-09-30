@@ -62,12 +62,9 @@ pub fn arg_u64(b: &[u8]) -> Option<u64> {
 /// assert_eq!(arg_f64(b"nan"), None);
 /// ```
 pub fn arg_f64(b: &[u8]) -> Option<f64> {
-    let s = std::str::from_utf8(b).ok()?.trim();
-    let f: f64 = match s.to_ascii_lowercase().as_str() {
-        "inf" | "+inf" | "infinity" | "+infinity" => f64::INFINITY,
-        "-inf" | "-infinity" => f64::NEG_INFINITY,
-        _ => s.parse().ok()?,
-    };
+    // std's parser already takes every `inf` / `infinity` spelling, signed
+    // and in any case, so no lowercased copy is needed
+    let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
     if f.is_nan() { None } else { Some(f) }
 }
 
