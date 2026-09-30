@@ -8,6 +8,7 @@
 # it first when the engine changed:
 #   packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
 set -euo pipefail
+. "$(dirname "$0")/../bench-lock.sh"   # hold the machine's bench lock for the whole run
 
 udid="${1:?usage: run-apple.sh <simulator-or-device-udid>}"
 here="$(cd "$(dirname "$0")/apple" && pwd)"

@@ -30,6 +30,7 @@
 # Usage (lx64): bash bench/arena.sh <kevy-binary>
 # ARENA_SAMPLES=<file> keeps every window as JSONL (arena-median reads it).
 set -u
+. "$(dirname "$0")/bench-lock.sh"   # hold the machine's bench lock for the whole run
 # ROOT: arena is the one documented exception to "bench scripts do not run
 # as root" (hard rule 4). It
 # needs docker to run the competitors, docker on the bench box is root-only,
