@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- **A restart after a snapshot and then an AOF rewrite applies each
+  write once.** A snapshot resets a shard's AOF to the writes made after
+  it, and a restart loads the snapshot and replays the AOF over it. A
+  rewrite then turns the AOF into a complete image, but the snapshot
+  stayed beside it and the restart still loaded it first. So since
+  1.0.0 on the server, and since 1.16.0 in the embedded store
+  (`save_snapshot` then `rewrite_aof`), a `BGSAVE` or `SAVE` followed by
+  a `BGREWRITEAOF` or an automatic rewrite brought back every list
+  element pushed before the rewrite twice (`a b c` read `a b c a b c`),
+  on every shard. Strings, hashes, sets, sorted sets and streams were
+  rewritten as commands that replace a value or refuse a duplicate, and
+  kept their values. The same held for a replica restarted after a full
+  sync, which rewrites its AOF, over the snapshot it had saved before,
+  and for a reshard of such a directory. The AOF now opens with a record
+  naming the snapshot it continues, or none for a rewrite image, and
+  every snapshot file ends with its own id: a restart loads a snapshot
+  only under the AOF that continues it, and refuses to start, naming
+  both files, when that snapshot is missing or replaced. A snapshot
+  commit keeps the snapshot it replaces until the AOF reset is in
+  place, so a crash between the two restores a matching pair; before,
+  a crash there also replayed the old AOF over the new snapshot. A
+  `BGSAVE` whose AOF reset cannot start is skipped instead of committing
+  a snapshot the AOF would repeat. A directory written before this
+  release restores as it did: its files do not say which came last, so
+  a directory that already holds a snapshot and a rewritten AOF from an
+  earlier release is still restored as both on its first start. A
+  `BGSAVE` on the earlier release just before upgrading leaves a
+  snapshot and an AOF that restore once.
+
+- **`IDX.REBUILD` packs a local range or unique index.** Since 3.0.0 it
+  reached only vector (ANN) and global indexes; on a ready local range
+  or unique index it answered `ERR no such index`, although the index
+  documentation says a rebuild packs an index's leaves. It now packs
+  them on every shard and answers `+OK`. A text or agg index, which has
+  nothing to pack or compact, is refused with an error that names its
+  kind: `ERR IDX.REBUILD '<name>': IDX.REBUILD applies to range, unique,
+  ann and global indexes; this is a text index`.
+
 - **`COPY … REPLACE` and a cross-shard `RENAME` over an existing key
   replay and replicate to the value the client saw.** The server records
   the placed value as the commands that rebuild it, and those commands
@@ -112,8 +150,10 @@
   with `-READONLY You can't write against a read only replica.` The
   side files are no longer written. A 6.4 data directory opens with its
   catalog: the first start reads the side files once, records the
-  catalog in the log, and removes them; a side file that does not parse
-  stays where it is. No shard serves a client until every shard has
+  catalog in the log and sends it to the replicas on the stream, so a
+  replica that stays connected while its primary is upgraded receives
+  it, and removes the files; a side file that does not parse stays
+  where it is. No shard serves a client until every shard has
   restored, so a query cannot land before the catalog it depends on.
   The embedded store keeps its catalog the same way, and the two
   interoperate: an embedded replica takes a server primary's catalog and
