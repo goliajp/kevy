@@ -380,3 +380,7 @@ fn col_to_fields(col: &str, weighted: bool) -> Option<Vec<FieldSpec>> {
 #[cfg(test)]
 #[path = "catalog_sidecar_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "catalog_sidecar_parse_tests.rs"]
+mod parse_tests;

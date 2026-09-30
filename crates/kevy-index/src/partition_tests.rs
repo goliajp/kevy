@@ -62,6 +62,18 @@ fn a_global_partitioning_is_refused_where_it_cannot_apply() {
         Err(crate::CatalogError::SplitsOutOfOrder)
     );
     assert!(c.get(b"r").is_none(), "a refused index is not half-created");
+    c.create_with(spec("r", IndexKind::Range), global(&[b"a"])).unwrap();
+    assert_eq!(
+        c.create_with(spec("r", IndexKind::Range), global(&[b"b"])),
+        Err(crate::CatalogError::Exists(crate::Declared::Index))
+    );
+    assert_eq!(c.partitioning(b"r"), &global(&[b"a"]), "the first declaration's splits stay");
+}
+
+#[test]
+fn a_local_index_is_one_partition_with_no_split_values() {
+    assert_eq!(Partitioning::Local.partitions(), 1);
+    assert!(Partitioning::Local.split_values(ValType::I64).is_empty());
 }
 
 #[test]
@@ -211,15 +223,19 @@ fn an_orderpath_split_point_reads_back_from_its_hex() {
     let text = spec.split_point_text(&point);
     assert_eq!(text, b"0x0061ff10");
     assert_eq!(spec.parse_split_point(&text), Some(point));
-    for bad in [&b"0061ff10"[..], b"0x061", b"0xzz"] {
+    for bad in [&b"0061ff10"[..], b"0x061", b"0xzz", b"0x0z"] {
         assert_eq!(spec.parse_split_point(bad), None, "{}", String::from_utf8_lossy(bad));
     }
 }
 
 #[test]
 fn a_split_point_reads_back_in_its_column_type() {
-    for (ty, raw) in [(ValType::F64, &b"-2.5"[..]), (ValType::Str, b"tokyo"), (ValType::I64, b"-7")]
-    {
+    for (ty, raw) in [
+        (ValType::F64, &b"-2.5"[..]),
+        (ValType::F64, b"2.5"),
+        (ValType::Str, b"tokyo"),
+        (ValType::I64, b"-7"),
+    ] {
         let s = IndexSpec::builder(b"i".to_vec(), b"u:".to_vec(), IndexKind::Range, ty)
             .with_field(b"f".to_vec())
             .build()
@@ -237,7 +253,12 @@ fn a_sidecar_with_a_partition_column_it_cannot_read_is_refused() {
     c.create_with(spec("g", IndexKind::Range), global(&[b"\x80"])).unwrap();
     let text = c.to_sidecar();
     assert!(Catalog::from_sidecar(&text).is_some());
-    for (from, to) in [("\tg,80", "\tq,80"), ("\tg,80", "\tg,8"), ("\tg,80", "\tg,zz")] {
+    for (from, to) in [
+        ("\tg,80", "\tq,80"),
+        ("\tg,80", "\tg,8"),
+        ("\tg,80", "\tg,zz"),
+        ("\tg,80", "\tg,a\u{e9}b"),
+    ] {
         assert!(text.contains(from), "{text}");
         assert!(Catalog::from_sidecar(&text.replace(from, to)).is_none(), "{to}");
     }

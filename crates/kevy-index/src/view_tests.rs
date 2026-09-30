@@ -53,6 +53,62 @@ fn tree_eval_and_or_diff() {
     assert!(!and.contains(b"k3", &seg));
     assert!(diff.contains(b"k5", &seg));
     assert!(!diff.contains(b"k4", &seg));
+    assert!(or.contains(b"k3", &seg), "in the age range only");
+    assert!(or.contains(b"k8", &seg), "in the dept only");
+    assert!(!or.contains(b"k9", &seg));
+}
+
+#[test]
+fn an_index_without_a_key_directory_holds_no_key() {
+    let mut plain = Segment::new();
+    plain.apply(b"k1", None, Some(IndexValue::I64(1)));
+    let seg = |_: &[u8]| -> Option<&Segment> { Some(&plain) };
+    assert!(!leaf("age", IndexValue::I64(0), IndexValue::I64(9)).contains(b"k1", &seg));
+}
+
+#[test]
+fn a_view_through_a_template_keeps_it() {
+    let spec = ViewSpec::new("v", leaf("age", IndexValue::I64(0), IndexValue::I64(1)), "age")
+        .with_via(b"user:{key.1}".to_vec());
+    assert_eq!(spec.via.as_deref(), Some(&b"user:{key.1}"[..]));
+}
+
+#[test]
+fn an_ascending_bound_evicts_its_largest_as_smaller_ones_arrive() {
+    let mut m = MaterializedSet::new(4, kevy_text::SortOrder::Asc); // cap 5
+    assert!(m.is_empty());
+    for i in (0..8).rev() {
+        m.apply(format!("k{i}").as_bytes(), Membership::Member(Some(IndexValue::I64(i))));
+    }
+    assert!(!m.is_empty());
+    let keys: Vec<Vec<u8>> = m.page(None, 10).into_iter().map(|(_, k)| k).collect();
+    assert_eq!(keys, [b"k0", b"k1", b"k2", b"k3", b"k4"].map(|k| k.to_vec()));
+}
+
+#[test]
+fn a_page_resumes_just_past_its_cursor_in_either_order() {
+    for order in [kevy_text::SortOrder::Asc, kevy_text::SortOrder::Desc] {
+        let mut m = MaterializedSet::new(0, order);
+        for i in 0..6 {
+            m.apply(format!("k{i}").as_bytes(), Membership::Member(Some(IndexValue::I64(i))));
+        }
+        let first = m.page(None, 2);
+        let rest = m.page(first.last(), 10);
+        let all: Vec<i64> = first
+            .iter()
+            .chain(&rest)
+            .map(|(v, _)| match v {
+                IndexValue::I64(n) => *n,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let want: Vec<i64> = if order == kevy_text::SortOrder::Asc {
+            (0..6).collect()
+        } else {
+            (0..6).rev().collect()
+        };
+        assert_eq!(all, want, "{order:?}");
+    }
 }
 
 #[test]

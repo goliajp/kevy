@@ -7,6 +7,7 @@ use crate::catalog::ValType;
 use crate::segment::Segment;
 use crate::value::IndexValue;
 use crate::value::ValueTest;
+use crate::value::order_key;
 
 fn i(v: i64) -> IndexValue {
     IndexValue::I64(v)
@@ -183,6 +184,26 @@ fn facet_counts_the_whole_match_set_before_truncation() {
     let labels: Vec<(&[u8], u64)> =
         page.facets[0].iter().map(|(_, l, n)| (l.as_slice(), *n)).collect();
     assert_eq!(labels, vec![(&b"tokyo"[..], 2), (b"kyoto", 1), (b"osaka", 1)]);
+}
+
+#[test]
+fn a_stored_value_that_does_not_coerce_is_in_no_facet_bucket() {
+    let mut s = seeded();
+    s.apply_with_values(b"u6", None, Some(i(60)), &[Some(b"7")]);
+    let facets = [(0usize, ValType::I64)];
+    let c = ScalarClauses { facets: &facets, ..clauses() };
+    let page = s.query_claused(&i(0), &i(100), None, &c);
+    assert_eq!(page.hits.len(), 6, "the rows still match");
+    assert_eq!(page.facets[0], vec![(order_key(ValType::I64, b"7").unwrap(), b"7".to_vec(), 1)]);
+
+    let rows = vec![
+        (i(1), b"a".to_vec(), vec![Some(b"tokyo".to_vec())]),
+        (i(2), b"b".to_vec(), vec![Some(b"7".to_vec())]),
+        (i(3), b"c".to_vec(), vec![None]),
+    ];
+    let (hits, buckets) = claused_over(rows.into_iter(), &c);
+    assert_eq!(hits.len(), 3);
+    assert_eq!(buckets[0], vec![(order_key(ValType::I64, b"7").unwrap(), b"7".to_vec(), 1)]);
 }
 
 #[test]
