@@ -21,7 +21,8 @@
 //! count)` the entries hold now.
 //!
 //! A read is the consumer's latest contact with the group, and creates the
-//! consumer if missing. A stream the read delivered from, or made the
+//! consumer if missing; a read that made it records `XGROUP
+//! CREATECONSUMER key group consumer` before its claims. A stream the read delivered from, or made the
 //! consumer on, has its frames end with `XINTERNAL.CONSUMERSEEN key group
 //! consumer t [a]`, `t` that contact and `a` the last time the consumer
 //! was handed an entry: the claim frames before it stamp the consumer with
@@ -35,7 +36,8 @@ use std::ops::Bound;
 use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, StreamId};
 
-use crate::record::{Consumer, push_setid_frames, seen_frame, taken_frames};
+use crate::record::{Consumer, seen_frame, taken_frames};
+use crate::record_group::{create_consumer_frame, push_setid_frames};
 
 /// The frames for an `XREADGROUP` `args` just run, `marks` holding, per
 /// stream in `STREAMS` order, the group's last-delivered ID before the
@@ -72,6 +74,9 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
         let seen = moved || *consumer_was == Consumer::Created || !again.is_empty();
         if moved {
             push_setid_frames(&mut frames, store, key, group);
+        }
+        if *consumer_was == Consumer::Created {
+            frames.push(create_consumer_frame(key, group, consumer));
         }
         frames.extend(claims);
         if seen {
