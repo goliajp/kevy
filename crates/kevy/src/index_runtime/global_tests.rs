@@ -96,3 +96,17 @@ fn a_delta_that_does_not_decode_or_names_no_index_here_changes_nothing() {
     let page = text(&s.ext("IDX.QUERY g RANGE 0 100"));
     assert!(page.contains("u:1") && !page.contains("u:9"), "{page}");
 }
+
+#[test]
+fn a_write_that_leaves_the_entry_and_its_stored_values_as_they_were_sends_nothing() {
+    let mut s = Shard::new();
+    s.ok(CREATE);
+    s.settle();
+    s.hset("u:1", &[("age", "30"), ("city", "tokyo")]);
+    s.store.hset(b"u:1", &[(b"name", b"ada"), (b"age", b"30")]).unwrap();
+    s.cmds.on_write(&mut s.store, b"u:1");
+    assert!(s.cmds.take_ext_out().is_empty(), "the owner already holds this entry");
+    s.hset("u:1", &[("city", "osaka")]);
+    let page = text(&s.ext("IDX.QUERY g EQ 30 FIELDS city"));
+    assert!(page.contains("osaka") && !page.contains("tokyo"), "{page}");
+}
