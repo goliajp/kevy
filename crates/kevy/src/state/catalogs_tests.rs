@@ -38,7 +38,7 @@ fn overlapped(cmds: &KevyCommands, during: impl FnOnce()) {
 
 /// The `(lineage, version)` the node's catalog is recorded at.
 fn recorded_at(cmds: &KevyCommands) -> (Vec<u8>, Vec<u8>) {
-    let frame = crate::catalog_record::snapshot_aux(cmds.state()).unwrap();
+    let frame = crate::catalog_record::snapshot_aux(cmds.state());
     (frame[1].to_vec(), frame[2].to_vec())
 }
 
