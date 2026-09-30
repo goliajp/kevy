@@ -140,10 +140,12 @@ entries, pending lists and last-delivered ids. Up to 6.x, writes
 through `cmd` never reached the log and were lost at the next open
 unless a compaction had run.
 
-One thing does not come back in the browser: index, view and table
-definitions. The log records them (a native kevy replaying it restores
-them), but the browser replay skips those records, so after a reload
-the data is there and `IDX.CREATE` has to run again.
+Declared indexes, views and tables come back too. Each `IDX.CREATE`,
+`VIEW.CREATE`, `TABLE.DECLARE` or drop records the whole catalog as one
+frame, and a compacted image carries the latest one; on the next open
+the catalog is installed and the indexes rebuild from the replayed
+keys, so a query after a reload answers as it did before. Until 7.0
+they were lost on every reload.
 
 **The log a browser tab writes replays in a native kevy unchanged** —
 same magic header, same frames. Copy the `.aof` out of OPFS and point

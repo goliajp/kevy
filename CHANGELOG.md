@@ -28,6 +28,22 @@ defect.
 
 ### Fixes: data that was lost, merged or never reached a replica
 
+- **In the browser, writes made through `cmd` are saved.** Since 4.0.0,
+  the first release of the wasm package with persistence and with
+  `cmd`, only the typed methods (`set`, `del`, `incrby`, …) reached the
+  log the package keeps in OPFS or IndexedDB. A write through `cmd`
+  (a hash, a list, a sorted set, anything the typed methods do not
+  wrap) changed the running store and was lost at the next `open()`,
+  unless an automatic compaction had happened to run in between. It now
+  reaches the log as the frames a native AOF would hold for it.
+
+- **In the browser, declared indexes, views and tables survive a
+  reload.** Since 5.2.0, when the browser build gained them, the rows
+  came back after a reload and the indexes over them did not: the replay
+  skipped the catalog record, and a compacted image did not carry it. The
+  replay now installs the catalog the way a native open does, the image
+  carries it, and the indexes rebuild from the replayed keys.
+
 - **`COPY … REPLACE` and a cross-shard `RENAME` over an existing key
   replay and replicate to the value the client saw.** The server records
   the placed value as the commands that rebuild it, and those commands
@@ -996,13 +1012,12 @@ defect.
   entry. Writes through `cmd` now reach the persistence pump as the
   frames a native AOF would hold (an `XADD *` with the id it chose, a
   group read with the deliveries it made), so a stream and its consumer
-  groups survive a reload from OPFS or IndexedDB. Until now no write
-  through `cmd` reached the browser's log, and all of them were lost at
-  the next `open()` unless a compaction had run. The module is 602 KB
+  groups survive a reload from OPFS or IndexedDB (see the fix above for
+  what this did to every other `cmd` write). The module is 602 KB
   gzipped, up from 539 KB. kevy-embedded gains an off-by-default
   `host-log` feature for this (`Store::dispatch_argv_recorded`, the
   frames a command's write records, for a host that keeps the log
-  itself).
+  itself), and `Store::apply_frame` now takes a catalog frame.
 
 - **`INFO # Tiering` reports where compressed value bytes went.** New
   fields `vlog_raw_bytes`, `vlog_payload_bytes`, `vlog_frame_header_bytes`
