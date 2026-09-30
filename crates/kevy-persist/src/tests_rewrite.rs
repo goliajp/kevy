@@ -107,6 +107,11 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                         kevy_store::MissingStream::Create,
                     )
                     .unwrap();
+                if args.len() == 8 {
+                    assert_eq!(args[6].to_ascii_uppercase(), b"ENTRIESREAD");
+                    let n = std::str::from_utf8(&args[7]).unwrap().parse().unwrap();
+                    store.xgroup_set_entries_read(&args[2], &args[3], Some(n)).unwrap();
+                }
             }
             other => {
                 panic!("unexpected XGROUP sub in AOF rewrite: {:?}", String::from_utf8_lossy(other))
@@ -115,6 +120,10 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
         b"XINTERNAL.CONSUMERSEEN" => {
             let seen = std::str::from_utf8(&args[4]).unwrap().parse().unwrap();
             store.xgroup_consumer_seen(&args[1], &args[2], &args[3], seen).unwrap();
+            if args.len() == 6 {
+                let active = std::str::from_utf8(&args[5]).unwrap().parse().unwrap();
+                store.xgroup_consumer_active(&args[1], &args[2], &args[3], Some(active)).unwrap();
+            }
         }
         b"XCLAIM" => {
             // Fixed rewrite shape:
@@ -389,10 +398,17 @@ fn rewrite_reconstructs_stream_groups() {
         (p3.consumer.as_slice(), p3.delivery_time_ms, p3.delivery_count),
         (&b"c2"[..], 2000, 1)
     );
-    let mut consumers: Vec<(Vec<u8>, usize)> =
-        g.consumers().map(|(n, c)| (n.to_vec(), c.pending_count())).collect();
+    let mut consumers: Vec<(Vec<u8>, usize, u64, Option<u64>)> = g
+        .consumers()
+        .map(|(n, c)| (n.to_vec(), c.pending_count(), c.last_seen_ms(), c.last_active_ms()))
+        .collect();
     consumers.sort();
-    assert_eq!(consumers, vec![(b"c1".to_vec(), 1), (b"c2".to_vec(), 1)]);
+    // the claims replay later than the reads ran; the times are the reads'
+    assert_eq!(
+        consumers,
+        vec![(b"c1".to_vec(), 1, 1000, Some(1000)), (b"c2".to_vec(), 1, 2000, Some(2000))]
+    );
+    assert_eq!(g.entries_read(), Some(3), "the read counter survives the rewrite");
 
     // deltail — deleted tail must not roll the ID clock back.
     let v = dst.stream_view(b"deltail").unwrap().unwrap();
