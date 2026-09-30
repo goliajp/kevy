@@ -4,7 +4,7 @@
   "kind": "symbols/qualified-path",
   "tree": "5cb014661ab5dcfc12f9d8a17abeba8a8b1fc9da",
   "total_regions": 191121,
-  "dead_regions": 26969,
+  "dead_regions": 26983,
   "llvm_per_instantiation_dead": 27099,
   "crates": {
     "kevy": {
@@ -612,6 +612,7 @@
     "kevy::index_runtime::row_apply::advance_backfill": 1,
     "kevy::index_runtime::row_apply::apply_row_backfill": 3,
     "kevy::index_runtime::row_apply::row_value": 4,
+    "kevy::index_runtime::test_shard::Shard::ext": 1,
     "kevy::index_runtime::window_slide::evict_and_slide": 11,
     "kevy::index_runtime::window_slide::freeze_text_batches": 6,
     "kevy::index_runtime::with_ready_agg::": 3,
@@ -1819,6 +1820,7 @@
     "kevy_embedded::ops_index_window::freeze_text_batches": 6,
     "kevy_embedded::ops_index_window::reconcile_cold_text": 3,
     "kevy_embedded::ops_index_window::reconcile_window": 10,
+    "kevy_embedded::ops_keyspace::commit_copy": 2,
     "kevy_embedded::ops_keyspace::digest_row_body": 6,
     "kevy_embedded::ops_pipeline::Pipeline::apply_one": 52,
     "kevy_embedded::ops_pipeline::Pipeline::commit": 1,
@@ -2054,6 +2056,7 @@
     "kevy_embedded::store::test_suites::tests_atomic_index::a_rolled_back_write_leaves_the_index_as_it_was": 2,
     "kevy_embedded::store::test_suites::tests_atomic_index::atomic_all_shards_index_read_sees_its_own_writes": 1,
     "kevy_embedded::store::test_suites::tests_atomic_index::atomic_all_shards_uniqueness_check_rejects_a_taken_email": 8,
+    "kevy_embedded::store::test_suites::tests_catalog::invalid::": 2,
     "kevy_embedded::store::test_suites::tests_index_paths::a_rolled_back_transaction_leaves_the_index_as_it_was": 4,
     "kevy_embedded::store::test_suites::tests_index_paths::held": 2,
     "kevy_embedded::store::test_suites::tests_keyspace::randomkey_picks_an_existing_key": 2,
@@ -3324,6 +3327,7 @@
     "kevy_store::packed_row::PackedRow::is_empty": 3,
     "kevy_store::packed_row::PackedRow::with_column": 1,
     "kevy_store::packed_row::store_ops::declared_columns": 1,
+    "kevy_store::row_watch::RowChange::field": 1,
     "kevy_store::row_watch::field_of": 1,
     "kevy_store::seg_map::SegMap::all_unique": 6,
     "kevy_store::seg_map::SegMap::rand_entry": 4,
@@ -3367,6 +3371,8 @@
     "kevy_store::stream::id::parse_xadd_id": 9,
     "kevy_store::string::cold_string_bytes": 10,
     "kevy_store::string_rmw::float_incr_bytes": 1,
+    "kevy_store::tests::errors::a_segmented_frame_is_refused_when_its_segment_cannot_be_stitched": 3,
+    "kevy_store::tests::errors::enabling_row_segments_refuses_a_damaged_directory": 2,
     "kevy_store::tests_list_seg::cow_write_under_pinned_view_clones_only_touched_segment": 2,
     "kevy_store::tests_memory::allkeys_lru_evicts_least_recent": 2,
     "kevy_store::tests_seg_map::cow_write_under_pinned_view_clones_one_bucket": 2,
@@ -3702,6 +3708,9 @@
     "kevy_window::WindowRt::slide": 5,
     "kevy_window::_::send_sync::": 2,
     "kevy_window::seal::clean_stale_derived": 1,
+    "kevy_window::tests_cold::a_segment_directory_that_cannot_be_created_is_an_io_error_and_the_tree_stays": 1,
+    "kevy_window::tests_cold::a_segment_directory_whose_manifest_will_not_open_is_a_seg_error": 1,
+    "kevy_window::tests_cold::every_cold_error_renders_its_cause_and_chains_its_source": 1,
     "kevy_window::text::TextColdDir::accumulate": 1,
     "kevy_window::text::TextColdDir::cold_page": 3,
     "kevy_window::text::TextColdDir::count_facets": 1,
@@ -4956,6 +4965,69 @@
         "kevy::view_runtime::on_write"
       ],
       "reason": "view_runtime.rs:52 in the observed tree; f0830c074 moved this probe into `take_in` (view_runtime.rs:83 at HEAD, still unexecuted, so the next observation will list it under `kevy::view_runtime::take_in` instead): `s.key_dir()?` returning None: `set_key_dirs` gives a key directory to every index any view reads (its ORDER BY index and every leaf), and `reset_all` keeps it across a flush (f0830c074), so a view's index lacks one only when the view catalog changes between the view state's refresh and the index refresh inside `with_segment_resolver`/`with_rows` (another shard committing VIEW.DROP at that moment): race-only.",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy::index_runtime::test_shard::Shard::ext"
+      ],
+      "reason": "index_runtime/test_shard.rs:50, the `_ => panic!` wildcard of the test harness's reduce loop, required because kevy_rt::ExtensionReduced is #[non_exhaustive]; both variants (Reply, Continue) are matched by name and now both run (MATCH's second phase). Registered in suite/dead-paths.toml",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_embedded::ops_keyspace::commit_copy"
+      ],
+      "reason": "ops_keyspace.rs:239 and :249, the Err of `commit_write(..)?` when a copy is recorded as the commands that rebuild its value (67aad62c3): commit_write fails only when the AOF append returns an I/O error, and the corpus has no failing sink; every other `commit_write(..)?` in kevy-embedded (54 regions) is in the set for the same reason",
+      "delta": 2
+    },
+    {
+      "accepted": [
+        "kevy_embedded::store::test_suites::tests_catalog::invalid::"
+      ],
+      "reason": "store_tests_catalog.rs:19, the `other => panic!` arm of the test helper that reads a refusal's text (two instantiations over T): an arm that evaluates only when the assertion fails; the test passes, so it never runs",
+      "delta": 2
+    },
+    {
+      "accepted": [
+        "kevy_store::row_watch::RowChange::field"
+      ],
+      "reason": "row_watch.rs:299, the first `?` (vals.get missing), unreachable since 3d91e3195 added the width check: Journal::project appends exactly widths[r] values per masked rule from the item's `first`; kept as a fallback over a panic in a public accessor. Registered in suite/dead-paths.toml",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_store::tests::errors::a_segmented_frame_is_refused_when_its_segment_cannot_be_stitched"
+      ],
+      "reason": "tests_errors.rs:146 and :151, the `_ => false` arm of `assert!(matches!(..))`, and :159, the `else { panic!() }` of the `let SegRowsError::Record { .. } = &err`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
+      "delta": 3
+    },
+    {
+      "accepted": [
+        "kevy_store::tests::errors::enabling_row_segments_refuses_a_damaged_directory"
+      ],
+      "reason": "tests_errors.rs:124, the `_ => false` arm of `assert!(matches!(..))`, and :136, the `else { panic!() }` of `let SegRowsError::Open { .. } = &err`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
+      "delta": 2
+    },
+    {
+      "accepted": [
+        "kevy_window::tests_cold::a_segment_directory_that_cannot_be_created_is_an_io_error_and_the_tree_stays"
+      ],
+      "reason": "tests_cold.rs:92, the `else { panic!() }` of `let ColdError::Io(io) = &e`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_window::tests_cold::a_segment_directory_whose_manifest_will_not_open_is_a_seg_error"
+      ],
+      "reason": "tests_cold.rs:108, the `else { panic!() }` of `let ColdError::Seg(inner) = &e`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
+      "delta": 1
+    },
+    {
+      "accepted": [
+        "kevy_window::tests_cold::every_cold_error_renders_its_cause_and_chains_its_source"
+      ],
+      "reason": "tests_cold.rs:128, the `_ => false` arm of `assert!(matches!(seg, ColdError::Seg(..)))`: an arm that evaluates only when the assertion fails; the test passes, so it never runs",
       "delta": 1
     }
   ]
