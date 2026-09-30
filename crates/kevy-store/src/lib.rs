@@ -182,11 +182,11 @@ pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use stream::{
-    AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
-    LoadedGroup, LoadedPelEntry, LoadedStreamEntry, MissingStream, PelEntry, PendingExtended,
-    PendingExtendedRow, PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError,
-    XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start,
-    parse_xadd_id,
+    APPROX_TRIM_LIMIT, AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState,
+    EntryBatch, GroupBatch, GroupCreateMode, LoadedGroup, LoadedPelEntry, LoadedStreamEntry,
+    MissingStream, PelEntry, PendingExtended, PendingExtendedRow, PendingSummary, ReadGroupId,
+    StreamData, StreamId, StreamIdError, TrimTo, XAddIdSpec, XClaimOpts, now_unix_ms,
+    parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;

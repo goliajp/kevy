@@ -79,7 +79,7 @@ pub struct PelEntry {
     /// assert_eq!(g.pending_entry(StreamId::new(1, 0)).unwrap().delivery_count, 2);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
-    pub delivery_count: u32,
+    pub delivery_count: u64,
 }
 
 /// Per-consumer cached counters so `XINFO CONSUMERS` answers in O(1).

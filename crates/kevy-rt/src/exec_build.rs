@@ -155,7 +155,10 @@ impl<C: Commands> Shard<C> {
     /// the stream's request index so the gather reassembles in order. With a
     /// `group` context the sub-query is the XREADGROUP form (a write — the
     /// owning shard AOF-logs the rewritten single-stream command, which also
-    /// replays correctly per shard, unlike the original multi-stream argv).
+    /// replays correctly per shard, unlike the original multi-stream argv),
+    /// and a first round of `Op::XReadCheck` goes out ahead of it, since a
+    /// group read changes each group it reads and a refused command must
+    /// read none of them.
     fn build_xread_targets(
         &self,
         streams: Vec<(Vec<u8>, Vec<u8>)>,
@@ -164,35 +167,31 @@ impl<C: Commands> Shard<C> {
     ) -> (Vec<(usize, Op)>, Agg) {
         let n = streams.len();
         let count_bytes = count.map(|c| c.to_string().into_bytes());
-        let targets = streams
+        let legs: Vec<(usize, Argv)> = streams
             .into_iter()
-            .enumerate()
-            .map(|(i, (key, cursor))| {
-                let shard = self.shard_of(&key);
-                let mut argv = Argv::default();
-                match &group {
-                    Some(g) => {
-                        argv.push(b"XREADGROUP");
-                        argv.push(b"GROUP");
-                        argv.push(&g.group);
-                        argv.push(&g.consumer);
-                    }
-                    None => argv.push(b"XREAD"),
-                }
-                if let Some(cb) = &count_bytes {
-                    argv.push(b"COUNT");
-                    argv.push(cb);
-                }
-                if group.as_ref().is_some_and(|g| matches!(g.ack, AckMode::NoAck)) {
-                    argv.push(b"NOACK");
-                }
-                argv.push(b"STREAMS");
-                argv.push(&key);
-                argv.push(&cursor);
-                (shard, Op::XReadOne { index: i as u32, argv, write: group.is_some() })
+            .map(|(key, cursor)| {
+                let argv = xread_leg(&key, &cursor, count_bytes.as_deref(), group.as_ref());
+                (self.shard_of(&key), argv)
             })
             .collect();
-        (targets, Agg::XReadGather { slots: vec![None; n] })
+        let write = group.is_some();
+        let reads = |legs: Vec<(usize, Argv)>| -> Vec<(usize, Op)> {
+            let leg = |(i, (shard, argv)): (usize, (usize, Argv))| {
+                (shard, Op::XReadOne { index: i as u32, argv, write })
+            };
+            legs.into_iter().enumerate().map(leg).collect()
+        };
+        if !write {
+            return (reads(legs), Agg::XReadGather { slots: vec![None; n] });
+        }
+        let checks = legs
+            .iter()
+            .enumerate()
+            .map(|(i, (shard, argv))| {
+                (*shard, Op::XReadCheck { index: i as u32, argv: argv.clone() })
+            })
+            .collect();
+        (checks, Agg::XReadGroupCheck { refusals: vec![None; n], reads: reads(legs) })
     }
 
     /// Group `args[1..]` key/value pairs by each key's shard for MSET.
@@ -416,4 +415,36 @@ fn parse_zintercard_args<A: ArgvView + ?Sized>(
         }
     }
     Ok((keys, limit))
+}
+
+/// One stream's single-stream rewrite of a multi-stream `XREAD` /
+/// `XREADGROUP`: `XREAD [COUNT n] STREAMS key id` or `XREADGROUP GROUP g c
+/// [COUNT n] [NOACK] STREAMS key id`.
+fn xread_leg(
+    key: &[u8],
+    cursor: &[u8],
+    count: Option<&[u8]>,
+    group: Option<&crate::XGroupCtx>,
+) -> Argv {
+    let mut argv = Argv::default();
+    match group {
+        Some(g) => {
+            argv.push(b"XREADGROUP");
+            argv.push(b"GROUP");
+            argv.push(&g.group);
+            argv.push(&g.consumer);
+        }
+        None => argv.push(b"XREAD"),
+    }
+    if let Some(c) = count {
+        argv.push(b"COUNT");
+        argv.push(c);
+    }
+    if group.is_some_and(|g| matches!(g.ack, AckMode::NoAck)) {
+        argv.push(b"NOACK");
+    }
+    argv.push(b"STREAMS");
+    argv.push(key);
+    argv.push(cursor);
+    argv
 }

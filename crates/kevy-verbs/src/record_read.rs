@@ -14,8 +14,10 @@
 //!   `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`.
 //!
 //! With `NOACK` no pending entries are made, so no `XCLAIM` frame is
-//! recorded. A read of history (an explicit ID) changes no pending entry
-//! and moves nothing.
+//! recorded. A read of history (an explicit ID) moves nothing, but each
+//! entry it hands back is delivered again: it is recorded like a new
+//! delivery, one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per `(time,
+//! count)` the entries hold now.
 //!
 //! A read is the consumer's latest contact with the group, and creates the
 //! consumer if missing. A stream the read delivered from, or made the
@@ -41,6 +43,7 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
     store: &Store,
     args: &A,
     marks: &[(StreamId, Consumer)],
+    redelivered: &[Vec<StreamId>],
 ) -> Vec<Argv> {
     let Some(shape) = Shape::of(args) else { return Vec::new() };
     let (group, consumer) = (&args[2], &args[3]);
@@ -59,15 +62,13 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
                 let ids: Vec<StreamId> = g.pending_range(span).map(|(id, _)| id).collect();
                 claims = taken_frames(store, key, group, consumer, &ids);
             }
-            let read = g.entries_read().map_or_else(|| "-1".to_owned(), |n| n.to_string());
-            let mut setid = Argv::with_capacity(7, 0);
-            for part in [&b"XGROUP"[..], b"SETID", key, group, &last.encode(), b"ENTRIESREAD"] {
-                setid.push(part);
-            }
-            setid.push(read.as_bytes());
-            moved = Some(setid);
+            moved = crate::record::setid_frame(store, key, group);
         }
-        let seen = moved.is_some() || *consumer_was == Consumer::Created;
+        let again = redelivered.get(k).map_or(&[][..], Vec::as_slice);
+        if !again.is_empty() {
+            claims.extend(taken_frames(store, key, group, consumer, again));
+        }
+        let seen = moved.is_some() || *consumer_was == Consumer::Created || !again.is_empty();
         frames.extend(moved);
         frames.extend(claims);
         if seen {

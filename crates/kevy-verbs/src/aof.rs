@@ -19,7 +19,7 @@ use kevy_resp::{Argv, ArgvView};
 use kevy_store::Store;
 
 pub use crate::record::{
-    Claim, Consumer, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes,
+    Claim, Consumer, History, INTERNAL_REFUSAL, apply_internal, deferred_frames, id_bytes,
 };
 
 /// The record of an `SPOP` that removed `popped`: `SREM key member…`.

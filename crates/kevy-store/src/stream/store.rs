@@ -36,6 +36,29 @@ use alloc::sync::Arc;
 /// ```
 pub type EntryBatch = Vec<(StreamId, Vec<(Vec<u8>, Vec<u8>)>)>;
 
+/// What a group read hands back: each entry with its fields, or with none
+/// when a read of a consumer's history names an entry the stream no
+/// longer holds.
+///
+/// ```
+/// use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, Store, StreamId, XAddIdSpec};
+/// let mut s = Store::new();
+/// for ms in 1..=2 {
+///     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+///     s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(ms, 0)), f, MissingStream::Create, 0)?;
+/// }
+/// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// s.xreadgroup(b"s", b"g", b"c", ReadGroupId::New, None, AckMode::Pending, 10)?;
+/// s.xdel(b"s", &[StreamId::new(1, 0)])?;
+/// let history = ReadGroupId::ReplayAfter(StreamId::MIN);
+/// let got: GroupBatch = s.xreadgroup(b"s", b"g", b"c", history, None, AckMode::Pending, 20)?;
+/// assert_eq!(got[0], (StreamId::new(1, 0), None), "deleted, still pending");
+/// assert!(got[1].1.is_some());
+/// # use kevy_store::GroupBatch;
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
+pub type GroupBatch = Vec<(StreamId, Option<Vec<(Vec<u8>, Vec<u8>)>>)>;
+
 impl Store {
     pub(super) fn stream_mut(
         &mut self,
@@ -365,7 +388,7 @@ impl Store {
         count: Option<usize>,
         ack: AckMode,
         now_ms: u64,
-    ) -> Result<EntryBatch, StoreError> {
+    ) -> Result<super::GroupBatch, StoreError> {
         let result;
         {
             let Some(s) = self.stream_mut(key, false)? else {

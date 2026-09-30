@@ -82,6 +82,9 @@ impl Tally {
         }
         let read = match entries_read {
             Some(n) if !self.deleted_after(last_delivered) => n,
+            // an empty stream leaves nothing to hand to a group at or
+            // before its last ID, wherever the deletions fell
+            None if self.length == 0 && last_delivered <= self.last => self.added,
             _ => self.counter_at(last_delivered)?,
         };
         Some(difference(self.added, read))
@@ -96,11 +99,13 @@ impl Tally {
         n: u64,
         to: StreamId,
     ) -> Option<u64> {
-        // from before the first live entry, the read took the first `n`
-        if self.first.is_some_and(|first| from < first)
-            && let Some(at) = self.counter_at(from)
+        // from before the first live entry, the read took the first `n`,
+        // and with no deletion among the live entries each one counts
+        if let Some(first) = self.first
+            && from < first
+            && (self.max_deleted == StreamId::MIN || self.max_deleted < first)
         {
-            return Some(at.saturating_add(n));
+            return Some(self.added.saturating_sub(self.length).saturating_add(n));
         }
         match entries_read {
             Some(read) if !self.deleted_after(from) => Some(read.saturating_add(n)),
@@ -183,6 +188,38 @@ impl Store {
             self.bump_if_watched(key);
         }
         Ok(set)
+    }
+
+    /// Set a pending entry's delivery count, as a snapshot loader restores
+    /// one. `false` if the key, the group or the pending entry is missing.
+    ///
+    /// ```
+    /// use kevy_store::*;
+    /// let mut s = Store::new();
+    /// let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 0)), f, MissingStream::Create, 0)?;
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// s.xreadgroup(b"s", b"g", b"c", ReadGroupId::New, None, AckMode::Pending, 5)?;
+    /// assert!(s.xgroup_set_delivery_count(b"s", b"g", StreamId::new(1, 0), 1 << 40)?);
+    /// let g = s.stream_group_peek(b"s", b"g").unwrap();
+    /// assert_eq!(g.pending_entry(StreamId::new(1, 0)).unwrap().delivery_count, 1 << 40);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn xgroup_set_delivery_count(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        id: StreamId,
+        count: u64,
+    ) -> Result<bool, StoreError> {
+        let Some(s) = self.stream_mut(key, false)? else {
+            return Ok(false);
+        };
+        let Some(p) = s.groups.get_mut(group).and_then(|g| g.pel.get_mut(&id)) else {
+            return Ok(false);
+        };
+        p.delivery_count = count;
+        Ok(true)
     }
 
     /// Set a consumer's last active time (`None` = never), making the

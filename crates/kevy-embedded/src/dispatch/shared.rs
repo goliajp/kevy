@@ -89,6 +89,8 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             e @ (Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
+            | Effect::RecordAdd(..)
             | Effect::RecordSeen),
         ) => record_outcome(&mut g, argv, &e),
         None | Some(Effect::Read | Effect::Unchanged | Effect::Skip) => Ok(()),

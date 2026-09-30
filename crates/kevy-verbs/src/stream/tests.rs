@@ -37,9 +37,11 @@ fn records(store: &mut Store, cmd: &str, e: Option<Effect>) -> Vec<String> {
         Some(Effect::Record(f)) => vec![frame(&f)],
         Some(
             e @ (Effect::RecordId(..)
+            | Effect::RecordAdd(..)
             | Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
             | Effect::RecordSeen),
         ) => {
             let frames = crate::aof::deferred_frames(&*store, &argv(cmd), &e);
@@ -57,12 +59,10 @@ fn a_generated_id_is_recorded_as_the_id_it_gave() {
     let mut s = Store::new();
     let (e, reply) = run(&mut s, "XADD s NOMKSTREAM MAXLEN ~ 2 * f v");
     assert_eq!(e, Some(Effect::Unchanged), "{reply}");
+    // an approximate trim that removed nothing is recorded without it
     let (e, reply) = run(&mut s, "XADD s MAXLEN ~ 2 * f v");
     let id = reply.split("\r\n").nth(1).unwrap().to_string();
-    assert_eq!(
-        records(&mut s, "XADD s MAXLEN ~ 2 * f v", e),
-        vec![format!("XADD s MAXLEN ~ 2 {id} f v")]
-    );
+    assert_eq!(records(&mut s, "XADD s MAXLEN ~ 2 * f v", e), vec![format!("XADD s {id} f v")]);
     let (e, _) = run(&mut s, "XADD s2 7-* f v");
     assert_eq!(records(&mut s, "XADD s2 7-* f v", e), vec!["XADD s2 7-0 f v".to_string()]);
     let (e, _) = run(&mut s, "XADD s2 8-1 f v");
@@ -129,7 +129,7 @@ fn claim_records_replay_to_the_same_pending_list() {
 }
 
 /// `(id, owner, delivery time, delivery count)` of group `g` on `s`.
-fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
+fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u64)> {
     let s = store.stream_view(b"s").unwrap().unwrap();
     let g = s.group(b"g").unwrap();
     g.pending_range(..)
@@ -153,7 +153,7 @@ fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, Opti
 }
 
 /// `(id, owner, delivery time, delivery count)`.
-type PelRow = (StreamId, Vec<u8>, u64, u32);
+type PelRow = (StreamId, Vec<u8>, u64, u64);
 
 /// The pending rows of `group` on `key`, and the group's last-delivered ID.
 fn group_rows(store: &Store, key: &[u8], group: &[u8]) -> (Vec<PelRow>, StreamId) {
@@ -284,7 +284,7 @@ fn an_empty_read_records_nothing() {
     for c in ["XADD s 1-1 a 1", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
         run(&mut s, c);
     }
-    for poll in ["XREADGROUP GROUP g a STREAMS s >", "XREADGROUP GROUP g a STREAMS s 0"] {
+    for poll in ["XREADGROUP GROUP g a STREAMS s >", "XREADGROUP GROUP g a STREAMS s 1-1"] {
         let (e, _) = run(&mut s, poll);
         assert_eq!(e, Some(Effect::Skip), "{poll}");
     }
@@ -377,7 +377,8 @@ fn xpending_names_a_missing_group_and_a_key_that_is_not_a_stream_in_both_forms()
     run(&mut s, "XADD s 1-1 f v");
     run(&mut s, "SET str v");
     for cmd in ["XPENDING s nog", "XPENDING s nog - + 10"] {
-        assert_eq!(run(&mut s, cmd).1, "-NOGROUP No such consumer group\r\n", "{cmd}");
+        let want = "-NOGROUP No such key 's' or consumer group 'nog'\r\n";
+        assert_eq!(run(&mut s, cmd).1, want, "{cmd}");
     }
     for cmd in ["XPENDING str g", "XPENDING str g - + 10"] {
         assert!(run(&mut s, cmd).1.starts_with("-WRONGTYPE"), "{cmd}");
