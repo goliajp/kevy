@@ -201,9 +201,9 @@ pub(crate) fn snapshot_aux(state: &RuntimeState) -> Argv {
 /// the stream is: newer wins, so a full sync of one shard, served from a
 /// snapshot older than frames another shard already applied, leaves the
 /// catalog as they did; a full sync from another lineage (another
-/// primary) replaces it, an empty one included. A snapshot with no frame
-/// comes from a primary with no replicated catalog (a 6.4 server, or an
-/// embedded store that has recorded none), so a replica of it holds none.
+/// primary) replaces it, an empty one included. Only a 6.4 server sends a
+/// snapshot with no frame: it replicates no catalog, so a replica of it
+/// holds none.
 pub(crate) fn load_snapshot_aux(state: &RuntimeState, aux: Option<&Argv>, full_sync: bool) {
     match aux {
         Some(frame) => {

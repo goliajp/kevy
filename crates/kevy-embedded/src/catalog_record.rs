@@ -4,9 +4,10 @@
 //! <index> <view> <table>`, through the write path (log, replicas, feed);
 //! every snapshot and rewritten log carries the current one; a frame is
 //! applied when it is newer than what the store holds, and a replica's
-//! full sync replaces its catalog with its primary's. A server replica
-//! applies the frames an embedded primary records, and the other way
-//! round.
+//! full sync takes its snapshot's frame the same way, except that a frame
+//! from another lineage (another primary) replaces the catalog. A primary
+//! gets its lineage when it opens. A server replica applies the frames an
+//! embedded primary records, and the other way round.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -62,16 +63,27 @@ impl CatalogRegs {
     }
 
     #[cfg(feature = "persist")]
-    /// The frame a snapshot or a rewritten log keeps beside the keyspace.
-    pub(crate) fn aux(&self) -> Option<Argv> {
-        let at = self.at();
-        (at.0 != 0).then(|| Argv::from(self.frame(at)))
+    /// The frame a snapshot or a rewritten log keeps beside the keyspace:
+    /// one always, an empty catalog included, so a snapshot's lineage says
+    /// whose catalog it holds.
+    pub(crate) fn aux(&self) -> Argv {
+        Argv::from(self.frame(self.at()))
+    }
+
+    /// Give a primary that has recorded nothing its lineage, once its
+    /// restore is done (a restored frame may still bring one until then);
+    /// a replica takes its primary's.
+    pub(crate) fn mint(&self) {
+        mint(&mut self.at.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     /// Take a catalog frame when it is newer than what the store holds,
-    /// or, on a full sync, whenever it comes from another lineage; `None`
-    /// on a full sync empties the catalog. A malformed frame is skipped,
-    /// the way a replay skips a frame it cannot apply.
+    /// or, on a full sync, whenever it comes from another lineage, so a
+    /// full sync served from a snapshot older than the frames already
+    /// applied leaves the catalog as they did. A malformed frame is
+    /// skipped, the way a replay skips a frame it cannot apply. Only a 6.4
+    /// server sends a full sync with no frame: it replicates no catalog, so
+    /// the store holds none.
     pub(crate) fn adopt(&self, frame: Option<&Argv>, full_sync: bool) {
         let mut held = self.at.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(frame) = frame else {
@@ -109,11 +121,16 @@ impl CatalogRegs {
     /// Move to the next version, minting a lineage on the first.
     fn next_version(&self) -> (u64, u64) {
         let mut at = self.at.lock().unwrap_or_else(PoisonError::into_inner);
-        if at.0 == 0 {
-            at.0 = kevy_store::now_unix_ms().max(1);
-        }
+        mint(&mut at);
         at.1 += 1;
         *at
+    }
+}
+
+/// Give a store that has recorded nothing its lineage.
+fn mint(at: &mut (u64, u64)) {
+    if at.0 == 0 {
+        at.0 = kevy_store::now_unix_ms().max(1);
     }
 }
 
@@ -181,11 +198,12 @@ mod sidecars {
     impl Store {
         /// Open-time settling of the files a 6.4 directory kept its
         /// catalog in: superseded when the logs or snapshots held a
-        /// catalog, otherwise read once and recorded, and removed once
+        /// recorded change (a version above 0: every open gives a primary
+        /// a lineage), otherwise read once and recorded, and removed once
         /// the record is on disk.
         pub(crate) fn settle_sidecars(&self) -> KevyResult<()> {
             let Some(dir) = self.config.data_dir.clone() else { return Ok(()) };
-            if self.guard.catalog.at().0 == 0 && !self.import_sidecars(&dir)? {
+            if self.guard.catalog.at().1 == 0 && !self.import_sidecars(&dir)? {
                 return Ok(());
             }
             for name in SIDECARS {
