@@ -325,6 +325,8 @@ mod tests_fail;
 #[cfg(test)]
 mod tests_log_base;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_log_base_fail;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_mapped;
 #[cfg(test)]
 mod tests_policy;
