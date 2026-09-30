@@ -4,9 +4,9 @@
 //! keep it under the 500-LOC house cap.
 
 use crate::snapshot_fmt::{
-    MAGIC, OP_AUX, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM,
-    OP_ZSET, VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL,
-    VERSION_SEG_STUB, capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
+    MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SEGSTUB, OP_SET, OP_STR, OP_STREAM, OP_ZSET,
+    VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL, VERSION_SEG_STUB,
+    capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
 use kevy_replicate::feed::FeedPosition;
 use kevy_store::Store;
@@ -138,7 +138,6 @@ pub fn load_snapshot_with_aux<R: Read>(
     keep: impl Fn(&[u8]) -> bool,
 ) -> io::Result<Option<crate::Argv>> {
     let version = read_snapshot_header(&mut r)?;
-    let mut aux = None;
     // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline
     // already past becomes `Some(0)` → loaded then immediately reaped (lazy
@@ -156,11 +155,7 @@ pub fn load_snapshot_with_aux<R: Read>(
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             store.demote_to_watermark();
-            return Ok(aux);
-        }
-        if op == OP_AUX {
-            aux = Some(crate::snapshot_aux::read_aux(&mut r)?);
-            continue;
+            return crate::snapshot_aux::read_trailer(&mut r);
         }
         records += 1;
         if records.is_multiple_of(crate::REPLAY_DEMOTE_INTERVAL) {

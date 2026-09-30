@@ -1,9 +1,10 @@
 //! The auxiliary record frame a snapshot and a rewritten log carry beside
 //! the keyspace (see [`crate::SnapshotSource::aux_frame`]).
 //!
-//! In a snapshot it is one `OP_AUX` record, `[parts u32 LE][bytes]…`, the
-//! last before `OP_EOF`. The version byte does not move: a reader that
-//! predates the record has loaded every entry by the time it meets it.
+//! In a snapshot it is one `OP_AUX` record, `[parts u32 LE][bytes]…`, after
+//! `OP_EOF`. The version byte does not move: a reader that predates the
+//! record returns at `OP_EOF` with every entry loaded and never reads it
+//! (6.4.0 refused an unknown record before `OP_EOF` as a failed load).
 
 use std::io::{self, Read, Write};
 
@@ -75,8 +76,21 @@ pub(crate) fn write_aux<W: Write>(w: &mut W, frame: &Argv) -> io::Result<()> {
     Ok(())
 }
 
+/// What follows `OP_EOF`: the aux frame, or nothing. Bytes after it that
+/// are not an aux record are left unread, as a reader from before the
+/// record leaves them.
+pub(crate) fn read_trailer<R: Read>(r: &mut R) -> io::Result<Option<Argv>> {
+    let mut op = [0u8; 1];
+    match r.read_exact(&mut op) {
+        Ok(()) if op[0] == OP_AUX => read_aux(r).map(Some),
+        Ok(()) => Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Read an `OP_AUX` record's body (the opcode already consumed).
-pub(crate) fn read_aux<R: Read>(r: &mut R) -> io::Result<Argv> {
+fn read_aux<R: Read>(r: &mut R) -> io::Result<Argv> {
     let n = read_u32(r)? as usize;
     let mut parts = Vec::with_capacity(n.min(16));
     for _ in 0..n {
@@ -110,7 +124,11 @@ mod tests {
         let (s, f) = (store(), frame());
         let mut image = Vec::new();
         crate::write_snapshot_to(&WithAux::new(&s, Some(&f)), &mut image).unwrap();
-        assert_eq!(image[image.len() - 1], crate::snapshot_fmt::OP_EOF);
+        let mut bare = Vec::new();
+        crate::write_snapshot_to(&s, &mut bare).unwrap();
+        // the image a reader from before the frame reads to its end
+        assert_eq!(image[..bare.len()], bare[..]);
+        assert_eq!(bare[bare.len() - 1], crate::snapshot_fmt::OP_EOF);
         let mut back = Store::new();
         let aux = crate::load_snapshot_with_aux(&mut back, image.as_slice(), |_| true).unwrap();
         assert_eq!(aux, Some(f));
