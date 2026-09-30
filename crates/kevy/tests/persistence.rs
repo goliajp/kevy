@@ -701,24 +701,20 @@ fn build_grouped_stream(c: &mut std::net::TcpStream) {
     read_reply(c, b"+OK\r\n");
 }
 
-/// Post-restart probes shared by the AOF-rewrite and snapshot paths.
-/// `pending_total` differs: the snapshot keeps the 2-1 tombstone PEL row
-/// (3 pending, c1=2), the rewrite drops it (2 pending, c1=1) — a
-/// deliberate trade-off (the rewrite re-serializes only live entries).
-fn assert_grouped_stream_restored(c: &mut std::net::TcpStream, tombstone_kept: bool) {
-    let (total, c1) = if tombstone_kept { (3, 2) } else { (2, 1) };
+/// Post-restart probes shared by the AOF-rewrite and snapshot paths. Both
+/// keep the pending row of the deleted 2-1 (3 pending, c1 holds 2), and a
+/// history read hands that row back as `[2-1, nil]`, as valkey does.
+fn assert_grouped_stream_restored(c: &mut std::net::TcpStream) {
     c.write_all(&req(&[b"XPENDING", b"st", b"g"])).unwrap();
     read_reply(
         c,
-        format!(
-            "*4\r\n:{total}\r\n$3\r\n1-1\r\n$3\r\n3-1\r\n*2\r\n*2\r\n$2\r\nc1\r\n$1\r\n{c1}\r\n*2\r\n$2\r\nc2\r\n$1\r\n1\r\n"
-        )
-        .as_bytes(),
+        b"*4\r\n:3\r\n$3\r\n1-1\r\n$3\r\n3-1\r\n*2\r\n*2\r\n$2\r\nc1\r\n$1\r\n2\r\n*2\r\n$2\r\nc2\r\n$1\r\n1\r\n",
     );
-    // PEL replay: c1 re-reads its own pending entries from 0 — only the
-    // still-existing 1-1 comes back (2-1 is deleted in both paths).
     c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c1", b"STREAMS", b"st", b"0"])).unwrap();
-    read_reply(c, b"*1\r\n*2\r\n$2\r\nst\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
+    read_reply(
+        c,
+        b"*1\r\n*2\r\n$2\r\nst\r\n*2\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n*2\r\n$3\r\n2-1\r\n*-1\r\n",
+    );
     // st2: the ID clock survived the restart even though the stream is empty.
     c.write_all(&req(&[b"XADD", b"st2", b"5-1", b"f", b"v"])).unwrap();
     read_reply(
@@ -756,7 +752,7 @@ fn stream_groups_survive_bgrewriteaof_restart() {
     let port2 = free_port();
     with_runtime(port2, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        assert_grouped_stream_restored(&mut c, /*tombstone_kept=*/ false);
+        assert_grouped_stream_restored(&mut c);
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -774,7 +770,7 @@ fn stream_groups_survive_save_restart() {
     let port2 = free_port();
     with_runtime(port2, &dir, 1, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
-        assert_grouped_stream_restored(&mut c, /*tombstone_kept=*/ true);
+        assert_grouped_stream_restored(&mut c);
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
