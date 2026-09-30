@@ -257,7 +257,7 @@ The detailed charter rationale lives in
 
 ```sh
 bash bench/run.sh              # portability smoke (Docker, no pipeline)
-bash bench/loopback_c50.sh     # headline TCP loopback vs valkey/redis
+bash bench/arena.sh target/release/kevy   # kevy vs Redis, valkey and Dragonfly, TCP loopback
 ```
 
 Full method and the workload-by-workload table are in

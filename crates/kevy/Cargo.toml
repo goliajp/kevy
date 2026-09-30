@@ -42,7 +42,7 @@ default = []
 # Route the whole process through kevy-alloc (v5 experiment). Off by
 # default: the allocator is under every path with no way to disable it
 # at run time, so turning it on is a deliberate act and the A/B that
-# justifies it is bench/allocgate.sh's M1 and M2.
+# justifies it is `bench/perfgate.sh compare HEAD HEAD+kevy-alloc`.
 kevy-alloc = ["dep:kevy-alloc"]
 # Two builds for bench/repack-tail.sh, off in every shipped build.
 # `harness-repack-off` leaves the index repack out of the shard tick, so

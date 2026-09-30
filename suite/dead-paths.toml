@@ -80,9 +80,8 @@ all 283 regions read dead, the second of the two crates in the workspace
 with no in-corpus coverage at all.
 
 Where it does run: `bench/pubsub_loopback.sh` drives it against a local
-server, and `bench/axis_h_pubsub.sh` uses it for the pubsub axis of the
-comparison table. Both are measurements on the bench box rather than CI
-gates, and this entry says so rather than implying a door that watches
+server and against valkey and Redis. That is a measurement on the bench box
+rather than a CI gate, and this entry says so rather than implying a door that watches
 this crate on every push. What watches it is that the numbers it produces
 have to be reproducible — a broken generator shows up as a benchmark that
 stops agreeing with itself.
