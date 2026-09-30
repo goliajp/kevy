@@ -22,7 +22,7 @@ kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title
 
 回复是升序的 `key, distance` 对（最近的在前）；`FIELDS` 在同一次调用里、在每个命中所属的 shard 上补上 hash 字段。生产环境里，向量值是你的客户端库写进去的二进制 blob（`dim × 4` 字节的小端 f32）；上面那个 `csv:` 形态是调试用的便利。
 
-配套 verb 和其他 kind 一样：`IDX.EXPLAIN embs KNN …`（只解析加出计划，不执行）、`IDX.VERIFY` / `IDX.LIST`（实时统计）、`IDX.DROP`。`IDX.REBUILD` 是 ANN 专有的——见“删除与重建”。
+配套 verb 和其他 kind 一样：`IDX.EXPLAIN embs KNN …`（只解析加出计划，不执行）、`IDX.VERIFY` / `IDX.LIST`（实时统计）、`IDX.DROP`。`IDX.REBUILD` 用在 ANN 索引上时压实图——见“删除与重建”。
 
 ## 快速上手（embedded）
 

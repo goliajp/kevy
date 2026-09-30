@@ -22,7 +22,7 @@ kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title
 
 応答は`key, distance`の組の昇順です（最も近いものが先）。`FIELDS`は、各ヒットを所有するシャード上で、同じ呼び出しの中でハッシュフィールドをhydrateします。本番では、ベクトルの値はクライアントライブラリが書くバイナリのblob（リトルエンディアンf32の`dim × 4`バイト）です。上の`csv:`形式はデバッグ用の便宜です。
 
-補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。`IDX.REBUILD`はANN固有です——「削除と再構築」を参照してください。
+補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。ANNインデックスでは`IDX.REBUILD`がグラフを詰め直します——「削除と再構築」を参照してください。
 
 ## クイックスタート（組み込み）
 

@@ -481,6 +481,7 @@ mod changes;
 mod seg_new;
 mod tidy;
 use seg_new::{new_ann_seg, new_scalar_seg, new_text_seg};
+pub(crate) use tidy::rebuild as rebuild_local;
 
 #[cfg(test)]
 mod global_tests;
