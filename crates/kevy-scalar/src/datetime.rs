@@ -190,3 +190,36 @@ fn age(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         Scalar::Interval { months, days, micros }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn field(name: &str, us: i64) -> f64 {
+        match field_of_ts("extract", name, us) {
+            Ok(Scalar::Float(f)) => f,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_calendar_fields_of_a_timestamp() {
+        let us = crate::parse_timestamp("2024-03-15 10:20:45.123456").unwrap();
+        assert_eq!(field("quarter", us), 1.0);
+        assert_eq!(field("day", us), 15.0);
+        assert_eq!(field("minute", us), 20.0);
+        assert_eq!(field("epoch", us), 1_710_498_045.123_456);
+        assert_eq!(field("dow", us), 5.0, "a friday");
+        assert_eq!(field("doy", us), 75.0, "31 + 29 + 15 in a leap year");
+        let last = crate::parse_timestamp("2024-12-31 23:59:59").unwrap();
+        assert_eq!((field("quarter", last), field("doy", last)), (4.0, 366.0));
+    }
+
+    #[test]
+    fn the_calendar_fields_before_the_epoch() {
+        let us = crate::parse_timestamp("1969-12-31 23:59:00").unwrap();
+        assert_eq!(field("epoch", us), -60.0);
+        assert_eq!(field("dow", us), 3.0, "a wednesday");
+        assert_eq!(field("doy", us), 365.0);
+    }
+}

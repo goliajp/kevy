@@ -338,3 +338,30 @@ fn a_dropped_entry_is_recorded_as_a_drop() {
     let rec = records(&mut s, "XCLAIM s g a 0 1-1 JUSTID", e);
     assert_eq!(rec, vec!["XCLAIM s g a 0 1-1 JUSTID".to_string()]);
 }
+
+/// A known consumer's read that delivers from one stream and not the
+/// other records the stream it delivered from and nothing for the other.
+#[test]
+fn a_known_consumer_records_only_the_stream_that_delivered() {
+    let mut s = Store::new();
+    for c in ["XADD a 1-1 x 1", "XADD b 1-1 y 1", "XGROUP CREATE a g 0", "XGROUP CREATE b g 0"] {
+        run(&mut s, c);
+    }
+    run(&mut s, "XREADGROUP GROUP g c STREAMS a b > >");
+    run(&mut s, "XADD a 2-1 x 2");
+    let read = "XREADGROUP GROUP g c STREAMS a b > >";
+    let (e, _) = run(&mut s, read);
+    let rec = records(&mut s, read, e);
+    assert!(rec.iter().all(|f| !f.split(' ').any(|t| t == "b")), "{rec:?}");
+    assert!(rec.iter().any(|f| f == "XGROUP SETID a g 2-1"), "{rec:?}");
+}
+
+/// An argv that is not a well-formed group read records nothing.
+#[test]
+fn a_read_record_of_an_argv_without_streams_is_empty() {
+    let s = Store::new();
+    let effect = Effect::RecordRead(StreamId::new(0, 0), crate::aof::Consumer::Created);
+    for cmd in ["XREADGROUP GROUP g c COUNT 1 NOACK", "XREADGROUP GROUP g c STREAMS a b >"] {
+        assert!(crate::aof::deferred_frames(&s, &argv(cmd), &effect).is_empty(), "{cmd}");
+    }
+}

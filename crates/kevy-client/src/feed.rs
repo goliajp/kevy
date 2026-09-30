@@ -211,6 +211,17 @@ mod tests {
     }
 
     #[test]
+    fn embedded_feed_refusals_carry_the_wire_text() {
+        let resync = feed_err(FeedError::Resync { tail: FeedPosition::new(3, 17) });
+        assert!(matches!(&resync, KevyError::Protocol(t) if t == "FEEDRESYNC 3 17"), "{resync:?}");
+        let future = feed_err(FeedError::Future);
+        assert!(
+            matches!(&future, KevyError::Protocol(t) if t == "ERR feed cursor ahead of stream"),
+            "{future:?}"
+        );
+    }
+
+    #[test]
     fn embedded_nonzero_shard_rejected() {
         let mut c = Connection::connect("mem://").unwrap();
         let err = c.feed_tail(1).unwrap_err();

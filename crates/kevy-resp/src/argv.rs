@@ -281,6 +281,16 @@ mod tests {
     }
 
     #[test]
+    fn collecting_and_extending_append_slices_in_order() {
+        let mut a: Argv = [b"DEL".as_slice(), b"k1"].into_iter().collect();
+        assert_eq!(a, vec![b"DEL".to_vec(), b"k1".to_vec()]);
+        a.extend([b"k2".as_slice(), b"".as_slice()]);
+        assert_eq!(a, vec![b"DEL".to_vec(), b"k1".to_vec(), b"k2".to_vec(), Vec::new()]);
+        let empty: Argv = core::iter::empty::<&[u8]>().collect();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
     fn clone_makes_independent_argv() {
         let mut a = Argv::default();
         a.push(b"X");

@@ -290,6 +290,9 @@ fn read_falls_back_to_primary_when_no_replicas() {
         kevy_resp::Reply::Bulk(b) => assert_eq!(b, b"v"),
         other => panic!("unexpected {other:?}"),
     }
+    // an auto-routed read verb takes the same fallback
+    let reply = client.request(&[b"GET".to_vec(), b"fallback-k".to_vec()]).expect("auto read");
+    assert_eq!(reply, kevy_resp::Reply::Bulk(b"v".to_vec()));
 
     drop(client);
     primary.shutdown();
