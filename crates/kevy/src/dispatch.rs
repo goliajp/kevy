@@ -143,7 +143,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || exec_shared(cmd, store, args, out)
         || kevy_verbs::geo::exec_read_only(cmd, store, args, out)
-        || internal_record(cmd, store, args, out)
+        || internal_record(ctx, cmd, store, args, out)
         // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || crate::dispatch_replay::dispatch_multikey_stub(cmd, out);
@@ -263,18 +263,22 @@ fn exec_shared<A: ArgvView + ?Sized>(
 /// applies a frame from a primary, refused from a client (a connection,
 /// a script, a transaction).
 fn internal_record<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    if cmd != kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+    let catalog = cmd == kevy_resp::ops_table::CATALOG.as_bytes();
+    if !catalog && cmd != kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
         return false;
     }
-    if kevy_rt::applying_record() {
-        kevy_verbs::aof::apply_internal(store, args, out);
-    } else {
+    if !kevy_rt::applying_record() {
         refuse_internal(out);
+    } else if catalog {
+        crate::catalog_record::apply(ctx.state, args, out);
+    } else {
+        kevy_verbs::aof::apply_internal(store, args, out);
     }
     true
 }
@@ -343,15 +347,11 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
             _ => wrong_args(out, "ping"),
         },
         b"TIME" => cmd_time(out),
-        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, store, args, out),
-        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
-        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
-        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
-        b"IDX.ADVISE" => crate::cmd_index_advise::cmd_idx_advise(ctx, args, out),
-        b"TABLE.DECLARE" | b"TABLE.ENSURE" | b"TABLE.REPLACE" => {
-            crate::cmd_table::cmd_table_local(ctx, cmd, store, args, out)
+        b"IDX.CREATE" | b"IDX.DROP" | b"VIEW.CREATE" | b"VIEW.DROP" | b"TABLE.DECLARE"
+        | b"TABLE.ENSURE" | b"TABLE.REPLACE" | b"TABLE.DROP" => {
+            return crate::catalog_record::dispatch(ctx, cmd, store, args, out);
         }
-        b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
+        b"IDX.ADVISE" => crate::cmd_index_advise::cmd_idx_advise(ctx, args, out),
         b"TABLE.DESCRIBE" => crate::cmd_describe::cmd_table_describe(ctx, args, out),
         b"IDX.DESCRIBE" => crate::cmd_describe::cmd_idx_describe(ctx, args, out),
         b"VIEW.DESCRIBE" => crate::cmd_describe::cmd_view_describe(ctx, args, out),

@@ -103,6 +103,23 @@ pub(crate) fn run_job(job: PersistJob) -> PersistDone {
     }
 }
 
+/// Append `frame` to a shard's log and sync it: the `record` callback of
+/// [`crate::Commands::on_restored`].
+pub(crate) fn record_durably(
+    aof: &mut Option<kevy_persist::Aof>,
+    shard: usize,
+    frame: &kevy_resp::Argv,
+) -> bool {
+    let Some(aof) = aof.as_mut() else { return false };
+    match aof.append(frame).and_then(|()| aof.sync_now()) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("kevy: shard {shard} could not record a restored frame: {e}");
+            false
+        }
+    }
+}
+
 /// Load a shard's snapshot file at boot, returning the frame it kept
 /// beside the keyspace.
 pub(crate) fn load_snapshot_file(

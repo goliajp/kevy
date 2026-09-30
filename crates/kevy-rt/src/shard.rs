@@ -172,6 +172,8 @@ pub(crate) struct Shard<C: Commands> {
     /// `debug_assert` in [`Self::run`].
     pub(crate) inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>>,
     pub(crate) data_dir: PathBuf,
+    /// Held until every shard has restored (see [`crate::restore_gate`]).
+    pub(crate) restore_gate: std::sync::Arc<crate::restore_gate::RestoreGate>,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
     /// Two-phase rewrite handoff state. `Some` between the worker's

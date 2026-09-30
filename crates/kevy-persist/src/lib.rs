@@ -66,6 +66,7 @@ mod replay_resync;
 mod replay_txn;
 mod replay_walk;
 pub mod reshard;
+mod reshard_journal;
 mod rewrite_chunk;
 mod rewrite_fmt;
 mod rewrite_frames;
