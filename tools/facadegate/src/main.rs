@@ -16,7 +16,7 @@
 //! needs a server this crate deliberately does not have).
 
 use kevy_embedded::{
-    Config, IndexKind, IndexValue, OrderPath, IndexValType, Store, TableIndex, TableSpec,
+    Config, IndexKind, IndexValue, OrderPath, IndexValType, SortOrder, Store, TableIndex, TableSpec,
 };
 
 fn main() {
@@ -58,27 +58,19 @@ fn kv_and_hash() {
 /// through facade types. This is the path 4.0 shipped uncallable.
 fn tables_end_to_end() {
     let store = Store::open(Config::default()).expect("mem store opens");
-    let spec = TableSpec {
-        name: b"threads".to_vec(),
-        prefix: b"row:".to_vec(),
-        pk: b"user".to_vec(),
-        columns: vec![
-            (b"user".to_vec(), IndexValType::Str),
-            (b"activity".to_vec(), IndexValType::I64),
-        ],
-        indexes: vec![TableIndex {
-            column: b"user".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![OrderPath {
-            name: b"by_user_activity".to_vec(),
-            on: vec![(b"user".to_vec(), false), (b"activity".to_vec(), true)],
-        }],
-        window: None,
-        autodeclare: 0,
-        auto_added: vec![],
-    };
+    let mut spec = TableSpec::default();
+    spec.name = b"threads".to_vec();
+    spec.prefix = b"row:".to_vec();
+    spec.pk = b"user".to_vec();
+    spec.columns = vec![
+        (b"user".to_vec(), IndexValType::Str),
+        (b"activity".to_vec(), IndexValType::I64),
+    ];
+    spec.indexes = vec![TableIndex::new(b"user".to_vec(), IndexKind::Range)];
+    spec.orderpaths = vec![OrderPath::new(
+        b"by_user_activity".to_vec(),
+        vec![(b"user".to_vec(), SortOrder::Asc), (b"activity".to_vec(), SortOrder::Desc)],
+    )];
     store.table_declare(spec).expect("declare through the facade");
 
     for i in 0..50u32 {
@@ -152,21 +144,16 @@ fn tables_end_to_end() {
 /// `table_declare`, whatever is wrong with it.
 fn bad_specs_are_refusals_not_panics() {
     let store = Store::open(Config::default()).expect("mem store opens");
-    let bad = TableSpec {
-        name: b"t".to_vec(),
-        prefix: b"row:".to_vec(),
-        pk: b"user".to_vec(),
-        columns: vec![(b"user".to_vec(), IndexValType::Str)],
-        indexes: vec![],
-        orderpaths: vec![OrderPath {
-            name: b"by_ord".to_vec(),
-            // `ord` is not in `columns` — the F9 spec, byte for byte.
-            on: vec![(b"user".to_vec(), false), (b"ord".to_vec(), true)],
-        }],
-        window: None,
-        autodeclare: 0,
-        auto_added: vec![],
-    };
+    let mut bad = TableSpec::default();
+    bad.name = b"t".to_vec();
+    bad.prefix = b"row:".to_vec();
+    bad.pk = b"user".to_vec();
+    bad.columns = vec![(b"user".to_vec(), IndexValType::Str)];
+    // `ord` is not in `columns` — the F9 spec, byte for byte.
+    bad.orderpaths = vec![OrderPath::new(
+        b"by_ord".to_vec(),
+        vec![(b"user".to_vec(), SortOrder::Asc), (b"ord".to_vec(), SortOrder::Desc)],
+    )];
     let err = store.table_declare(bad).expect_err("undeclared ORDERPATH column must refuse");
     let msg = format!("{err}");
     assert!(msg.contains("unknown column") || msg.contains("not declared"), "unhelpful refusal: {msg}");
@@ -180,20 +167,14 @@ fn bad_specs_are_refusals_not_panics() {
 fn ensure_is_the_boot_verb() {
     use kevy_embedded::TableEnsure;
     let store = Store::open(Config::default()).expect("mem store opens");
-    let spec = || TableSpec {
-        name: b"t".to_vec(),
-        prefix: b"row:".to_vec(),
-        pk: b"user".to_vec(),
-        columns: vec![(b"user".to_vec(), IndexValType::Str)],
-        indexes: vec![TableIndex {
-            column: b"user".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: None,
-        autodeclare: 0,
-        auto_added: vec![],
+    let spec = || {
+        let mut s = TableSpec::default();
+        s.name = b"t".to_vec();
+        s.prefix = b"row:".to_vec();
+        s.pk = b"user".to_vec();
+        s.columns = vec![(b"user".to_vec(), IndexValType::Str)];
+        s.indexes = vec![TableIndex::new(b"user".to_vec(), IndexKind::Range)];
+        s
     };
     assert_eq!(store.table_ensure(spec()).expect("first boot"), TableEnsure::Created);
     assert_eq!(store.table_ensure(spec()).expect("every later boot"), TableEnsure::Unchanged);
