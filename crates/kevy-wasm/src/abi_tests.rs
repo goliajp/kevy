@@ -391,7 +391,7 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
     // feature-unifies kevy-embedded with the ffi/server crates' defaults, so
     // IDX.CREATE may resolve to the real verb here. Both worlds are correct
     // answers for the universal cmd path; the minimal-closure claim itself is
-    // enforced structurally by CI's wasm job (`cargo check --target wasm32-*
+    // enforced structurally by CI's iot + wasm job (`cargo check --target wasm32-*
     // -p kevy-wasm` — single-package selection, nothing to unify with).
     let (s, reply) = cmd(h, &[b"IDX.CREATE", b"i"]);
     assert!(s >= 0);

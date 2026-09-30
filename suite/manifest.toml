@@ -7,7 +7,11 @@
 #
 #   precommit   pins the current version's goals + fast regressions.
 #   premerge    adds what CI checks on a push.
-#   prerelease  adds the release claims and iron rules.
+#   prerelease  adds the release claims and iron rules. Above premerge a
+#               row CI already passed on this commit is CARRIED, not run
+#               again (tools/ci_carry.py): every premerge row when the
+#               whole CI run is green, and a row naming `ci_job` when that
+#               job is.
 #   full        adds everything: the problem-hunting surface.
 #
 # Fields:
@@ -27,9 +31,12 @@
 #             measures; above premerge the row is skipped as UNCHANGED
 #             when it passed on this machine at an ancestor commit and no
 #             matching file has changed since (tools/suite_unchanged.py)
+#   ci_job    the CI job, by its display name, that runs this row; above
+#             premerge the row is carried when that job passed on this
+#             commit
 #   advisory  true = reported but does not fail the tier (used only for
-#             checks whose red can be a legitimate state, e.g. the
-#             published-wasm divergence between releases)
+#             checks whose red can be a legitimate state, e.g. a red-first
+#             acceptance ledger)
 #
 # Exploration probes (v125-*, axis_*, loopback_*) are deliberately not
 # here: instruments for finding, not standards for holding. See the RFC.
