@@ -410,6 +410,23 @@ const CORPUS: &[&str] = &[
     "COPY xnosuch xdst",
     "COPY xs",
     "GET xcopy",
+    // COPY clones a value of any type, not only a string
+    "COPY xh xhcopy",
+    "HGETALL xhcopy",
+    "COPY xl xlcopy",
+    "LRANGE xlcopy 0 -1",
+    "COPY xz xzcopy",
+    "ZRANGE xzcopy 0 -1 WITHSCORES",
+    "SADD xset a b",
+    "COPY xset xsetcopy",
+    "SCARD xsetcopy",
+    "XADD xst 1-1 f v",
+    "COPY xst xstcopy",
+    "XRANGE xstcopy - +",
+    "COPY xh xcopy",
+    "COPY xh xcopy REPLACE",
+    "TYPE xcopy",
+    "HGETALL xcopy",
     // The error arm each of these has and none of the lines above
     // reaches: the store refusing because the key holds another type.
     // `deadgate` counted them one by one.
