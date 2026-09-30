@@ -28,6 +28,8 @@
 
 #![allow(dead_code)] // each test binary uses a subset
 
+pub mod node;
+
 use std::time::{Duration, Instant};
 
 /// How long a value must hold still before it counts as settled. Several

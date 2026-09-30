@@ -7,7 +7,7 @@ use crate::Commands;
 use crate::park_fence;
 use crate::shard::Shard;
 use crate::shard_lifecycle::Accepted;
-use kevy_persist::{Routing, load_snapshot, replay_aof};
+use kevy_persist::{Routing, replay_aof};
 use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
@@ -91,12 +91,7 @@ impl<C: Commands> Shard<C> {
         if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
             return Err(io::Error::other(format!("shard {}: {e}", self.id)));
         }
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
+        self.load_boot_snapshot();
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
@@ -134,10 +129,7 @@ impl<C: Commands> Shard<C> {
             }
             self.commands.on_replay_report(report.dropped_bytes, report.corrupt);
         }
-        // Segments nothing references after restore are orphans (a
-        // crash between sealing and the frame): sweep them.
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.finish_restore();
 
         // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {

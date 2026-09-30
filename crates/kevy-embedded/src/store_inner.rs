@@ -70,7 +70,7 @@ impl WeakStore {
             #[cfg(feature = "index")]
             views: self.views_weak.upgrade()?,
             #[cfg(feature = "index")]
-            tables: guard.tables.clone(),
+            tables: guard.catalog.tables.clone(),
             // The report rides the DropGuard (engine lifetime), so a
             // resurrection that outlives every full Store handle
             // still reports the ORIGINAL boot's replay verdict.
@@ -130,6 +130,10 @@ pub(crate) struct Inner {
     pub(crate) view_segs: crate::ops_view::ShardViews,
     #[cfg(feature = "index")]
     pub(crate) view_reg: Option<Arc<crate::ops_view::ViewReg>>,
+    /// The catalog registries and where the catalog stands as recorded
+    /// state (the replica runner and the snapshot writers reach it here).
+    #[cfg(feature = "index")]
+    pub(crate) catalog: Option<Arc<crate::catalog_record::CatalogRegs>>,
 }
 
 impl Inner {
@@ -155,6 +159,8 @@ impl Inner {
             view_segs: crate::ops_view::ShardViews::default(),
             #[cfg(feature = "index")]
             view_reg: None,
+            #[cfg(feature = "index")]
+            catalog: None,
         }
     }
 }
@@ -173,11 +179,11 @@ pub(crate) struct DropGuard {
     /// original boot's report — even after every full handle dropped
     /// while a subscription kept the engine alive.
     pub(crate) open_report: Arc<crate::metric::OpenReport>,
-    /// The table registry — owned by the guard (engine lifetime) for
+    /// The catalog registries — owned by the guard (engine lifetime) for
     /// the same reason as `open_report`: a `WeakStore::upgrade` after
     /// every full handle dropped must still see the declared tables.
     #[cfg(feature = "index")]
-    pub(crate) tables: Arc<crate::ops_table::TableReg>,
+    pub(crate) catalog: Arc<crate::catalog_record::CatalogRegs>,
     pub(crate) reaper_stop: Option<Arc<AtomicBool>>,
     pub(crate) reaper_join: Mutex<Option<JoinHandle<()>>>,
     // Read by the persist flush; without it the strong ref still

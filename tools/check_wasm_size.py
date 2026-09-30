@@ -23,6 +23,7 @@ Run: python3 tools/check_wasm_size.py [--write]
 """
 
 import gzip
+import math
 import pathlib
 import re
 import sys
@@ -64,6 +65,7 @@ NEAR = re.compile(r"wasm|WebAssembly|gzip|gzipped|packed|回線|ブラウザ|浏
 NOT_OURS = re.compile(r"IoT|no_std|chip|チップ|芯片|core tier|`core`", re.I)
 
 TOLERANCE = 0.10
+PACKED = re.compile(r"packed|パック|打包", re.I)
 
 
 def measured():
@@ -121,14 +123,28 @@ def main():
     stale = [c for c in found if not ok(c[2])]
 
     if write and stale:
+        # a stale claim is rewritten to whichever measurement it was about,
+        # the one it sits nearer on a log scale: an uncompressed 1442 KB is
+        # the raw size, not a gzipped one. A packed-tarball size is neither,
+        # and this script does not measure it, so it is named, not rewritten
+        def nearer(n):
+            return raw if abs(math.log(n / raw)) < abs(math.log(n / gz)) else gz
+
+        def about_packing(c):
+            at = c[3].find(f"{c[2]} KB")
+            return PACKED.search(c[3][max(0, at - 8) : at + 16])
+
+        packed = [c for c in stale if about_packing(c)]
         for rel in {c[0] for c in stale}:
             p = ROOT / rel
             text = p.read_text(encoding="utf-8")
-            for _, _, n, _ in [c for c in stale if c[0] == rel]:
-                text = text.replace(f"{n} KB", f"{gz} KB")
+            for _, _, n, _ in [c for c in stale if c[0] == rel and c not in packed]:
+                text = text.replace(f"{n} KB", f"{nearer(n)} KB")
             p.write_text(text, encoding="utf-8")
-        print(f"check_wasm_size: rewrote {len(stale)} claim(s) to {gz} KB")
-        return 0
+        print(f"check_wasm_size: rewrote {len(stale) - len(packed)} claim(s)")
+        for rel, line_no, n, _ in packed:
+            print(f"  left {rel}:{line_no} ({n} KB packed): `npm pack --dry-run` in the pkg dir")
+        return 1 if packed else 0
 
     if stale:
         print(f"check_wasm_size: FAIL — {len(stale)} stated size(s) no longer true")

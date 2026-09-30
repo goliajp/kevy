@@ -66,12 +66,14 @@ mod replay_resync;
 mod replay_txn;
 mod replay_walk;
 pub mod reshard;
+mod reshard_journal;
 mod rewrite_chunk;
 mod rewrite_fmt;
 mod rewrite_frames;
 mod rewrite_stream_fmt;
 mod segmented;
 mod shards_meta;
+mod snapshot_aux;
 mod snapshot_fmt;
 mod snapshot_payload;
 mod snapshot_read;
@@ -122,9 +124,11 @@ pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk};
 pub use rewrite_frames::value_as_v1_frames;
 pub use rewrite_stream_fmt::write_stream_as_commands;
 pub use shards_meta::{Routing, ShardsMeta};
+pub use snapshot_aux::WithAux;
 pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
 pub use snapshot_read::{
-    load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
+    load_snapshot, load_snapshot_filtered, load_snapshot_from, load_snapshot_with_aux,
+    read_snapshot_cursor,
 };
 pub(crate) use snapshot_write::write_stream_groups;
 pub use snapshot_write::{
@@ -219,6 +223,20 @@ pub trait SnapshotSource {
     /// ```
     fn row_seg_files(&self) -> Vec<(u32, String)> {
         Vec::new()
+    }
+
+    /// A record frame the runtime keeps beside the keyspace (the server's
+    /// index catalog is one). A snapshot stores it as its last record and a
+    /// rewritten log as its last frame, so it survives both. Default =
+    /// none.
+    ///
+    /// ```
+    /// use kevy_persist::SnapshotSource;
+    ///
+    /// assert!(SnapshotSource::aux_frame(&kevy_store::Store::new()).is_none());
+    /// ```
+    fn aux_frame(&self) -> Option<Argv> {
+        None
     }
 }
 

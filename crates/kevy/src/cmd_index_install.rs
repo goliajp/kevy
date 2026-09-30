@@ -157,7 +157,6 @@ pub(crate) fn install_new_index(
     let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create_with(spec, partitioning) {
         Ok(()) => {
-            crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &cat);
             ctx.state.install_index_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }

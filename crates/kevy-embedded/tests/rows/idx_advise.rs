@@ -108,6 +108,6 @@ fn refusals_render_and_catalog_mutations_clear() {
     assert_eq!(s.idx_advise().len(), expect, "ungrounded family withheld");
 
     // Any catalog mutation clears the slate.
-    assert!(s.idx_drop(b"ev.at"));
+    assert!(s.idx_drop(b"ev.at").unwrap());
     assert!(s.idx_advise().is_empty(), "mutation clears the log");
 }

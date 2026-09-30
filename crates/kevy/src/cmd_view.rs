@@ -1,54 +1,20 @@
 //! VIEW.* command surface. CREATE/DROP are Local catalog
-//! mutations (sidecar-persisted, like IDX.*); QUERY/LIST/VERIFY/
+//! mutations (recorded like IDX.*); QUERY/LIST/VERIFY/
 //! REBUILD/EXPLAIN ride the extension fan-out.
 //!
 //! Tree grammar over argv (parens are separate arguments):
 //! `( AND|OR|DIFF <sub> <sub> )` | `<index> RANGE <min> <max>` |
 //! `<index> EQ <v>`.
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
-)]
-
 use kevy_resp::CmdError;
-use std::path::Path;
 
-use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
+use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewMode, ViewSpec};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK, encode_value};
-use crate::state::{Ctx, RuntimeState};
+use crate::state::Ctx;
 use crate::view_runtime;
-
-const SIDECAR: &str = "view-catalog.meta";
-
-/// Boot: load the persisted view catalog (runs after
-/// `cmd_index::boot` — view leaves reference index specs).
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = ViewCatalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        state.install_view_catalog(cat);
-    }
-}
-
-fn persist_sidecar(dir: Option<&Path>, cat: &ViewCatalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("view-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-    }
-}
 
 /// One leaf of a view tree: an index name, a shape, and the literals that
 /// shape needs — `RANGE min max` or `EQ value`, both coerced to the index's
@@ -163,7 +129,6 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
-            persist_sidecar(ctx.state.sidecar_dir(), &cat);
             ctx.state.install_view_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
@@ -230,7 +195,6 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
     let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_view(&args[1]);
     if hit {
-        persist_sidecar(ctx.state.sidecar_dir(), &cat);
         ctx.state.install_view_catalog(cat);
     }
     encode_integer(out, i64::from(hit));

@@ -1,6 +1,6 @@
 //! TABLE.* command surface.
 //!
-//! DECLARE/DROP are Local catalog mutations (sidecar-persisted, like
+//! DECLARE/DROP are Local catalog mutations (recorded like
 //! IDX.*/VIEW.*): the parse + compile both live in `kevy_index`
 //! ([`kevy_index::parse_table_declare`] / [`kevy_index::TableSpec::compile`])
 //! — ONE implementation the embedded dispatch calls too, so the two
@@ -11,53 +11,18 @@
 //! IDX access paths (`<table>.<col>`, `<table>.<orderpath>`); the
 //! engine enforces no schema at query time and chooses no access path.
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
-)]
-
-use std::path::Path;
-
-use kevy_index::{Catalog, TableCatalog, TableSpec, parse_table_declare_partitioned, spec_diff};
+use kevy_index::{Catalog, TableSpec, parse_table_declare_partitioned, spec_diff};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
 
 use crate::cmd_index_install::Sampler;
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK};
-use crate::state::{CatalogState, Ctx, RuntimeState};
-
-const SIDECAR: &str = "table-catalog.meta";
+use crate::state::{CatalogState, Ctx};
 
 /// Rows the per-shard column spot check samples (bounded — VERIFY must
 /// not become a full-table sweep of the row payloads).
 const SPOTCHECK_ROWS: usize = 64;
-
-/// Boot: load the persisted table catalog (after `cmd_index::boot` —
-/// the compiled indexes live in the index catalog's own sidecar).
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = TableCatalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        state.install_table_catalog(cat);
-    }
-}
-
-pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("table-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-    }
-}
 
 /// `TABLE.DECLARE` / `ENSURE` / `REPLACE` dispatched on the shard that
 /// runs them: a sampled `GLOBAL` path samples this shard's rows (the
@@ -111,8 +76,6 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, sampler, n) {
         return encode_error(out, &e);
     }
-    persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-    crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
     ctx.state.install_index_catalog(icat);
     ctx.state.install_table_catalog(tcat);
     out.extend_from_slice(b"+OK\r\n");
@@ -198,8 +161,6 @@ fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
         for cname in &compiled {
             icat.drop_index(cname);
         }
-        persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-        crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
         ctx.state.install_index_catalog(icat);
         ctx.state.install_table_catalog(tcat);
     }
@@ -227,8 +188,6 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
         for name in &compiled {
             icat.drop_index(name);
         }
-        persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-        crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
         ctx.state.install_index_catalog(icat);
         ctx.state.install_table_catalog(tcat);
     }

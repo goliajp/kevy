@@ -103,8 +103,9 @@ impl Store {
         let start = Instant::now();
         // Phase 1 (locked): freeze the COW view + start the tee —
         // O(n)-shallow, no serialization under the lock.
-        let (view, tmp, before_bytes) = {
+        let (view, aux, tmp, before_bytes) = {
             let mut g = lock_write(shard);
+            let aux = crate::shard_restore::catalog_aux(&g);
             let Inner { store, aof, .. } = &mut *g;
             let Some(aof) = aof else { return Ok(None) };
             if aof.is_rewriting() {
@@ -112,10 +113,11 @@ impl Store {
             }
             let before = aof.size_bytes();
             let view = store.collect_snapshot();
-            (view, aof.begin_view_rewrite()?, before)
+            (view, aux, aof.begin_view_rewrite()?, before)
         };
         // Phase 2 (unlocked): serialize + fsync the compacted log.
-        let keys = match kevy_persist::dump_aof(&tmp, &view) {
+        let image = kevy_persist::WithAux::new(&view, aux.as_ref());
+        let keys = match kevy_persist::dump_aof(&tmp, &image) {
             Ok(stats) => stats.keys,
             Err(e) => {
                 let mut g = lock_write(shard);
@@ -226,9 +228,14 @@ impl Store {
 /// (unlocked): serialize the view to the snapshot's durable tmp.
 /// Phase 3 (write lock): commit — snapshot rename and tee'd AOF reset
 /// adjacent, so the snapshot/log commit window stays microseconds.
+/// A shard's frozen view, the catalog frame beside it, and the log reset
+/// the save started.
+type Frozen = (kevy_store::SnapshotView, Option<kevy_persist::Argv>, Option<std::path::PathBuf>);
+
 pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path) -> KevyResult<()> {
-    let (view, reset_tmp) = freeze_for_save(shard)?;
-    let tmp = match kevy_persist::write_snapshot_tmp(&view, path) {
+    let (view, aux, reset_tmp) = freeze_for_save(shard)?;
+    let image = kevy_persist::WithAux::new(&view, aux.as_ref());
+    let tmp = match kevy_persist::write_snapshot_tmp(&image, path) {
         Ok(t) => t,
         Err(e) => {
             if reset_tmp.is_some()
@@ -253,25 +260,24 @@ pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path)
     Ok(())
 }
 
-/// Phase-1 helper: collect the view and start the tee under one write
-/// lock. A racing background auto-rewrite owns the tee; it runs its
+/// Phase-1 helper: collect the view and the catalog frame beside it, and
+/// start the tee, under one write lock. A racing background auto-rewrite owns the tee; it runs its
 /// slow half off-lock and finishes in milliseconds, so wait it out
 /// (bounded) rather than saving a snapshot whose log would double-
 /// apply on replay.
-fn freeze_for_save(
-    shard: &RwLock<Inner>,
-) -> KevyResult<(kevy_store::SnapshotView, Option<std::path::PathBuf>)> {
+fn freeze_for_save(shard: &RwLock<Inner>) -> KevyResult<Frozen> {
     for _ in 0..2000 {
         {
             let mut g = lock_write(shard);
+            let aux = crate::shard_restore::catalog_aux(&g);
             let Inner { store, aof, .. } = &mut *g;
             match aof {
                 Some(a) if a.is_rewriting() => {} // racing rewrite — retry
                 Some(a) => {
                     let view = store.collect_snapshot();
-                    return Ok((view, Some(a.begin_view_rewrite()?)));
+                    return Ok((view, aux, Some(a.begin_view_rewrite()?)));
                 }
-                None => return Ok((store.collect_snapshot(), None)),
+                None => return Ok((store.collect_snapshot(), aux, None)),
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

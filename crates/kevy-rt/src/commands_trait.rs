@@ -174,6 +174,17 @@ pub trait Commands: Clone + Send + 'static {
     #[doc = include_str!("commands_docs/on_flush.md")]
     fn on_flush(&self, _store: &mut Store) {}
 
+    #[doc = include_str!("commands_docs/snapshot_aux.md")]
+    fn snapshot_aux(&self) -> Option<Argv> {
+        None
+    }
+
+    #[doc = include_str!("commands_docs/load_snapshot_aux.md")]
+    fn load_snapshot_aux(&self, _frame: Option<&Argv>, _full_sync: bool) {}
+
+    #[doc = include_str!("commands_docs/on_restored.md")]
+    fn on_restored(&self, _record: &mut dyn FnMut(&Argv) -> bool) {}
+
     #[doc = include_str!("commands_docs/on_command.md")]
     fn on_command(&self) {}
 

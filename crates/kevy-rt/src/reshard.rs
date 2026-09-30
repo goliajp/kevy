@@ -94,16 +94,13 @@ fn reshard<C: Commands>(
         }
     })?;
 
-    let mut stores: Vec<Store> = (0..target.n).map(|_| Store::new()).collect();
-    if let Some(budget) = tier_budget {
-        let per = crate::Runtime::<C>::per_shard_tier_budget(budget, target.n);
-        for (i, s) in stores.iter_mut().enumerate() {
-            s.enable_tiering(&scratch(format!(".reshard-{i}")), per)?;
-        }
-    }
+    let mut stores = target_stores::<C>(target.n, tier_budget, tier_root)?;
     redistribute(&temp, target, &mut stores);
 
-    let stamp = commit_reshard(dir, prev.n, target, &stores, &StdLayout)?;
+    // the merge replayed the catalog frames into the command set; every
+    // new snapshot carries the newest beside its keys
+    let aux = commands.snapshot_aux();
+    let stamp = commit_reshard(dir, prev.n, target, &stores, aux.as_ref(), &StdLayout)?;
     if tier_budget.is_some() {
         drop(temp);
         drop(stores);
@@ -121,6 +118,21 @@ fn reshard<C: Commands>(
         sources.len(),
     );
     Ok(())
+}
+
+fn target_stores<C: Commands>(
+    n: usize,
+    tier_budget: Option<u64>,
+    tier_root: &Path,
+) -> io::Result<Vec<Store>> {
+    let mut stores: Vec<Store> = (0..n).map(|_| Store::new()).collect();
+    if let Some(budget) = tier_budget {
+        let per = crate::Runtime::<C>::per_shard_tier_budget(budget, n);
+        for (i, s) in stores.iter_mut().enumerate() {
+            s.enable_tiering(&tier_root.join(format!(".reshard-{i}")), per)?;
+        }
+    }
+    Ok(stores)
 }
 
 /// Re-home every merged key under the target routing. A cold stub names

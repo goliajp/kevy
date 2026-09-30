@@ -187,6 +187,19 @@ const NG: bool = false; // non-growing
 /// ```
 pub const CONSUMER_SEEN: &str = "XINTERNAL.CONSUMERSEEN";
 
+/// The internal record verb that carries the whole index, view and table
+/// catalog: `XINTERNAL.CATALOG lineage version index view table`. Every
+/// catalog command is recorded as one, and every snapshot and rewritten
+/// log keeps the current one; replay and a replica apply it when it is
+/// newer than what they hold. A client that sends it is refused.
+///
+/// ```
+/// use kevy_resp::ops_table::{CATALOG, spec, surface};
+/// let row = spec(CATALOG).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const CATALOG: &str = "XINTERNAL.CATALOG";
+
 /// The registry. One row per command. Kept grouped by type family and
 /// alphabetical inside each group so a missing row is easy to spot.
 ///
@@ -332,6 +345,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("XTRIM",        WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
     // internal: applied from a record, refused from a client
     op(CONSUMER_SEEN,  WR, NG,   None,            None,    REPLAY),
+    op(CATALOG,        WR, NG,   None,            None,    REPLAY),
     // ---- geo (zset-backed; embedded replay as streams) ----------------
     op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER | REPLAY),
     op("GEODIST",      RD, NG,   None,            None,    SERVER),
@@ -347,14 +361,11 @@ pub const OP_TABLE: &[OpSpec] = &[
     // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
     // embedded parity = changes_since / changes_tail / feed_shards /
     // info_prefix.
-    // Index engine (IDX.* namespace). CREATE/DROP mutate the
-    // catalog (sidecar-persisted, not data writes — no AOF/replay);
-    // reads ride the extension fan-out.
-    // NB: catalog mutations are deliberately NOT data writes — the
-    // `write` column tracks the AOF/propagation path, and the catalog
-    // persists via its own sidecar (indexes are derived state).
-    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER | ESTORE),
-    op("IDX.DROP",     RD, NG,   None,            None,    SERVER | ESTORE),
+    // Index engine (IDX.* namespace). CREATE/DROP/REBUILD change the
+    // catalog and are recorded as the whole catalog (an XINTERNAL.CATALOG
+    // frame); reads ride the extension fan-out.
+    op("IDX.CREATE",   WR, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.DROP",     WR, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.ADVISE",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.DESCRIBE", RD, NG,   None,            None,    SERVER | ESTORE),
@@ -363,29 +374,27 @@ pub const OP_TABLE: &[OpSpec] = &[
     // IDX.VERIFY: server-only (embedded exposes idx_stats instead).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
     op("IDX.EXPLAIN",  RD, NG,   None,            None,    SERVER),
-    // Views (VIEW.* namespace; catalog ops are sidecar-persisted,
-    // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
-    // EXPLAIN are server-only (embedded rebuilds inline and exposes
-    // view_count instead).
-    op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
+    // Views (VIEW.* namespace; catalog ops are recorded like IDX.*).
+    // VERIFY/REBUILD/EXPLAIN are server-only (embedded rebuilds inline
+    // and exposes view_count instead).
+    op("IDX.REBUILD",  WR, NG,   None,            None,    SERVER),
     op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
     // Tables (the TABLE.* namespace). DECLARE compiles
-    // to IDX specs at declare time; catalog ops are sidecar-persisted,
-    // not data writes — same reasoning as IDX.*.
-    op("TABLE.DECLARE", RD, NG,  None,            None,    SERVER | ESTORE),
-    op("TABLE.ENSURE", RD, NG,   None,            None,    SERVER | ESTORE),
-    op("TABLE.REPLACE", RD, NG,  None,            None,    SERVER | ESTORE),
-    op("TABLE.DROP",   RD, NG,   None,            None,    SERVER | ESTORE),
+    // to IDX specs at declare time; catalog ops are recorded like IDX.*.
+    op("TABLE.DECLARE", WR, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.ENSURE", WR, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.REPLACE", WR, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.DROP",   WR, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.LIST",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.VERIFY", RD, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.DESCRIBE", RD, NG, None,            None,    SERVER | ESTORE),
-    op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
-    op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.CREATE",  WR, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.DROP",    WR, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.QUERY",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.DESCRIBE", RD, NG,  None,            None,    SERVER | ESTORE),
     op("VIEW.VERIFY",  RD, NG,   None,            None,    SERVER),
-    op("VIEW.REBUILD", RD, NG,   None,            None,    SERVER),
+    op("VIEW.REBUILD", WR, NG,   None,            None,    SERVER),
     op("VIEW.EXPLAIN", RD, NG,   None,            None,    SERVER),
     op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),

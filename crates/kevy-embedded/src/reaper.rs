@@ -273,7 +273,8 @@ pub(crate) fn concurrent_auto_rewrite(
         return;
     };
     // Phase 2 — serialize the frozen view + fsync, lock released.
-    let keys = match kevy_persist::dump_aof(&tmp, &view) {
+    let image = kevy_persist::WithAux::new(&view.0, view.1.as_ref());
+    let keys = match kevy_persist::dump_aof(&tmp, &image) {
         Ok(stats) => stats.keys,
         Err(e) => {
             eprintln!("kevy: embedded auto AOF rewrite (dump) failed: {e}");
@@ -307,27 +308,31 @@ pub(crate) fn concurrent_auto_rewrite(
     }
 }
 
+/// The frozen view and the catalog frame a rewrite writes beside it.
+#[cfg(feature = "persist")]
+type RewriteView = (kevy_store::SnapshotView, Option<kevy_persist::Argv>);
+
 /// Phase 1 — decide + freeze the COW view + start the tee, under the lock.
 /// O(n)-shallow (refcount bumps + key copies). `start` reads the clock only
 /// past the no-op early-out — never on the common idle tick (and
 /// `wasm32-unknown-unknown` has no `Instant`, so reading it up front traps).
 /// `None` = below threshold or begin failed (already logged).
 #[cfg(feature = "persist")]
-#[allow(clippy::type_complexity)] // inline tuple keeps the phase-1 outputs colocated
 fn begin_rewrite(
     inner: &Arc<RwLock<Inner>>,
     policy: kevy_persist::RewritePolicy,
-) -> Option<(Instant, kevy_store::SnapshotView, std::path::PathBuf, u64)> {
+) -> Option<(Instant, RewriteView, std::path::PathBuf, u64)> {
     let mut g = lock_inner(inner);
     let ready = g.aof.as_ref().is_some_and(|a| a.rewrite_due(policy));
     if !ready {
         return None;
     }
     let start = Instant::now();
+    let aux = crate::shard_restore::catalog_aux(&g);
     let Inner { store, aof, .. } = &mut *g;
     let aof = aof.as_mut().expect("checked above");
     let before = aof.size_bytes();
-    let view = store.collect_snapshot();
+    let view = (store.collect_snapshot(), aux);
     match aof.begin_view_rewrite() {
         Ok(tmp) => Some((start, view, tmp, before)),
         Err(e) => {

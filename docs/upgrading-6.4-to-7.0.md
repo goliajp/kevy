@@ -28,12 +28,13 @@ they are in [§9](#9-defects-fixed-that-lost-data).
 | If you… | What changes | § |
 |---|---|---|
 | run the server, or talk to kevy over the wire | swap the binary; nothing else | — |
-| may downgrade to 6.4 | open and close cleanly with 7.0 first; re-declare global indexes | 1 |
+| may downgrade to 6.4 | open and close cleanly with 7.0 first; declare indexes, views and tables again on 6.4 | 1 |
+| declare indexes, views or tables on a replica | declare them on the primary; the replica gets them and refuses its own | [replication](replication.md#trade-offs-and-limits) |
 | set `MAXMEM` on an index, or size a tiered store near its index floor | index sizes read a quarter to a third of the old figure; long string values can read more | 2 |
 | parse `IDX.LIST` or `IDX.DESCRIBE` positionally | each gains a `partitioning` pair | 3 |
 | read an embedded store's change feed or AOF | an `MSET` arrives as one frame per shard | 4 |
 | start two servers on one port by accident | the second one now refuses to start | 5 |
-| implement `kevy_rt::Commands` | three new methods, all with defaults | 6 |
+| implement `kevy_rt::Commands` | six new methods, all with defaults | 6 |
 | build `kevy_config` structs with struct literals | new fields to name, or `..Default::default()` | 7 |
 | script `kevy-cli doctor`, `export`, `sql compile` … as bare words | put the tool after `--kevy` | 8 |
 | use a kevy crate as a Rust library | most signatures changed; the compiler names each one | 10 |
@@ -85,10 +86,25 @@ two off; `AppendFsync::Always` uses neither.
 Two more things in the log are new, for a server and an embedded store
 alike. A stream group's consumer contacts are recorded as internal
 `XINTERNAL.CONSUMERSEEN` frames, which 6.4 skips — it then loses consumers
-made only by `XGROUP CREATECONSUMER`. And a catalog with a global index is
-written in a sidecar format 6.4 cannot read, so a 6.4 server given it
-starts with no indexes, a table's compiled paths included, until they are
-declared again.
+made only by `XGROUP CREATECONSUMER`. And the index, view and table
+catalog is no longer kept in `index-catalog.meta`, `view-catalog.meta` and
+`table-catalog.meta`: 7.0 records each change in the log as one internal
+`XINTERNAL.CATALOG` frame carrying the whole catalog, keeps the current
+one in every snapshot, and on its first start on a 6.4 directory moves the
+catalog out of the three files and removes them. Measured against the
+6.4.0 release binary:
+
+- 6.4.0 opens a directory 7.0 wrote, from the log or from a snapshot, with
+  every key and no indexes, views or tables; it skips the frames without
+  a word.
+- A 6.4.0 replica of a 7.0 primary follows every key and none of the
+  catalog.
+- Whatever 6.4 then writes, 7.0 reads. A log 6.4 rewrites (`BGREWRITEAOF`)
+  drops the frames, and 7.0 then opens with the catalog of the newest
+  snapshot, or none.
+
+So before going back, keep a copy of the three files from before the
+upgrade, or declare the catalog again on 6.4.
 
 ## 2. Index sizes are reported as they are
 
@@ -144,7 +160,11 @@ whichever one a client read back. A port in use now stops startup with
 `extension_targets`, all with defaults that keep 6.4's behaviour. They
 carry messages between shards (a write replies only once they are
 applied) and let an extension read name the shards it needs. The global
-index is built on them.
+index is built on them. It also gains `snapshot_aux`, `load_snapshot_aux`
+and `on_restored`, with defaults that keep nothing beside the keyspace:
+they let a command set keep state of its own in every snapshot and
+rewritten log, and settle it once every shard has restored, which is how
+the index, view and table catalog is kept ([§1](#1-going-back-to-64-what-the-directory-may-hold)).
 
 ## 7. `kevy-config`: new fields on the section structs
 

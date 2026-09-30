@@ -39,6 +39,7 @@ struct Shared {
     /// channel-only PUBLISH path skips the walk when so).
     pubsub: PubSubReg,
     pubsub_patterns: PubSubPatternReg,
+    restore_gate: Arc<crate::restore_gate::RestoreGate>,
 }
 
 impl Shared {
@@ -87,6 +88,7 @@ impl Shared {
             inbound_dirty,
             pubsub: Arc::new(RwLock::new(HashMap::new())),
             pubsub_patterns: Arc::new(RwLock::new(Vec::new())),
+            restore_gate: Arc::new(crate::restore_gate::RestoreGate::new(n)),
         })
     }
 }
@@ -119,12 +121,12 @@ impl<C: Commands> Runtime<C> {
         // Build every shard up front so a bind/open failure aborts before
         // we spawn.
         let shards = self.build_shards(n, &mut shared, &bio_send, unix_listener)?;
-        let (use_uring, uring_forced) = reactor_choice(self.recv_buffers);
+        let (use_uring, uring_forced) = crate::runtime_thread::reactor_choice(self.recv_buffers);
         let mut handles = Vec::with_capacity(n);
         for shard in shards {
             let stop = stop.clone();
             handles.push(std::thread::spawn(move || {
-                run_shard_thread(shard, stop, use_uring, uring_forced);
+                crate::runtime_thread::run_shard_thread(shard, stop, use_uring, uring_forced);
             }));
         }
         for h in handles {
@@ -340,6 +342,7 @@ impl<C: Commands> Runtime<C> {
                 request_batch_nonempty: 0,
                 publish_batch_nonempty: 0,
                 parked: shared.parked.clone(),
+                restore_gate: Arc::clone(&shared.restore_gate),
                 inbound_dirty: shared.inbound_dirty.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
@@ -418,83 +421,5 @@ impl<C: Commands> Runtime<C> {
             });
         }
         Ok(shards)
-    }
-}
-
-/// Reactor selection on Linux:
-///   KEVY_IO_URING unset → auto: try io_uring, fall back to epoll if the
-///     host can't build the ring (probe below) — startup never fails.
-///   KEVY_IO_URING=0/off/no/false → force the epoll readiness reactor.
-///   KEVY_IO_URING=<anything else> → force io_uring (no fallback; a
-///     setup failure then surfaces loudly — for benchmarks / tests).
-/// The probe creates+drops a real ring with the run_uring parameters, so
-/// it catches a seccomp-blocked io_uring_setup (Docker's default profile)
-/// and pre-5.19 kernels before any shard loads data. (macOS = kqueue.)
-#[cfg(target_os = "linux")]
-fn reactor_choice(recv_buffers: u16) -> (bool, bool) {
-    match std::env::var("KEVY_IO_URING").ok().as_deref() {
-        Some("0") | Some("off") | Some("no") | Some("false") => (false, true),
-        Some(_) => (true, true),
-        None => {
-            let avail = crate::uring_reactor::io_uring_available(recv_buffers);
-            eprintln!(
-                "kevy: reactor = {} (io_uring {})",
-                if avail { "io_uring" } else { "epoll" },
-                if avail {
-                    "available"
-                } else {
-                    "unavailable — kernel <5.19 or seccomp; using epoll"
-                },
-            );
-            (avail, false)
-        }
-    }
-}
-
-/// Non-Linux: always the readiness reactor (kqueue on macOS).
-#[cfg(not(target_os = "linux"))]
-fn reactor_choice(_recv_buffers: u16) -> (bool, bool) {
-    (false, false)
-}
-
-/// One shard thread's body: pick the reactor and run it to completion.
-///
-/// Per-shard ring setup is attempted BEFORE committing to the
-/// io_uring path. The global probe proves one ring builds; N shards
-/// need N rings, and a late failure (ENOMEM under pressure) used to
-/// kill the shard thread and leave a half-dead server (found via
-/// GH-runner CI: blocking_cross_shard hangs). Auto mode now degrades
-/// that shard to epoll, loudly. A forced KEVY_IO_URING=1 keeps the
-/// old fail-loud contract.
-fn run_shard_thread<C: Commands>(
-    shard: Shard<C>,
-    stop: Arc<AtomicBool>,
-    use_uring: bool,
-    uring_forced: bool,
-) {
-    let id = shard.id;
-    #[cfg(target_os = "linux")]
-    let res = if use_uring {
-        match crate::uring_reactor::build_uring(shard.recv_buffers) {
-            Ok(pair) => shard.run_uring(pair, stop),
-            Err(e) if !uring_forced => {
-                eprintln!(
-                    "kevy: shard {id}: io_uring setup failed ({e}); \
-                     falling back to the epoll reactor for this shard"
-                );
-                shard.run(stop)
-            }
-            Err(e) => Err(e),
-        }
-    } else {
-        shard.run(stop)
-    };
-    #[cfg(not(target_os = "linux"))]
-    let res = {
-        let _ = (use_uring, uring_forced, shard.recv_buffers);
-        shard.run(stop)
-    };
-    if let Err(e) = res {
-        eprintln!("kevy: shard {id} exited with error: {e}");
     }
 }

@@ -59,6 +59,8 @@ pub(crate) struct CatalogState {
     /// and created again. Every message between shards carries it, so one
     /// sent for an earlier incarnation is never applied to a later one.
     incarnations: Mutex<(u64, HashMap<Vec<u8>, u64>)>,
+    /// Where the catalog stands as recorded state.
+    pub(crate) record: crate::catalog_record::RecordState,
 }
 
 /// One declared path's `(name, hits, last_hit_s, declared_s, min_margin)`;
@@ -78,6 +80,7 @@ impl CatalogState {
             advise: Mutex::new(AdviseLog::new()),
             usage: RwLock::new(HashMap::new()),
             incarnations: Mutex::new((0, HashMap::new())),
+            record: crate::catalog_record::RecordState::default(),
         }
     }
 

@@ -1,8 +1,8 @@
 //! IDX.* command surface.
 //!
 //! Catalog mutations (`IDX.CREATE` / `IDX.DROP`) are Local dispatch
-//! handlers (the catalog is process-global; any shard serves them and
-//! persists the sidecar). Reads (`IDX.QUERY` / `IDX.COUNT` /
+//! handlers (the catalog is process-global; any shard serves them, and
+//! [`crate::catalog_record`] records the change). Reads (`IDX.QUERY` / `IDX.COUNT` /
 //! `IDX.VERIFY` / `IDX.LIST`) ride the generic extension fan-out:
 //! [`extension_op`] computes one shard's chunk (a small private binary
 //! encoding), [`extension_reduce`] merges the chunks into RESP at the
@@ -13,48 +13,9 @@
 //! resumes exclusively past it. `"0"` = start / exhausted (SCAN
 //! convention).
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
-)]
-
-use std::path::Path;
-
-use crate::state::{Ctx, RuntimeState};
-use kevy_index::{Catalog, IndexKind, IndexSpec, ValType};
+use crate::state::Ctx;
+use kevy_index::{IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
-
-const SIDECAR: &str = "index-catalog.meta";
-
-/// Load a persisted catalog at boot; `serve` calls this once before
-/// the reactor starts. A state without a sidecar dir (embedded /
-/// test) boots empty.
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(mut cat) = Catalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        if crate::cmd_index_install::fit_partitions(&mut cat, state.nshards()) {
-            persist_sidecar(Some(dir), &cat);
-        }
-        state.install_index_catalog(cat);
-    }
-}
-
-pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("index-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-    }
-}
 
 // ---------- catalog mutations (Local dispatch) ----------
 
@@ -488,7 +449,6 @@ pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &
     let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_index(&args[1]);
     if hit {
-        persist_sidecar(ctx.state.sidecar_dir(), &cat);
         ctx.state.install_index_catalog(cat);
     }
     encode_integer(out, i64::from(hit));

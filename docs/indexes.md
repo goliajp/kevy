@@ -35,8 +35,8 @@ range|unique [MAXMEM <bytes>]`
   and aggregates**. A 58-table schema converted this way needed roughly
   19. Read naively, "58 tables vs 64 indexes" looks nearly blocked; it
   is not, but only if the modelling rule is applied.
-- Up to 64 indexes. The catalog persists in a data-dir sidecar;
-  the index CONTENT is derived state — it is never snapshotted or
+- Up to 64 indexes. The catalog is recorded in the log and every
+  snapshot, and replicates; the index CONTENT is derived state — it is never snapshotted or
   AOF-logged, and rebuilds in the background after a restart
   (`-INDEXBUILDING` until ready; data availability never waits).
 

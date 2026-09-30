@@ -311,6 +311,44 @@ fn a_sharded_embed_replica_reads_every_replicated_key() {
     server.shutdown();
 }
 
+/// A server primary's catalog commands reach an embedded replica: the
+/// one made before it connected and the one after.
+#[cfg(feature = "index")]
+#[test]
+fn a_server_primarys_catalog_reaches_the_embed_replica() {
+    let server = Server::start();
+    server.cmd(&[b"HSET", b"user:1", b"age", b"30"]);
+    let create = |name: &[u8]| {
+        let fields: [&[u8]; 11] = [
+            b"IDX.CREATE",
+            name,
+            b"ON",
+            b"PREFIX",
+            b"user:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ];
+        server.cmd(&fields);
+    };
+    create(b"before");
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    create(b"after");
+    let names = || {
+        let mut names: Vec<Vec<u8>> = replica.idx_list().into_iter().map(|i| i.0).collect();
+        names.sort();
+        names
+    };
+    let both = || names() == [b"after".to_vec(), b"before".to_vec()];
+    assert!(wait_for(Duration::from_secs(5), both), "the replica holds {:?}", names());
+    drop(replica);
+    server.shutdown();
+}
+
 /// A sharded replica that has to start from a snapshot (the primary's
 /// backlog has rolled past offset 0) puts every key where its reads look.
 #[test]
