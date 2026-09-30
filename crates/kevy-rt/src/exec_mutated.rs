@@ -53,8 +53,12 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Record a value this shard just placed under `key`, as the write
-    /// commands that reconstruct it — the cross-shard `RENAME`'s
-    /// destination half.
+    /// commands that reconstruct it — `COPY`'s destination and the
+    /// cross-shard `RENAME`'s destination half.
+    ///
+    /// The commands add to a key rather than replace it, so a `DEL`
+    /// comes first: without it a replay or a replica merged the value
+    /// into what `key` held, or refused it as the wrong type.
     ///
     /// The frames come from the same serializer `BGREWRITEAOF` uses
     /// (`kevy_persist::value_as_v1_frames`), so every `Value` variant,
@@ -71,9 +75,12 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_none() && self.replicate.is_none() {
             return;
         }
+        let mut argv = kevy_resp::Argv::default();
+        argv.push(b"DEL");
+        argv.push(key);
+        self.log_effect(&argv);
         let buf = kevy_persist::value_as_v1_frames(key, value, ttl_ms);
         let mut pos = 0usize;
-        let mut argv = kevy_resp::Argv::default();
         while pos < buf.len() {
             argv.clear();
             match kevy_resp::parse_command_into(&buf[pos..], &mut argv) {
