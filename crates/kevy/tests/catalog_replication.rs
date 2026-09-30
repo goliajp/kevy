@@ -359,3 +359,51 @@ fn a_6_4_directory_brings_its_catalog_into_the_log() {
     assert_eq!(steady(&node), want);
     node.stop();
 }
+
+/// Copy into `dir` the part of the 6.4.0 fixture `part` keeps: the
+/// keyspace (logs and layout) or the catalog files.
+fn lay_out_6_4(dir: &Path, part: impl Fn(&str) -> bool) {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/data-dir-6.4.0");
+    for entry in std::fs::read_dir(&fixture).unwrap() {
+        let from = entry.unwrap().path();
+        let name = from.file_name().unwrap().to_str().unwrap().trim_end_matches(".in").to_string();
+        if part(&name) {
+            std::fs::copy(&from, dir.join(name)).unwrap();
+        }
+    }
+}
+
+fn is_sidecar(name: &str) -> bool {
+    name.ends_with("-catalog.meta")
+}
+
+/// A replica stays connected while its primary restarts on a release that
+/// reads the 6.4 catalog files: the catalog the primary imports on that
+/// start reaches the replica on the stream, as any catalog change does.
+/// Before the fix the import went to the primary's log only, and the
+/// replica, resuming where it stopped, held no catalog until the primary's
+/// next catalog command.
+#[test]
+fn a_connected_replica_gets_the_catalog_its_primary_imports_from_6_4_files() {
+    let pdir = TmpDir::new("catalog-import-primary");
+    let rdir = TmpDir::new("catalog-import-replica");
+    // a 6.4 primary: its catalog lives in files it does not replicate
+    lay_out_6_4(pdir.path(), |n| !is_sidecar(n));
+    let primary = Node::primary(2, &pdir);
+    let replica = Node::replica(&primary, 2, &rdir);
+    let mut r = replica.wire();
+    common::until("the replica to catch up", || call(&mut r, "EXISTS user:1") == b":1\r\n");
+    assert_eq!(names(&call(&mut r, "IDX.LIST")), Vec::<String>::new());
+    let port = primary.port;
+    primary.stop();
+    lay_out_6_4(pdir.path(), is_sidecar);
+    let primary = Node::primary_restarted(port, 2, &pdir);
+    let want = steady(&primary);
+    assert_eq!(want[0], r#"IDX.LIST: ["user_age", "user_plan", "users.email"]"#);
+    // the replica is following the restarted primary
+    assert_eq!(call(&mut primary.wire(), "SET after 1"), b"+OK\r\n");
+    common::until("the replica to reconnect", || call(&mut r, "GET after") == b"$1\r\n1\r\n");
+    assert_eq!(settled(&replica, &want), want);
+    replica.stop();
+    primary.stop();
+}

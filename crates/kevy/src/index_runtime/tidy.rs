@@ -11,7 +11,11 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
+use kevy_index::IndexKind;
+use kevy_resp::CmdError;
+
 use super::{BuildState, ShardIndexes};
+use crate::state::Ctx;
 
 /// Time one shard tick spends packing index leaves at most.
 const TICK_BUDGET: Duration = Duration::from_micros(500);
@@ -84,3 +88,35 @@ mod trace;
 pub(super) use trace::run;
 #[cfg(feature = "harness-repack-trace")]
 use trace::step;
+
+/// `IDX.REBUILD` on this shard's part of a local index: a range or unique
+/// index packs its leaves at once, an ANN index compacts its tombstones.
+/// `Ok(Some(kind))` names a kind the command does not apply to.
+pub(crate) fn rebuild(ctx: &Ctx<'_>, name: &[u8]) -> Result<Option<IndexKind>, CmdError> {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    super::refresh(ctx, &mut st);
+    let si = st.idx.iter_mut().find(|si| si.spec.name() == name).ok_or("ERR no such index")?;
+    match si.build {
+        BuildState::Ready => {}
+        BuildState::Backfilling(_) => {
+            return Err(CmdError::Wire("INDEXBUILDING index is still building"));
+        }
+        BuildState::FailedOverBudget => {
+            return Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM"));
+        }
+    }
+    let kind = si.spec.kind();
+    match kind {
+        IndexKind::Ann => {
+            if let Some(g) = &mut si.ann {
+                g.rebuild();
+            }
+        }
+        IndexKind::Range | IndexKind::Unique => {
+            si.seg.repack();
+            st.stats_dirty = true;
+        }
+        _ => return Ok(Some(kind)),
+    }
+    Ok(None)
+}

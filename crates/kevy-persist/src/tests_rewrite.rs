@@ -238,11 +238,12 @@ fn rewrite_resets_size_anchor() {
     assert!(aof.size_bytes() > aof.size_at_last_rewrite());
     let store = Store::new();
     let stats = aof.rewrite_from(&store).unwrap();
-    // empty store ⇒ empty rewrite (just the 9-byte AOF_MAGIC header).
+    // empty store ⇒ empty rewrite: the magic and the frame saying the
+    // log stands alone
     assert_eq!(stats.keys, 0);
-    // dump_store_to_aof prefixes the file with AOF_MAGIC (9 bytes).
-    assert_eq!(aof.size_bytes(), 9);
-    assert_eq!(aof.size_at_last_rewrite(), 9);
+    let empty = crate::estimate_rewrite_size(&Store::new());
+    assert_eq!(aof.size_bytes(), empty);
+    assert_eq!(aof.size_at_last_rewrite(), empty);
     assert_eq!(aof.rewrites_total(), 1);
     let _ = std::fs::remove_file(&path);
 }

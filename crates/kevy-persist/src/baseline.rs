@@ -58,6 +58,7 @@ impl Write for CountWriter {
 pub fn estimate_rewrite_size<S: SnapshotSource>(src: &S) -> u64 {
     let mut w = CountWriter(crate::record::AOF2_MAGIC.len() as u64);
     let mut scratch = Vec::new();
+    let _ = crate::log_base::write_image_base(&mut w, &mut scratch);
     src.for_each_entry(|key, value, ttl_ms| {
         if matches!(value, kevy_store::Value::Cold(_)) {
             return;

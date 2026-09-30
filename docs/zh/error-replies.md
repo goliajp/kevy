@@ -104,6 +104,7 @@ kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀�
 |---|---|---|
 | `ERR <VERB> '<name>': bad arguments — run COMMAND DOCS <VERB> for the syntax` | IDX./VIEW. verb 参数解析失败 | `COMMAND DOCS <verb>` 返回完整语法串 |
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | 查询点名了不存在的索引 | `IDX.LIST` / `VIEW.LIST` 枚举目录 |
+| `ERR IDX.REBUILD '<name>': IDX.REBUILD applies to range, unique, ann and global indexes; this is a <kind> index` | `IDX.REBUILD` 点名了 text 或 agg 索引，这两种没有可压实的东西 | 不需要处理；要从行重建就 `IDX.DROP` 再 `IDX.CREATE` |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | 查询撞上了建索引后的回填窗口 | 轮询 `IDX.LIST` 的 `state`；见 [docs/migration.md](migration.md) |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | 构建触到内存预算 | 调高 `maxmemory` 或 `IDX.DROP` |
 | `FEEDRESYNC <gen> <tail>` | FEED 游标不再可服务（generation 递增或超出 backlog）| 从新快照 + 返回的游标重启消费；见 [docs/cdc.md](cdc.md) |

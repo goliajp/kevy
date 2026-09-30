@@ -247,15 +247,14 @@ pub(crate) fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path)
         }
     };
     let mut g = lock_write(shard);
-    std::fs::rename(&tmp, path)?;
-    if let (Some(reset), Some(aof)) = (reset_tmp, &mut g.aof) {
-        let swap = kevy_persist::write_aof_base(&reset)
-            .and_then(|()| aof.finish_concurrent_rewrite(&reset, 0));
-        if let Err(e) = swap {
-            aof.abort_concurrent_rewrite();
-            let _ = std::fs::remove_file(&reset);
-            return Err(e.into());
+    match (reset_tmp, &mut g.aof) {
+        (Some(reset), Some(aof)) => {
+            if let Err(e) = aof.commit_snapshot(&tmp, path, &reset) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e.into());
+            }
         }
+        _ => std::fs::rename(&tmp, path)?,
     }
     Ok(())
 }

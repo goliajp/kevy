@@ -2511,3 +2511,40 @@ fn a_covering_value_does_not_outlive_the_field_it_copies() {
     let s = String::from_utf8_lossy(&filtered);
     assert!(!s.contains("tt:2"), "FILTER matched a covering value whose field has expired: {s}");
 }
+
+/// `IDX.REBUILD` on a local range index packs its leaves and answers `+OK`
+/// with every answer unchanged; a text index is refused by kind, and an
+/// index that does not exist by name. Before, a ready range index answered
+/// `ERR no such index 'age'` as if it did not exist.
+#[test]
+fn rebuild_packs_a_local_index_and_refuses_a_text_index_by_kind() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..500u32 {
+        // scattered values, so the leaves the writes leave are part-full
+        let age = (i * 7919) % 500;
+        cmd(&mut c, &[b"HSET", format!("user:{i}").as_bytes(), b"age", age.to_string().as_bytes()]);
+        cmd(&mut c, &[b"HSET", format!("doc:{i}").as_bytes(), b"body", b"some words"]);
+    }
+    let range: &[&[u8]] =
+        &[b"IDX.CREATE", b"age", b"ON", b"PREFIX", b"user:", b"FIELD", b"age", b"TYPE", b"i64"];
+    assert_eq!(cmd(&mut c, &[range, &[b"KIND", b"range"]].concat()), b"+OK\r\n");
+    let text: &[&[u8]] =
+        &[b"IDX.CREATE", b"body", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body", b"TYPE", b"str"];
+    assert_eq!(cmd(&mut c, &[text, &[b"KIND", b"text"]].concat()), b"+OK\r\n");
+    let q: &[&[u8]] = &[b"IDX.QUERY", b"age", b"RANGE", b"100", b"120", b"LIMIT", b"50"];
+    let before = query_ready(&mut c, q);
+    query_ready(&mut c, &[b"IDX.QUERY", b"body", b"MATCH", b"words", b"LIMIT", b"1"]);
+
+    assert_eq!(cmd(&mut c, &[b"IDX.REBUILD", b"age"]), b"+OK\r\n");
+    assert_eq!(cmd(&mut c, q), before, "the same answer from the packed index");
+    assert_eq!(
+        String::from_utf8_lossy(&cmd(&mut c, &[b"IDX.REBUILD", b"body"])),
+        "-ERR IDX.REBUILD 'body': IDX.REBUILD applies to range, unique, ann and global \
+         indexes; this is a text index\r\n"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&cmd(&mut c, &[b"IDX.REBUILD", b"nope"])),
+        "-ERR no such index 'nope' (IDX.LIST enumerates them)\r\n"
+    );
+}
