@@ -34,6 +34,7 @@
 # Exit: 0 pass, 1 regression (or a mutant not proven), 2 refused,
 # 3 undecided (the data does not separate the candidate from the band).
 set -u
+. "$(dirname "$0")/bench-lock.sh"   # hold the machine's bench lock for the whole run
 
 BIN=${1:?usage: perfgate2.sh <KEVY_BIN> [--against rolling|anchor | --calibrate | --mutant NAME]}
 MODE=${2:-both}
