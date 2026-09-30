@@ -1233,7 +1233,7 @@ defect.
   frames a native AOF would hold (an `XADD *` with the id it chose, a
   group read with the deliveries it made), so a stream and its consumer
   groups survive a reload from OPFS or IndexedDB (see the fix above for
-  what this did to every other `cmd` write). The module is 619 KB
+  what this did to every other `cmd` write). The module is 639 KB
   gzipped, up from 539 KB. kevy-embedded gains an off-by-default
   `host-log` feature for this (`Store::dispatch_argv_recorded`, the
   frames a command's write records, for a host that keeps the log
