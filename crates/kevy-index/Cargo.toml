@@ -16,6 +16,12 @@ categories = ["data-structures", "database-implementations"]
 [lints]
 workspace = true
 
+[features]
+# `TidyProbe` and `Segment::tidy_probe`, read around each repack step by
+# the tail-latency harness (bench/repack-tail.sh); off in every shipped
+# build.
+tidy-trace = []
+
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "7.0.0" }
 kevy-time = { path = "../kevy-time", version = "7.0.0" }
