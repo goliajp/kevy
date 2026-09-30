@@ -1,6 +1,8 @@
 //! What the tier budget holds `used_memory` to: every byte charged once,
 //! the hot set filling the room the budget leaves it.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use crate::Store;
 
 fn tiered(name: &str, budget: u64) -> (Store, kevy_tmpdir::TmpDir) {

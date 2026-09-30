@@ -139,6 +139,7 @@ mod exec_scan;
 mod exec_slowlog;
 mod exec_txn;
 mod exec_watch;
+mod exec_xread;
 mod exec_zalgebra;
 mod inbox;
 mod lua_wake_bridge;

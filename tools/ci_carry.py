@@ -3,10 +3,9 @@
 
 A release ran the premerge rows twice: once on CI for the commit, and again
 on the box as part of prerelease — the same commands on the same code (the
-manifest's premerge tier is defined as "everything CI runs on a push", and
-check_ci_parity.py holds the two to the same commands and environment). The
-second run cost the better part of an hour a release and could only agree
-with the first.
+manifest's premerge tier is defined as what CI checks on a push). The second
+run cost the better part of an hour a release and could only agree with the
+first.
 
 So a tier above premerge carries those rows from CI instead of re-running
 them, and only when that is the same question already answered:

@@ -6,6 +6,8 @@
 //! The arithmetic of "unique to this source" is pinned without a server
 //! in `kevy_cli::backfill_keys`'s own tests; this is about the reading.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;

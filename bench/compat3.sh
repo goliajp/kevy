@@ -350,6 +350,59 @@ check XINFO STREAM missingstream
 check XINFO STREAM xe BOGUS
 check XINFO BOGUS
 check XINFO HELP
+# A read of a consumer's history hands its entries out again (the delivery
+# count goes up), an entry deleted since comes back with no fields, and an
+# empty history is still listed. XAUTOCLAIM lists a deleted entry whatever
+# its idle time.
+for i in 1 2 3 4 5; do check XADD xp "$i-0" f v; done
+check XGROUP CREATE xp g 0
+check XREADGROUP GROUP g c COUNT 3 STREAMS xp ">"
+check XREADGROUP GROUP g c STREAMS xp 0
+check XDEL xp 2-0
+check XREADGROUP GROUP g c STREAMS xp 0
+check XREADGROUP GROUP g c2 STREAMS xp 0
+check XPENDING xp g
+check XPENDING xp g IDLE 100000000 - + 10
+check XAUTOCLAIM xp g c3 100000000 0 COUNT 10 JUSTID
+check XCLAIM xp g c3 0 1-0 JUSTID
+check XCLAIM xp g c3 0 5-0 JUSTID FORCE LASTID 5-0
+check XINFO GROUPS xp
+check XCLAIM xp g c3 x 1-0
+check XCLAIM xp g c3 0 1-0 BOGUS
+check XCLAIM missingstream g c3 0 1-0
+check XREADGROUP GROUP g newc STREAMS xp missingstream xs xo ">" ">" ">" ">"
+check XINFO GROUPS xp
+check XGROUP DESTROY missingstream g
+check XGROUP CREATECONSUMER missingstream g c
+check XGROUP DELCONSUMER missingstream g c
+check XGROUP HELP
+# XADD and XTRIM options; an approximate trim takes only whole nodes
+check XADD xp NOMKSTREAM 6-0 f v
+check XADD missingstream NOMKSTREAM 1-0 f v
+check XADD xp MAXLEN = 5 7-0 f v
+check XADD xp MINID "~" 3-0 LIMIT 10 8-0 f v
+check XADD xp MAXLEN 1 LIMIT 1 9-0 f v
+check XADD xp 0-0 f v
+check XADD xp MAXLEN 1 MAXLEN
+for h in valkey redis kevy; do
+    seq 1 150 | sed 's/.*/XADD xn &-0 f v/' |
+        docker compose exec -T loadgen valkey-cli -h "$h" -p 6379 >/dev/null 2>&1
+done
+check XTRIM xn MAXLEN "~" 10 LIMIT 20
+check XTRIM xn MAXLEN "~" 60
+check XTRIM xn MAXLEN "~" 50
+check XLEN xn
+check XINFO STREAM xn
+# ranges with exclusive bounds, XREAD's '+', and XSETID's checks
+check XRANGE xp "(3-0" + COUNT 2
+check XREVRANGE xp "(7-0" - COUNT 1
+check XRANGE xp - + COUNT 0
+check XREAD STREAMS xp +
+check XREAD STREAMS xp '$'
+check XSETID xp 9-0 ENTRIESADDED 100 MAXDELETEDID 8-0
+check XSETID xp 1-0
+check XSETID missingstream 1-0
+check XINFO STREAM xp
 
 # --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
 #     too on a line, it's float formatting in the references, not a kevy gap) ---

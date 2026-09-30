@@ -360,6 +360,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
 #[cfg(test)]
 #[path = "dispatch_tests.rs"]
 mod tests;
-#[cfg(all(test, feature = "text", feature = "vector"))]
+#[cfg(test)]
+#[cfg(all(feature = "text", feature = "vector"))]
 #[path = "dispatch_tests_index.rs"]
 mod tests_index;

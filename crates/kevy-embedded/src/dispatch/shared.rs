@@ -40,7 +40,10 @@ pub(super) const SERVER_ONLY: &[&[u8]] = &[
 /// One single-key command; `false` = the verb is not served here.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     // an internal record verb is applied from a record, never from here
-    if up == kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+    if [kevy_resp::ops_table::CONSUMER_SEEN, kevy_resp::ops_table::PENDING]
+        .iter()
+        .any(|v| up == v.as_bytes())
+    {
         kevy_resp::encode_error(out, kevy_verbs::aof::INTERNAL_REFUSAL);
         return true;
     }
@@ -89,6 +92,8 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             e @ (Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
+            | Effect::RecordAdd(..)
             | Effect::RecordSeen),
         ) => record_outcome(&mut g, argv, &e),
         None | Some(Effect::Read | Effect::Unchanged | Effect::Skip) => Ok(()),

@@ -738,7 +738,7 @@ fn a_single_erase_leaves_no_tombstone_when_the_group_has_room() {
 /// dense table erased in the middle of a run leaves real tombstones,
 /// and the probe has to walk past them to the key beyond. Without a
 /// test that reaches it, the path went from three never-executed
-/// regions to fifteen, and deadgate said so.
+/// regions to fifteen.
 #[test]
 fn a_probe_walks_past_tombstones_to_the_key_beyond() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();

@@ -205,7 +205,7 @@ pub struct PendingExtendedRow {
     /// assert_eq!((rows[0].delivery_count, rows[1].delivery_count), (2, 1));
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
-    pub delivery_count: u32,
+    pub delivery_count: u64,
 }
 
 impl StreamData {
@@ -245,7 +245,10 @@ impl StreamData {
     ) -> Option<PendingExtended> {
         let g = self.groups.get(group)?;
         let mut rows = Vec::with_capacity(count.min(g.pel.len()));
-        for (id, p) in g.pel.range(start..=end) {
+        // an interval that ends before it starts holds nothing
+        let span =
+            if start <= end { g.pel.range(start..=end) } else { g.pel.range(..StreamId::MIN) };
+        for (id, p) in span {
             if rows.len() >= count {
                 break;
             }

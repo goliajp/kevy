@@ -7,6 +7,8 @@
 //! real binary — not taken from kevy-cli's own output. Error texts that come
 //! from the server are matched by prefix, since kevy's wording is its own.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 

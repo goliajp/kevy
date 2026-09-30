@@ -191,6 +191,16 @@ Types:
   wrote the row.
 - New: `KeyspaceEvent::name()`, `HExpireCond::keyword()`,
   `ZAggregate::keyword()`, `EvictionPolicy::as_str()` / `parse()`.
+- Streams: a delivery count is a `u64` (`PelEntry::delivery_count`, the
+  count in `LoadedPelEntry`, `XClaimOpts::with_retrycount`).
+  `xreadgroup` returns a `GroupBatch`, whose fields are `None` for an
+  entry a history read hands back after it was deleted. New:
+  `XClaimOpts::with_last_id`; `Store::xtrim(key, TrimTo, TrimMode)`
+  with `TrimTo::{MaxLen, MinId}`, `TrimMode::{Exact, Approximate}` and
+  `APPROX_TRIM_LIMIT`;
+  `StreamData::trim`, `node_count`, `radix_tree_nodes`;
+  `xgroup_set_delivery_count` and `xgroup_restore_pending`, which a loader
+  uses; `StoreError::StreamExhausted`.
 - `#[non_exhaustive]`: `KevyError`, `StoreError`, `StreamIdError`,
   `BitOp`, `HExpireCond`, `KeyspaceEvent`, `XAddIdSpec`, `GroupCreateMode`,
   `ReadGroupId`, `EvictionPolicy`, `ZAggregate`, `SetCondition`,
@@ -361,7 +371,9 @@ Types:
   `with_replay_mode(ReplayMode)`.
 - `shard_of_key(key, n, bool)` → `shard_of_key(key, n, Routing)`.
 - New `Commands` methods, with defaults: `snapshot_aux`,
-  `load_snapshot_aux(frame, full_sync)` and `on_restored(record)`.
+  `load_snapshot_aux(frame, full_sync)`, `on_restored(record)` and
+  `xreadgroup_refusal(store, argv)`, which checks each part of an
+  `XREADGROUP` split across shards before any part reads.
 - `#[non_exhaustive]`: `Route`, `BlockHint`, `BlockKind`,
   `ClientKillFilter`, `GeoHits`, `SlowlogSub`, `MultiOp`, `ZCombine`,
   `Propagate`, `ReplicaApply`, `ExtensionReduced`, `TxnKind` (`Copy`,
@@ -387,6 +399,11 @@ Types:
   returns `ScanOptsError`, `geo::store_search` returns
   `StoreSearchError` (both with `as_wire()`); `reply::store_err_msg(e)` →
   `e.as_wire()`. `Verb` and `ScanOpts` are `#[non_exhaustive]`.
+  New: `Effect::RecordAdd` and `Effect::RecordHistory` (an approximate
+  trim and a history read, recorded as what they did),
+  `cmd::stream_resp3` and `cmd::xreadgroup_refusal`, and the internal
+  record verb `kevy_resp::ops_table::PENDING` that `aof::apply_internal`
+  applies.
 
 ## kevy and kevy-cli
 

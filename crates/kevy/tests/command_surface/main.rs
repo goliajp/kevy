@@ -1,5 +1,7 @@
 //! Single commands and configuration, over the wire.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

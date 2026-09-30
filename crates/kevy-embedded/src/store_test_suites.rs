@@ -11,7 +11,8 @@ mod tests;
 mod tests_atomic;
 #[path = "store_tests_atomic_all.rs"]
 mod tests_atomic_all;
-#[cfg(all(test, feature = "index"))]
+#[cfg(test)]
+#[cfg(feature = "index")]
 #[path = "store_tests_atomic_index.rs"]
 mod tests_atomic_index;
 #[path = "store_tests_bitmap.rs"]

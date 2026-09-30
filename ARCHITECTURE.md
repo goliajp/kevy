@@ -141,8 +141,11 @@ the thing they check:
   against the pinned Redis, channel parity that asks each registry rather
   than reading the tree.
 - `suite/manifest.toml` — four tiers: `precommit`, `premerge`, `prerelease`,
-  `full`. `python3 tools/suite.py precommit` is what runs before every push;
-  `premerge` is everything CI checks on a push, run before a merge.
+  `full`, each including the one before. `python3 tools/suite.py precommit`
+  is what runs before every push; `premerge` is what CI checks on a push;
+  `prerelease` adds the questions only a release asks, and takes every row
+  CI already answered green for the same commit instead of running it
+  again; `full` adds the long measurements that need the bench box.
 
 ## Reading order
 

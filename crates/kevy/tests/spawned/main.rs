@@ -2,6 +2,8 @@
 //! tests: a child spawned while another test drops its data-dir lock holds that
 //! lock until it execs, and an in-process restart on the same dir then fails.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod client_setname_persistence;
 mod cluster_crossslot_mget;
 mod cluster_known_nodes_count;

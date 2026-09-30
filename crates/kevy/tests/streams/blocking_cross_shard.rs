@@ -226,7 +226,7 @@ fn xread_block_remote_stream_times_out() {
     c.write_all(&req(&[b"XREAD", b"BLOCK", b"150", b"STREAMS", b"xt", b"$"])).unwrap();
     let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
-    assert_eq!(reply, b"$-1\r\n");
+    assert_eq!(reply, b"*-1\r\n");
     assert!(t0.elapsed() >= std::time::Duration::from_millis(80));
 }
 

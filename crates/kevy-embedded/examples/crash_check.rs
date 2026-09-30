@@ -11,6 +11,8 @@
 //! rolling back (the 3.18 black hole).
 //!
 //!   crash_check <dir> [--shards N] [--feed] [--mark]
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use kevy_embedded::{Config, Store};
 
 fn main() {

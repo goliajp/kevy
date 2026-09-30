@@ -59,7 +59,7 @@ kevy-embedded = "7.0.0"
 | script `kevy-cli doctor`, `export`, `sql compile` … as bare words | put the tool after `--kevy` | 12 |
 | use a kevy crate as a Rust library | most signatures changed; the compiler names each one | 13 |
 | use the Go module, or match a binding's read-only error text | import `/v7`; the text gained its closing period | 14 |
-| use `XAUTOCLAIM`'s cursor, an id like `5-`, or `EXPIRE` on a key about to lapse | they now behave as in Redis | 15 |
+| use the stream commands, an id like `5-`, or `EXPIRE` on a key about to lapse | they now answer as valkey and Redis do; a blocking `XREAD` that times out answers `*-1` | 15 |
 | want an index read to reach fewer shards | declare it global | [indexes](indexes.md#global-indexes-partition-global) |
 
 ---
@@ -158,13 +158,16 @@ with every value as 7.0 served it.
 
 ### The catalog and consumer contacts
 
-Two more things in the log are new, for a server and an embedded store
-alike:
+Three more things in the log are new, for a server and an embedded
+store alike:
 
 - A stream group's consumer contacts are recorded as internal
   `XINTERNAL.CONSUMERSEEN` frames. 6.4 skips them, and so loses a
   consumer made only by `XGROUP CREATECONSUMER` when it rebuilds the
   group from the log; a consumer that is in a snapshot survives.
+- A rewritten log puts back a pending entry whose stream entry is gone
+  (deleted or trimmed while it was pending) as an internal
+  `XINTERNAL.PENDING` frame, where 6.4's rewrite dropped the entry.
 - The index, view and table catalog is no longer kept in
   `index-catalog.meta`, `view-catalog.meta` and `table-catalog.meta`.
   7.0 records each change in the log as one internal `XINTERNAL.CATALOG`
@@ -376,7 +379,11 @@ index is built on them. It also gains `snapshot_aux`, `load_snapshot_aux`
 and `on_restored`, with defaults that keep nothing beside the keyspace:
 they let a command set keep state of its own in every snapshot and
 rewritten log, and settle it once every shard has restored, which is how
-the index, view and table catalog is kept (§1).
+the index, view and table catalog is kept (§1). And it gains
+`xreadgroup_refusal`, whose default refuses nothing: a command set that
+serves `XREADGROUP` answers there what the command would refuse, so that
+a read of streams on several shards is checked on each before any of
+them reads.
 
 ## 12. kevy-cli: tools answer behind `--kevy` only
 
@@ -492,6 +499,18 @@ mistake:
   looks at no more than `COUNT × 10` entries, as in Redis, where 6.4
   scanned the whole list. A loop that calls until the cursor is `0-0`
   works on both, with one call fewer on 7.0.
+- The rest of the stream family answers as valkey 9.1 does; the
+  changelog lists each change. The ones a client is likeliest to meet: a
+  blocking `XREAD` or `XREADGROUP` that times out answers `*-1` under
+  RESP2 (6.4: `$-1`), and under RESP3 both answer a map of stream to
+  entries; `XREADGROUP` with an ID hands the consumer's pending entries
+  out again and raises their delivery counts, and lists a deleted one
+  with no fields; an approximate trim (`MAXLEN ~`, `MINID ~`) removes only
+  whole nodes of 100 entries, so it often removes nothing where 6.4
+  trimmed exactly; `XCLAIM` on a missing key or group answers `NOGROUP`
+  where 6.4 answered `ERR no such key`, and takes `LASTID`; `XGROUP
+  DESTROY`, `CREATECONSUMER` and `DELCONSUMER` on a missing key are
+  refused where 6.4 answered 0.
 - `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` with a non-positive
   TTL on a key whose deadline passes during the command answer 0 and
   record nothing; 6.4 answered 1 and recorded a removal.

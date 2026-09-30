@@ -1,234 +1,34 @@
-//! Consumer-group dispatch: `XREADGROUP` / `XACK` / `XPENDING` (`XGROUP`
-//! is in `xgroup.rs`, the claims in `claim.rs`). Argv-soup
-//! parsers translate the legacy Redis shapes into the structured
-//! API on `Store` (see `kevy_store::stream::store`); reply emitters
-//! match the exact array shapes Redis returns.
+//! `XACK` and `XPENDING` (`XREADGROUP` is in `readgroup.rs`, `XGROUP` in
+//! `xgroup.rs`, the claims in `claim.rs`).
 
 use kevy_resp::CmdError;
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
 };
-use kevy_store::{
-    AckMode, ReadGroupId, Store, StreamId, now_unix_ms, parse_explicit_id, parse_range_end,
-    parse_range_start,
-};
+use kevy_store::{Store, StreamId, now_unix_ms, parse_explicit_id};
 
-use crate::Effect;
 use crate::reply::{store_err, wrong_args};
 
-use super::claim_record::ReadMarks;
-use super::emit_entries;
-
-// ───────────── XREADGROUP ─────────────
-
-/// `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key [...] id [...]`
-pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-) -> Effect {
-    let mut parsed = match parse_xreadgroup_argv(args) {
-        Ok(p) => p,
-        Err(msg) => {
-            encode_error(out, msg.as_wire());
-            return Effect::Write;
-        }
-    };
-    let mut reply: Vec<super::StreamReply> = Vec::new();
-    // BLOCK only takes effect when at least one stream is reading new
-    // entries (`>`); a replay-from-PEL form (`XREADGROUP … STREAMS s 0`)
-    // returns immediately even with BLOCK set, matching Redis. So we
-    // remember "any `>`-stream" before iterating, then check both flags
-    // before parking.
-    let any_new_stream = parsed.streams.iter().any(|(_, id)| id == b">");
-    let blocking = parsed.block_ms.is_some() && any_new_stream;
-    let streams = std::mem::take(&mut parsed.streams);
-    let mut marks = ReadMarks::default();
-    for (key, last_seen_arg) in streams {
-        let mark = ReadMarks::read(store, &key, &parsed.group, &parsed.consumer);
-        let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
-            return Effect::Write;
-        };
-        // a read of history re-sends pending entries; it delivers nothing new
-        marks.push(mark, !entries.is_empty() && last_seen_arg == b">");
-        if !entries.is_empty() {
-            reply.push((key, entries));
-        }
-    }
-    emit_group_reply(out, &reply, blocking);
-    marks.effect()
-}
-
-/// The XREADGROUP reply. BLOCK with nothing fresh leaves `out` untouched,
-/// so the dispatcher registers the conn as a waiter on the first stream
-/// key; the next XADD on that key wakes it and re-runs the read.
-fn emit_group_reply(out: &mut Vec<u8>, reply: &[super::StreamReply], blocking: bool) {
-    if reply.is_empty() && blocking {
-        return;
-    }
-    if reply.is_empty() {
-        encode_array_len(out, -1);
-        return;
-    }
-    encode_array_len(out, reply.len() as i64);
-    for (key, entries) in reply {
-        encode_array_len(out, 2);
-        encode_bulk(out, key);
-        emit_entries(out, entries);
-    }
-}
-
-/// One stream leg of XREADGROUP: parse the last-seen argument, read
-/// via `Store::xreadgroup`, and emit the invalid-ID / NOGROUP / store
-/// error replies. `Err(())` = an error was already written to `out`.
-fn xreadgroup_one_stream(
-    store: &mut Store,
-    parsed: &XReadGroupParsed,
-    key: &[u8],
-    last_seen_arg: &[u8],
-    out: &mut Vec<u8>,
-) -> Result<kevy_store::EntryBatch, ()> {
-    let last_seen = if last_seen_arg == b">" {
-        ReadGroupId::New
-    } else {
-        match parse_explicit_id(last_seen_arg) {
-            Ok(id) => ReadGroupId::ReplayAfter(id),
-            Err(_) => {
-                encode_error(out, "ERR Invalid stream ID specified as stream command argument");
-                return Err(());
-            }
-        }
-    };
-    match store.xreadgroup(
-        key,
-        &parsed.group,
-        &parsed.consumer,
-        last_seen,
-        parsed.count,
-        parsed.ack,
-        now_unix_ms(),
-    ) {
-        Ok(es) => Ok(es),
-        Err(kevy_store::StoreError::NoSuchKey) => {
-            encode_error(
-                out,
-                &format!(
-                    "NOGROUP No such key '{}' or consumer group '{}' in XREADGROUP with GROUP option",
-                    String::from_utf8_lossy(key),
-                    String::from_utf8_lossy(&parsed.group),
-                ),
-            );
-            Err(())
-        }
-        Err(e) => {
-            store_err(out, e);
-            Err(())
-        }
-    }
-}
-
-struct XReadGroupParsed {
-    group: Vec<u8>,
-    consumer: Vec<u8>,
-    count: Option<usize>,
-    /// `Some(ms)` if `BLOCK ms` was present; v2-7d.4 uses this together
-    /// with the "at least one stream reads `>`" check to decide whether
-    /// to park the conn when every requested stream is empty.
-    block_ms: Option<u64>,
-    ack: AckMode,
-    streams: Vec<(Vec<u8>, Vec<u8>)>,
-}
-
-fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadGroupParsed, CmdError> {
-    if args.len() < 7 {
-        return Err(CmdError::Wire("ERR wrong number of arguments for 'xreadgroup' command"));
-    }
-    if !args[1].eq_ignore_ascii_case(b"GROUP") {
-        return Err(CmdError::Wire("ERR syntax error"));
-    }
-    let group = args[2].to_vec();
-    let consumer = args[3].to_vec();
-    let mut i = 4;
-    let mut count = None;
-    let mut block_ms: Option<u64> = None;
-    let mut ack = AckMode::Pending;
-    while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        match tok.as_slice() {
-            b"COUNT" => {
-                count =
-                    Some(parse_kv_u64(args, i + 1, "ERR value is not an integer or out of range")?
-                        as usize);
-                i += 2;
-            }
-            b"BLOCK" => {
-                block_ms = Some(parse_kv_u64(
-                    args,
-                    i + 1,
-                    "ERR timeout is not an integer or out of range",
-                )?);
-                i += 2;
-            }
-            b"NOACK" => {
-                ack = AckMode::NoAck;
-                i += 1;
-            }
-            b"STREAMS" => {
-                let streams = parse_xreadgroup_streams(args, i + 1)?;
-                return Ok(XReadGroupParsed { group, consumer, count, block_ms, ack, streams });
-            }
-            _ => return Err(CmdError::Wire("ERR syntax error")),
-        }
-    }
-    Err(CmdError::Wire("ERR syntax error"))
-}
-
-fn parse_kv_u64<A: ArgvView + ?Sized>(
-    args: &A,
-    idx: usize,
-    bad: &'static str,
-) -> Result<u64, CmdError> {
-    let n = args.get(idx).ok_or("ERR syntax error")?;
-    std::str::from_utf8(n).ok().and_then(|s| s.parse().ok()).ok_or(CmdError::Wire(bad))
-}
-
-/// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
-type StreamKeyLastSeen = (Vec<u8>, Vec<u8>);
-
-fn parse_xreadgroup_streams<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-) -> Result<Vec<StreamKeyLastSeen>, CmdError> {
-    let rest = args.len() - start;
-    if rest == 0 || !rest.is_multiple_of(2) {
-        return Err(CmdError::Wire(
-            "ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified.",
-        ));
-    }
-    let n = rest / 2;
-    let mut streams = Vec::with_capacity(n);
-    for k in 0..n {
-        streams.push((args[start + k].to_vec(), args[start + n + k].to_vec()));
-    }
-    Ok(streams)
-}
+use super::opts::{BAD_ID, interval_end, interval_start, strict_i64};
 
 // ───────────── XACK ─────────────
 
+/// `XACK key group id [id ...]`: a missing key or group acknowledges
+/// nothing, before any ID is read.
 pub(super) fn cmd_xack<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 {
         return wrong_args(out, "xack");
+    }
+    match store.stream_view(&args[1]) {
+        Ok(Some(s)) if s.group(&args[2]).is_some() => {}
+        Ok(_) => return encode_integer(out, 0),
+        Err(e) => return store_err(out, e),
     }
     let mut ids = Vec::with_capacity(args.len() - 3);
     for i in 3..args.len() {
         match parse_explicit_id(&args[i]) {
             Ok(id) => ids.push(id),
-            Err(_) => {
-                return encode_error(
-                    out,
-                    "ERR Invalid stream ID specified as stream command argument",
-                );
-            }
+            Err(_) => return encode_error(out, BAD_ID),
         }
     }
     match store.xack(&args[1], &args[2], &ids) {
@@ -239,82 +39,77 @@ pub(super) fn cmd_xack<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
 
 // ───────────── XPENDING ─────────────
 
+/// The `NOGROUP` a missing key or group gets from `XPENDING` and the
+/// claims.
+pub(super) fn no_key_or_group(out: &mut Vec<u8>, key: &[u8], group: &[u8]) {
+    encode_error(
+        out,
+        &format!(
+            "NOGROUP No such key '{}' or consumer group '{}'",
+            String::from_utf8_lossy(key),
+            String::from_utf8_lossy(group),
+        ),
+    );
+}
+
+/// `XPENDING key group [[IDLE min-idle] start end count [consumer]]`:
+/// every argument is read before the key is looked at.
 pub(super) fn cmd_xpending<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    // Below three arguments there is neither a summary call nor an extended
-    // one, and the extended parse starts by reading args[3] unchecked — so
-    // `XPENDING k` panicked the shard thread. Every sibling here (XGROUP,
-    // XACK, XCLAIM) already refuses short calls in Redis's words; this one
-    // did not, and nothing drove it until the arity sweep did.
     if args.len() < 3 {
         return wrong_args(out, "xpending");
     }
+    let (key, group) = (&args[1], &args[2]);
     if args.len() == 3 {
-        match store.xpending_summary(&args[1], &args[2]) {
+        match store.xpending_summary(key, group) {
             Ok(Some(s)) => emit_pending_summary(out, &s),
-            Ok(None) => encode_error(out, "NOGROUP No such consumer group"),
+            Ok(None) => no_key_or_group(out, key, group),
             Err(e) => store_err(out, e),
         }
         return;
     }
-    let parsed = match parse_xpending_extended(args) {
+    let p = match parse_xpending_extended(args) {
         Ok(p) => p,
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
-    match store.xpending_extended(
-        &args[1],
-        &args[2],
-        parsed.idle_min_ms,
-        parsed.start,
-        parsed.end,
-        parsed.count,
-        parsed.consumer.as_deref(),
-        now_unix_ms(),
-    ) {
+    let now = now_unix_ms();
+    let got = store.xpending_extended(key, group, p.idle, p.start, p.end, p.count, p.consumer, now);
+    match got {
         Ok(Some(rows)) => emit_pending_extended(out, &rows.rows),
-        Ok(None) => encode_error(out, "NOGROUP No such consumer group"),
+        Ok(None) => no_key_or_group(out, key, group),
         Err(e) => store_err(out, e),
     }
 }
 
-struct XPendingExtendedArgs {
-    idle_min_ms: Option<u64>,
+struct XPendingExtendedArgs<'a> {
+    idle: Option<u64>,
     start: StreamId,
     end: StreamId,
     count: usize,
-    consumer: Option<Vec<u8>>,
+    consumer: Option<&'a [u8]>,
 }
 
 fn parse_xpending_extended<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<XPendingExtendedArgs, CmdError> {
+) -> Result<XPendingExtendedArgs<'_>, CmdError> {
     let mut i = 3;
-    let mut idle_min_ms = None;
+    let mut idle = None;
     if args[i].eq_ignore_ascii_case(b"IDLE") {
         let v = args.get(i + 1).ok_or("ERR syntax error")?;
-        idle_min_ms = Some(
-            std::str::from_utf8(v)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .ok_or("ERR value is not an integer or out of range")?,
-        );
+        let v = strict_i64(v).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
+        // a negative minimum admits every entry
+        idle = Some(u64::try_from(v).unwrap_or(0));
         i += 2;
     }
     if args.len() < i + 3 {
         return Err(CmdError::Wire("ERR syntax error"));
     }
-    let start = parse_range_start(&args[i]).map_err(|_| {
-        CmdError::Wire("ERR Invalid stream ID specified as stream command argument")
-    })?;
-    let end = parse_range_end(&args[i + 1]).map_err(|_| {
-        CmdError::Wire("ERR Invalid stream ID specified as stream command argument")
-    })?;
-    let count: usize = std::str::from_utf8(&args[i + 2])
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or("ERR value is not an integer or out of range")?;
-    i += 3;
-    let consumer = if i < args.len() { Some(args[i].to_vec()) } else { None };
-    Ok(XPendingExtendedArgs { idle_min_ms, start, end, count, consumer })
+    let start = interval_start(&args[i])?;
+    let end = interval_end(&args[i + 1])?;
+    let count = strict_i64(&args[i + 2]).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
+    // a negative count lists nothing; anything after the consumer is ignored
+    let count = usize::try_from(count).unwrap_or(0);
+    let consumer = args.get(i + 3);
+    Ok(XPendingExtendedArgs { idle, start, end, count, consumer })
 }
 
 fn emit_pending_summary(out: &mut Vec<u8>, s: &kevy_store::PendingSummary) {
@@ -346,6 +141,6 @@ fn emit_pending_extended(out: &mut Vec<u8>, rows: &[kevy_store::PendingExtendedR
         encode_bulk(out, &r.id.encode());
         encode_bulk(out, &r.consumer);
         encode_integer(out, r.idle_ms as i64);
-        encode_integer(out, i64::from(r.delivery_count));
+        encode_integer(out, i64::try_from(r.delivery_count).unwrap_or(i64::MAX));
     }
 }

@@ -44,6 +44,7 @@ pub mod reply;
 mod set;
 #[cfg(feature = "streams-geo")]
 mod stream;
+mod stream_resp3;
 mod strings;
 mod verbs;
 mod zset;
@@ -127,6 +128,26 @@ pub enum Effect {
     /// assert_eq!(exec(&mut store, b"XADD", &argv, &mut Vec::new()), Some(Effect::RecordId(2, id)));
     /// ```
     RecordId(usize, StreamId),
+    /// Record an `XADD` that trimmed approximately (`~`) as the exact trim
+    /// it made: `.0` is where its ID sits, `.1` the ID it gave, `.2` the
+    /// length it left the stream at, or `u64::MAX` when it removed
+    /// nothing (recorded without a trim). Where an approximate trim cuts
+    /// depends on the stream's history, which a replay need not share.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XADD").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let mut store = kevy_store::Store::new();
+    /// let add = argv("XADD s MAXLEN ~ 10 5-1 f v");
+    /// let effect = exec(&mut store, b"XADD", &add, &mut Vec::new()).unwrap();
+    /// let frame = &kevy_verbs::aof::deferred_frames(&store, &add, &effect)[0];
+    /// let words: Vec<&[u8]> = (0..frame.len()).map(|i| &frame[i]).collect();
+    /// assert_eq!(words, [&b"XADD"[..], b"s", b"5-1", b"f", b"v"], "it removed nothing");
+    /// ```
+    RecordAdd(usize, StreamId, u64),
     /// Record a claim as its outcome: an `XCLAIM` / `XAUTOCLAIM`, which
     /// picks by idle time and stamps with the clock. Carries no frame: a
     /// caller that records builds them with [`aof::deferred_frames`].
@@ -198,6 +219,27 @@ pub enum Effect {
     /// assert_eq!(marks.len(), 2);
     /// ```
     RecordReads(Vec<(StreamId, aof::Consumer)>),
+    /// [`Effect::RecordReads`] for an `XREADGROUP` that read a consumer's
+    /// history and delivered entries again, which counts each of them as
+    /// delivered once more and stamps it with the clock.
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XREADGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// for c in ["XADD s 1-1 f v", "XGROUP CREATE s g 0", "XREADGROUP GROUP g a STREAMS s >"] {
+    ///     exec(&mut store, c.split(' ').next().unwrap().as_bytes(), &argv(c), &mut Vec::new());
+    /// }
+    /// let again = argv("XREADGROUP GROUP g a STREAMS s 0");
+    /// let effect = exec(&mut store, b"XREADGROUP", &again, &mut Vec::new()).unwrap();
+    /// assert!(matches!(effect, Effect::RecordHistory(_)));
+    /// let frames = kevy_verbs::aof::deferred_frames(&store, &again, &effect);
+    /// assert_eq!(&frames[0][0], b"XCLAIM", "the delivery, with its count now 2");
+    /// ```
+    RecordHistory(Box<aof::History>),
     /// Record an `XGROUP CREATECONSUMER` that created its consumer as
     /// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the time it was
     /// created at, so a replay does not create it at its own. Carries no
