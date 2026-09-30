@@ -17,9 +17,9 @@ categories = ["database-implementations"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "6.4.0" }
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
-kevy-geo = { path = "../kevy-geo", version = "6.4.0", optional = true }
+kevy-store = { path = "../kevy-store", version = "7.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
+kevy-geo = { path = "../kevy-geo", version = "7.0.0", optional = true }
 
 [features]
 default = []

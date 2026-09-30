@@ -1,3 +1,30 @@
+## 7.0.0
+
+Tracks the kevy 7.0.0 engine. No API change in this door; the vendored
+`libkevy_ffi` was rebuilt and self-reports 7.0.0. What changes underneath:
+
+- **A killed app keeps every write that returned.** Appends used to wait in
+  a user-space buffer until the next tick or fsync, so an app killed in
+  between (a crash, the iOS or Android memory killer) lost them. On iOS and
+  macOS the AOF is now written through a memory map; on Android appends go
+  to a small mapped staging file that the next open replays. Power loss is
+  bounded by the fsync policy, as before.
+- **Writes made after a crash inside a transaction survive the next
+  restart.** Since 4.0.0 a crash between a transaction's begin and commit
+  could make the following session's writes disappear at the restart after
+  it.
+- **A hash field's own TTL survives a background AOF rewrite.** Since 3.0.0
+  fields set with `HEXPIRE` and its siblings stopped expiring after the
+  store rewrote its log and reopened.
+- **`COPY` copies a key of any type.** Since 2.0.13 only strings were
+  copied; other types answered `WRONGTYPE`.
+- **Opening is about 2.8× faster and closing returns at once.** Closing used
+  to wait up to 100 ms for the background reaper.
+
+Downgrading: 6.4 does not understand the mapped log's zero tail or the
+staging file. After an app has been killed on 7.0, open and close the store
+cleanly with 7.0 before installing a 6.4 build.
+
 ## 6.4.0
 
 Tracks the kevy 6.4.0 engine. No API change in this door, and no

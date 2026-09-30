@@ -14,7 +14,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
-kevy-crypto = { path = "../kevy-crypto", version = "6.4.0" }
+kevy-crypto = { path = "../kevy-crypto", version = "7.0.0" }
 
 [lints]
 workspace = true

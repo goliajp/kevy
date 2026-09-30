@@ -8,7 +8,7 @@ go 1.25.0
 
 require (
 	github.com/dgraph-io/badger/v4 v4.9.4
-	github.com/goliajp/kevy-go/v6 v6.3.0
+	github.com/goliajp/kevy-go/v7 v6.3.0
 	go.etcd.io/bbolt v1.5.0
 )
 
@@ -28,4 +28,4 @@ require (
 	google.golang.org/protobuf v1.36.7 // indirect
 )
 
-replace github.com/goliajp/kevy-go/v6 => ../../../bindings/go
+replace github.com/goliajp/kevy-go/v7 => ../../../bindings/go

@@ -19,18 +19,18 @@ written down.
 
 | Language | Install | Version |
 |---|---|---|
-| Rust | `cargo add kevy-embedded` | 6.4.0 |
-| Python | `pip install kevy` | 6.4.0 |
-| Go | `go get github.com/goliajp/kevy-go/v6` | 6.4.0 |
-| Java | `jp.golia:kevy` on Maven Central | 6.4.0 |
-| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 6.4.0 |
-| Browser (wasm) | `npm i @goliapkg/kevy` | 6.4.0 |
-| Flutter | `flutter pub add flutter_kevy` | 6.4.0 |
+| Rust | `cargo add kevy-embedded` | 7.0.0 |
+| Python | `pip install kevy` | 7.0.0 |
+| Go | `go get github.com/goliajp/kevy-go/v7` | 7.0.0 |
+| Java | `jp.golia:kevy` on Maven Central | 7.0.0 |
+| Node / TypeScript | `npm i @goliapkg/kevy-ts` | 7.0.0 |
+| Browser (wasm) | `npm i @goliapkg/kevy` | 7.0.0 |
+| Flutter | `flutter pub add flutter_kevy` | 7.0.0 |
 
 ```xml
 <!-- Java, in pom.xml -->
 <dependency>
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 
@@ -81,8 +81,8 @@ db.get(b"user:1")                            # b"alice"
 ```
 
 ```go
-// Go — go get github.com/goliajp/kevy-go/v6
-import kevy "github.com/goliajp/kevy-go/v6"
+// Go — go get github.com/goliajp/kevy-go/v7
+import kevy "github.com/goliajp/kevy-go/v7"
 
 c, _ := kevy.Connect("kevy://127.0.0.1:6379")
 c.Set(ctx, []byte("user:1"), []byte("alice"))

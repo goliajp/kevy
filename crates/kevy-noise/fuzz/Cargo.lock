@@ -55,11 +55,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-crypto"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-noise"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-crypto",
 ]
