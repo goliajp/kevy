@@ -1,6 +1,8 @@
 //! Every section key refuses a value of the wrong shape, naming the field
 //! and the line it sat on.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_config::{Config, ConfigError, LogOutput};
 
 /// Load `[section]\n<line>` and return the refusal's field and message;

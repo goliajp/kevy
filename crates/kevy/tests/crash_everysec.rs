@@ -18,6 +18,8 @@
 //! cargo test -p kevy --test crash_everysec --release -- --ignored --nocapture
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

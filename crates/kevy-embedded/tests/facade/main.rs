@@ -1,5 +1,7 @@
 //! The embedded facade's call shapes agree with each other and with the server.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod argv_and_typed_agree;
 mod embed_writer_e2e;
 mod expiry_on_time;

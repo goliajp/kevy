@@ -2,6 +2,7 @@
 //! answers sealed replies, one of them larger than a Noise message.
 
 #![cfg(feature = "tokio")]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use kevy_client_async::AsyncConnection;
 use kevy_client_async::subscriber::AsyncSubscriber;

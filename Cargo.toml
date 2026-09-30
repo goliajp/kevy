@@ -128,9 +128,17 @@ warnings = "deny"
 # Four crates were declaring it individually; this is the workspace
 # saying it once.
 unsafe_op_in_unsafe_fn = "deny"
+# Every public item in library code says what it is. Test code is exempt by
+# construction: rustc does not report missing_docs in a test harness.
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+# Library code does not unwrap or panic without saying why at the site
+# (an `#[allow]` with its reason). Tests are exempt through clippy.toml: a
+# test that unwraps is stating a precondition rather than ducking one.
+unwrap_used = "deny"
+panic = "deny"
 # Every `unsafe` block in this workspace states the premise it rests on. The
 # lint is in clippy's `restriction` group, so it is off by default and
 # `clippy::all` being green says nothing about it — which is exactly how 378

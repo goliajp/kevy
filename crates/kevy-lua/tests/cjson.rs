@@ -2,6 +2,8 @@
 //! and escape handling through Bridge::eval. Lives outside the cjson
 //! source file so src/cjson.rs stays under the 500-LOC house rule.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_lua::Bridge;
 
 fn unwrap_int(r: &[u8]) -> i64 {

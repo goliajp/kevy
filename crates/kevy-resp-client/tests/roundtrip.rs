@@ -2,6 +2,8 @@
 //! echoes back a canned RESP reply for each request, drive it with RespClient,
 //! assert the parsed reply matches.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 use std::io::{Read, Write};

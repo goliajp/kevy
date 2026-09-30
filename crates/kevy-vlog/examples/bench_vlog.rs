@@ -3,6 +3,8 @@
 //!
 //!   cargo run --release -p kevy-vlog --example bench_vlog
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::time::Instant;
 
 use kevy_vlog::{DEFAULT_ROTATE_BYTES, Vlog, VlogRef};

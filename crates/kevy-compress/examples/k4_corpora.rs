@@ -4,6 +4,8 @@
 //! per value. The gap to the oracle's numbers is RFC §6.1's
 //! "match-finder misses" term, measured instead of estimated.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 fn pad(mut s: Vec<u8>, target: usize) -> Vec<u8> {
     while s.len() < target {
         s.push(b' ');

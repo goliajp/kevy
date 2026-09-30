@@ -4,6 +4,7 @@
 //! sync and on the stream, and a replica declares nothing of its own.
 
 #![cfg(all(feature = "index", feature = "replicate", not(target_arch = "wasm32")))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::path::Path;
 use std::time::{Duration, Instant};

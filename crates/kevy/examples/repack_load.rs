@@ -19,6 +19,8 @@
 //! percentiles, and how many requests were slower than `slow_us` in each
 //! second of the window.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;

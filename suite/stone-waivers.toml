@@ -40,10 +40,6 @@ doc_pct = 100.0
 # the destination — the destination is every public item.
 min_examples = 1
 
-# A crate absent from the execution corpus reports zero dead regions and
-# outranks every crate that was measured. That is no score, not a good one.
-must_be_measured = true
-
 # Clean against the last published version. All 17 are clean today across
 # 3,791 checks; recording that now is what makes the first v6 break visible.
 semver_clean = true

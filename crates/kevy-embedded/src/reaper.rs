@@ -360,6 +360,7 @@ pub(crate) fn lock_inner(inner: &Arc<RwLock<Inner>>) -> RwLockWriteGuard<'_, Inn
     inner.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[cfg(all(test, feature = "persist"))]
+#[cfg(test)]
+#[cfg(feature = "persist")]
 #[path = "reaper_tests.rs"]
 mod tests;

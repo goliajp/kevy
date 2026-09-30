@@ -14,6 +14,8 @@
 //!
 //! Run: `cargo run -p kevy-bench --release --example seqlock_probe`
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod perfsim;
 mod seqlock;
 mod workloads;

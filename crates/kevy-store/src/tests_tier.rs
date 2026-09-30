@@ -4,6 +4,8 @@
 //! sampler's cold/non-spillable skips, the spill-batch bound (B3),
 //! rename-then-compact survival, and the FLUSHALL wipe.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use crate::value::{COLD_TAG_HASH, COLD_TAG_STRING, Value};
 use crate::{Store, StoreError, tier_codec};
 use core::time::Duration;
