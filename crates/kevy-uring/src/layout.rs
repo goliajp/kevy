@@ -118,11 +118,33 @@ impl IoUringSqe {
 /// assert!(t.tv_nsec < 1_000_000_000, "the remainder never carries a second");
 /// ```
 #[repr(C)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KernelTimespec {
     /// Whole seconds of the (relative) timeout.
+    ///
+    /// ```
+    /// let t = kevy_uring::KernelTimespec::from_millis(90_000);
+    /// assert_eq!((t.tv_sec, t.tv_nsec), (90, 0), "whole seconds, nothing below");
+    /// ```
     pub tv_sec: i64,
     /// Sub-second remainder in nanoseconds (`0..1_000_000_000`).
+    ///
+    /// A timeout of 20 ms fires no earlier than that, with `-ETIME`.
+    ///
+    /// ```
+    /// use kevy_uring::{IoUring, KernelTimespec};
+    /// let mut ring = IoUring::new(8)?;
+    /// let ts = KernelTimespec { tv_sec: 0, tv_nsec: 20_000_000 };
+    /// let start = std::time::Instant::now();
+    /// // SAFETY: `ts` stays in place until its completion is reaped below.
+    /// assert!(unsafe { ring.prep_timeout(&ts, 1) });
+    /// ring.submit_and_wait(1)?;
+    /// let mut res = 0;
+    /// ring.for_each_completion(|c| res = c.res);
+    /// assert!(start.elapsed() >= std::time::Duration::from_millis(20));
+    /// assert_eq!(res, -62, "-ETIME: the timeout elapsed");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub tv_nsec: i64,
 }
 

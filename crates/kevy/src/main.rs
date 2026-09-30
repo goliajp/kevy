@@ -12,16 +12,16 @@ use kevy_config::{CliOverrides, Config};
 
 /// Route every allocation in the process through `kevy-alloc`.
 ///
-/// Behind a feature and off by default. An allocator has no run-time
-/// switch — whatever it costs, it costs on every `SET`, `GET` and
-/// published message — so the decision to build with it belongs to
-/// whoever builds, and the measurement that justifies it is the
-/// interleaved A/B in `bench/allocgate.sh` (M1, M2).
+/// On by default (the `kevy-alloc` feature). An allocator has no run-time
+/// switch, so a server on the system allocator is a separate build:
+/// `--no-default-features`.
 #[cfg(feature = "kevy-alloc")]
 #[global_allocator]
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
 
 fn main() -> ! {
+    #[cfg(feature = "kevy-alloc")]
+    kevy::kevy_alloc_is_global();
     handle_keygen();
     handle_help_and_version();
     let mut cfg = resolve_config();
@@ -66,7 +66,7 @@ fn handle_keygen() {
         eprintln!("usage: kevy keygen <file>");
         std::process::exit(2);
     };
-    match kevy::secure::keygen(std::path::Path::new(&path)) {
+    match kevy::secure::keygen(&path) {
         Ok(public) => {
             println!("{}", kevy_config::key_to_hex(&public));
             std::process::exit(0);

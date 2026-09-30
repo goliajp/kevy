@@ -9,71 +9,8 @@
 //! variants — the parser only produces them when the server speaks RESP3.
 
 use crate::error::ProtocolError;
+use crate::reply::Reply;
 use crate::request::{find_crlf, parse_int};
-
-/// A parsed RESP reply (server → client) — the client-side counterpart of
-/// the crate's `encode_*` functions (server-side encoders).
-///
-/// Variants prefixed with `Resp3:` in their doc are only ever produced by
-/// a server speaking RESP3; an `HELLO 2` (or no `HELLO`) session sees the
-/// RESP2 subset (`Simple` / `Error` / `Int` / `Bulk` / `Nil` / `Array`)
-/// exclusively. Adding new variants is non-breaking: an exhaustive
-/// `match` on `Reply` is forced to opt into RESP3 by listing each variant
-/// (rust 2024 will not warn on missing arms only after `#[non_exhaustive]`
-/// — which we deliberately omit so RESP2-only code stays compile-checked
-/// for completeness).
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reply {
-    /// `+OK`
-    Simple(Vec<u8>),
-    /// `-ERR ...`
-    Error(Vec<u8>),
-    /// `:42`
-    Int(i64),
-    /// `$5\r\nhello\r\n`
-    Bulk(Vec<u8>),
-    /// `$-1` or `*-1` — the RESP2 null sentinel; in RESP3 the dedicated
-    /// [`Reply::Null`] (`_\r\n`) is used instead. Both round-trip here.
-    Nil,
-    /// `*N ...`
-    Array(Vec<Reply>),
-    /// **Resp3:** `%N\r\n<key1><value1>...<keyN><valueN>` — N pairs (the
-    /// header count is the pair count, NOT the element count, so a map of
-    /// 3 pairs is `%3` plus 6 sub-replies). Parsed/exposed as a Vec of
-    /// pairs so duplicate keys + insertion order are preserved.
-    Map(Vec<(Reply, Reply)>),
-    /// **Resp3:** `~N\r\n<item1>...<itemN>` — set semantics on the wire;
-    /// dedup is the application's job (RESP3 doesn't require it).
-    Set(Vec<Reply>),
-    /// **Resp3:** `,1.5\r\n` — double. `inf` / `-inf` / `nan` are valid
-    /// payloads per the RESP3 spec and survive the round-trip.
-    Double(f64),
-    /// **Resp3:** `#t\r\n` / `#f\r\n` — boolean.
-    Boolean(bool),
-    /// **Resp3:** `=15\r\ntxt:Some bytes\r\n` — verbatim string carrying
-    /// a 3-char format tag (`txt` / `mkd` / etc.) + raw bytes. The colon
-    /// separator is part of the wire encoding but not part of `data`.
-    Verbatim {
-        /// 3-char format tag (e.g. `b"txt"` for plain text, `b"mkd"` for markdown).
-        fmt: [u8; 3],
-        /// Payload bytes following the `:` separator.
-        data: Vec<u8>,
-    },
-    /// **Resp3:** `(170141183460469231731687303715884105727\r\n` — arbitrary-
-    /// precision integer; carried as the raw digit bytes since we don't
-    /// pull in a bignum crate (charter: zero deps).
-    BigNumber(Vec<u8>),
-    /// **Resp3:** `_\r\n` — true null. RESP2 falls back to [`Reply::Nil`].
-    Null,
-    /// **Resp3:** `>N\r\n...` — like [`Reply::Array`] but tagged as an
-    /// out-of-band server-push frame (pub/sub messages in RESP3). The
-    /// client must dispatch these separately from regular replies.
-    Push(Vec<Reply>),
-    /// **Resp3:** `!8\r\nERR ohno\r\n` — error carried as a length-prefixed
-    /// bulk (handles errors containing CRLF that the simple-string `-`
-    /// shape can't encode).
-    BlobError(Vec<u8>),
-}
 
 /// Parse one RESP reply from the front of `buf`. Speaks RESP2 + RESP3.
 ///
@@ -86,6 +23,18 @@ pub enum Reply {
 /// only the underlying reply, matching what every RESP3 client library
 /// does today. Exposing them is a future addition once a real consumer
 /// (e.g. CLIENT TRACE) ships.
+///
+/// ```
+/// use kevy_resp::{Reply, parse_reply};
+///
+/// let buf = b"+OK\r\n:5\r\n";
+/// let (first, used) = parse_reply(buf)?.expect("complete frame");
+/// assert_eq!(first, Reply::Simple(b"OK".to_vec()));
+/// let (second, _) = parse_reply(&buf[used..])?.expect("complete frame");
+/// assert_eq!(second, Reply::Int(5));
+/// assert_eq!(parse_reply(b"$5\r\nhel")?, None);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn parse_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
     parse_with(buf, &mut DoubleText(None))
 }

@@ -156,7 +156,7 @@ mod tests {
     /// ephemeral port is the cheapest socket that will do — nothing
     /// below touches the socket itself.
     fn a_conn() -> crate::conn::Conn {
-        crate::conn::Conn::new(kevy_sys::tcp_listen([127, 0, 0, 1], 0, 1).unwrap())
+        crate::conn::Conn::new(kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 1).unwrap())
     }
 
     fn a_pending_slot() -> crate::message_agg::PendingSlot {

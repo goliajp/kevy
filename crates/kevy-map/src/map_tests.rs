@@ -738,7 +738,7 @@ fn a_single_erase_leaves_no_tombstone_when_the_group_has_room() {
 /// dense table erased in the middle of a run leaves real tombstones,
 /// and the probe has to walk past them to the key beyond. Without a
 /// test that reaches it, the path went from three never-executed
-/// regions to fifteen, and deadgate said so.
+/// regions to fifteen.
 #[test]
 fn a_probe_walks_past_tombstones_to_the_key_beyond() {
     let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
@@ -764,4 +764,48 @@ fn a_probe_walks_past_tombstones_to_the_key_beyond() {
     for i in 200..1400u64 {
         assert_eq!(m.get(format!("k{i}").as_bytes()), None, "k{i} came back");
     }
+}
+
+#[test]
+fn into_iter_moves_each_entry_out_once_and_drops_the_rest() {
+    let counter = Cell::new(0usize);
+    let mut m: KevyMap<u64, DropCount<'_>> = KevyMap::new();
+    for i in 0..100 {
+        m.insert(i, DropCount(&counter));
+    }
+    let mut it = m.into_iter();
+    assert_eq!(it.len(), 100);
+    let taken: Vec<_> = it.by_ref().take(30).collect();
+    assert_eq!((taken.len(), it.len(), counter.get()), (30, 70, 0));
+    drop(it);
+    assert_eq!(counter.get(), 70, "the 70 never yielded drop with the iterator");
+    drop(taken);
+    assert_eq!(counter.get(), 100, "and the yielded ones exactly once, by their owner");
+}
+
+#[test]
+fn into_iter_of_an_unallocated_map_is_empty() {
+    let m: KevyMap<u64, u64> = KevyMap::new();
+    assert_eq!(m.into_iter().next(), None);
+    let s: KevySet<u64> = KevySet::new();
+    assert_eq!(s.into_iter().count(), 0);
+}
+
+#[test]
+fn a_mapped_table_hands_back_pages_as_it_grows_and_keeps_every_entry() {
+    // (u64, [u64; 7]) slots are 64 bytes: 2^17 of them fill 8 MiB, so the
+    // growth to 2^18 moves out of a mapped table four huge pages long and
+    // hands the first ones back while later entries are still to move
+    let n = if cfg!(miri) { 2_000 } else { 120_000 };
+    let mut m: KevyMap<u64, [u64; 7]> = KevyMap::new();
+    for i in 0..n {
+        m.insert(i, [i; 7]);
+    }
+    if !cfg!(miri) {
+        assert_eq!(m.capacity(), 1 << 18, "the last growth moved a 2^17 table");
+    }
+    for i in 0..n {
+        assert_eq!(m.get(&i), Some(&[i; 7]), "entry {i} survived the move");
+    }
+    assert_eq!(m.len(), n as usize);
 }

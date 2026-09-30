@@ -14,20 +14,15 @@ use kevy_embedded::{Config, Store};
 use kevy_index::{IndexKind, TableIndex, TableSpec, ValType, WindowSpec};
 
 fn windowed_table(span: i64, bucket: i64) -> TableSpec {
-    TableSpec {
-        name: b"ev".to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![],
-        }],
-        orderpaths: vec![],
-        window: Some(WindowSpec { column: b"at".to_vec(), span, bucket }),
-        autodeclare: 0,
-        auto_added: vec![],
+    {
+        let mut t = TableSpec::default();
+        t.name = b"ev".to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![(b"id".to_vec(), ValType::Str), (b"at".to_vec(), ValType::I64)];
+        t.indexes = vec![TableIndex::new(b"at".to_vec(), IndexKind::Range)];
+        t.window = Some(WindowSpec::new(b"at".to_vec(), span, bucket));
+        t
     }
 }
 

@@ -1,6 +1,20 @@
 //! Prefix bulk ops + diagnostics:
 //! `copy-prefix` / `delete-prefix` (token-bucket rate limit,
 //! `--dry-run`), `digest`, `diff`, `inspect`.
+//!
+//! ```
+//! use kevy_cli::bulk::{DeleteMode, run_copy_prefix, run_delete_prefix, run_digest};
+//! # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+//! let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+//! client.request_borrowed(&[b"SET", b"old:1", b"a"])?;
+//! client.request_borrowed(&[b"SADD", b"old:2", b"x", b"y"])?;
+//! // move a prefix: copy, prove it arrived, then drop the source
+//! run_copy_prefix(&mut client, b"old:", b"new:", 0)?;
+//! assert_eq!(run_digest(&mut client, b"new:")?.0, 2);
+//! assert_eq!(run_delete_prefix(&mut client, b"old:", 0, DeleteMode::Unlink)?, 2);
+//! assert_eq!(run_digest(&mut client, b"old:")?.0, 0);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -12,6 +26,19 @@ use kevy_resp::Reply;
 /// a full-bucket start lets a small job burn its whole burst
 /// unthrottled, defeating the point of `--rate` for short sweeps).
 /// `rate == 0` = unlimited.
+///
+/// ```
+/// use kevy_cli::bulk::RateLimiter;
+/// use std::time::{Duration, Instant};
+///
+/// let mut limiter = RateLimiter::new(100); // 100 ops/s
+/// let start = Instant::now();
+/// for _ in 0..5 {
+///     limiter.take();
+/// }
+/// // the bucket starts empty, so even a short burst is paced
+/// assert!(start.elapsed() >= Duration::from_millis(40));
+/// ```
 #[derive(Debug)]
 pub struct RateLimiter {
     rate: u64,
@@ -21,11 +48,31 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// New limiter at `rate` ops/s (0 = off).
+    ///
+    /// ```
+    /// use kevy_cli::bulk::RateLimiter;
+    /// let mut unlimited = RateLimiter::new(0);
+    /// let start = std::time::Instant::now();
+    /// for _ in 0..10_000 {
+    ///     unlimited.take(); // never blocks
+    /// }
+    /// assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    /// ```
     pub fn new(rate: u64) -> Self {
         Self { rate, tokens: 0.0, last: Instant::now() }
     }
 
     /// Block until one op is admitted.
+    ///
+    /// ```
+    /// use kevy_cli::bulk::RateLimiter;
+    /// use std::time::{Duration, Instant};
+    ///
+    /// let mut limiter = RateLimiter::new(50);
+    /// let start = Instant::now();
+    /// limiter.take(); // the first op already waits for its token (~20 ms)
+    /// assert!(start.elapsed() >= Duration::from_millis(15));
+    /// ```
     pub fn take(&mut self) {
         if self.rate == 0 {
             return;
@@ -64,12 +111,66 @@ fn scan_page(
     Ok((next.clone(), keys))
 }
 
-/// `delete-prefix`: SCAN + UNLINK, rate-limited. Returns deleted count.
+/// Whether `delete-prefix` deletes what it finds or only counts it.
+///
+/// ```
+/// use kevy_cli::bulk::DeleteMode;
+/// // `delete-prefix --dry-run`
+/// assert_ne!(DeleteMode::DryRun, DeleteMode::default());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum DeleteMode {
+    /// UNLINK every key found.
+    ///
+    /// ```
+    /// use kevy_cli::bulk::{DeleteMode, run_delete_prefix};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SET", b"tmp:a", b"1"])?;
+    /// assert_eq!(run_delete_prefix(&mut client, b"tmp:", 0, DeleteMode::Unlink)?, 1);
+    /// let left = client.request_borrowed(&[b"EXISTS", b"tmp:a"])?;
+    /// assert_eq!(left, kevy_resp_client::Reply::Int(0));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[default]
+    Unlink,
+    /// Count the keys that would be deleted and touch nothing
+    /// (`--dry-run`).
+    ///
+    /// ```
+    /// use kevy_cli::bulk::{DeleteMode, run_delete_prefix};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SET", b"tmp:a", b"1"])?;
+    /// assert_eq!(run_delete_prefix(&mut client, b"tmp:", 0, DeleteMode::DryRun)?, 1);
+    /// let left = client.request_borrowed(&[b"EXISTS", b"tmp:a"])?;
+    /// assert_eq!(left, kevy_resp_client::Reply::Int(1), "a dry run touches nothing");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    DryRun,
+}
+
+/// `delete-prefix`: SCAN + UNLINK, rate-limited. Returns the deleted
+/// count, or under [`DeleteMode::DryRun`] the count that would be.
+///
+/// ```
+/// use kevy_cli::bulk::{DeleteMode, run_delete_prefix};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// for k in ["tmp:1", "tmp:2", "keep:1"] {
+///     client.request_borrowed(&[b"SET", k.as_bytes(), b"v"])?;
+/// }
+/// let would = run_delete_prefix(&mut client, b"tmp:", 0, DeleteMode::DryRun)?;
+/// assert_eq!(would, 2);
+/// assert_eq!(run_delete_prefix(&mut client, b"tmp:", 1000, DeleteMode::Unlink)?, would);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn run_delete_prefix(
     client: &mut dyn Link,
     prefix: &[u8],
     rate: u64,
-    dry_run: bool,
+    mode: DeleteMode,
 ) -> io::Result<u64> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
@@ -79,7 +180,7 @@ pub fn run_delete_prefix(
     loop {
         let (next, keys) = scan_page(client, &cursor, &pattern)?;
         for key in &keys {
-            if dry_run {
+            if mode == DeleteMode::DryRun {
                 n += 1;
                 continue;
             }
@@ -102,6 +203,25 @@ pub fn run_delete_prefix(
 /// Returns what it copied **and what it could not** — same contract as
 /// `export`, for the same reason: the rebuild set does not cover every
 /// type, and a copy that quietly drops one is worse than a refusal.
+///
+/// ```
+/// use kevy_cli::bulk::run_copy_prefix;
+/// use kevy_resp_client::Reply;
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+///
+/// client.request_borrowed(&[b"HSET", b"src:1", b"name", b"ada"])?;
+/// client.request_borrowed(&[b"SET", b"src:2", b"x"])?;
+/// client.request_borrowed(&[b"PEXPIRE", b"src:2", b"60000"])?;
+/// let copied = run_copy_prefix(&mut client, b"src:", b"dst:", 0)?;
+/// assert_eq!(copied.keys, 2);
+/// assert!(copied.skipped.is_empty(), "every type had a rebuild verb");
+/// let name = client.request_borrowed(&[b"HGET", b"dst:1", b"name"])?;
+/// assert_eq!(name, Reply::Bulk(b"ada".to_vec()));
+/// // the TTL travels with the key
+/// assert!(matches!(client.request_borrowed(&[b"PTTL", b"dst:2"])?, Reply::Int(ms) if ms > 0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn run_copy_prefix(
     client: &mut dyn Link,
     src_prefix: &[u8],
@@ -159,6 +279,19 @@ fn count_commands(mut b: &[u8]) -> usize {
 }
 
 /// `digest <prefix>` → (count, hex).
+///
+/// ```
+/// use kevy_cli::bulk::run_digest;
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"SET", b"cfg:a", b"1"])?;
+/// let (count, before) = run_digest(&mut client, b"cfg:")?;
+/// assert_eq!(count, 1);
+/// client.request_borrowed(&[b"SET", b"cfg:a", b"2"])?;
+/// let (_, after) = run_digest(&mut client, b"cfg:")?;
+/// assert_ne!(before, after, "any change to a value changes the digest");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn run_digest(client: &mut dyn Link, prefix: &[u8]) -> io::Result<(i64, String)> {
     let r = client.request_borrowed(&[b"PREFIX.DIGEST", prefix])?;
     let Reply::Array(items) = r else {
@@ -172,11 +305,31 @@ pub fn run_digest(client: &mut dyn Link, prefix: &[u8]) -> io::Result<(i64, Stri
 
 /// `diff`: compare prefixes across two servers. Returns mismatching
 /// prefixes.
+///
+/// ```
+/// use kevy_cli::bulk::run_diff;
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// # let port_b = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut replica = kevy_resp_client::RespClient::connect("127.0.0.1", port_b)?;
+/// for c in [&mut client, &mut replica] {
+///     c.request_borrowed(&[b"SET", b"user:1", b"ada"])?;
+///     c.request_borrowed(&[b"SET", b"order:1", b"open"])?;
+/// }
+/// replica.request_borrowed(&[b"SET", b"order:1", b"shipped"])?;
+///
+/// let mut out = Vec::new();
+/// let prefixes = [b"user:".to_vec(), b"order:".to_vec()];
+/// let bad = run_diff(&mut client, &mut replica, &prefixes, &mut out)?;
+/// assert_eq!(bad, vec![b"order:".to_vec()]);
+/// assert!(String::from_utf8(out)?.lines().next().is_some_and(|l| l.ends_with("OK")));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn run_diff(
     a: &mut dyn Link,
     b: &mut dyn Link,
     prefixes: &[Vec<u8>],
-    out: &mut impl Write,
+    mut out: impl Write,
 ) -> io::Result<Vec<Vec<u8>>> {
     let mut bad = Vec::new();
     for p in prefixes {
@@ -197,7 +350,21 @@ pub fn run_diff(
 }
 
 /// `inspect <prefix>`: sample keys, type distribution, sizes.
-pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], out: &mut impl Write) -> io::Result<()> {
+///
+/// ```
+/// use kevy_cli::bulk::run_inspect;
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"SET", b"s:1", b"a"])?;
+/// client.request_borrowed(&[b"SET", b"s:2", b"b"])?;
+/// client.request_borrowed(&[b"SADD", b"s:3", b"m"])?;
+/// let mut out = Vec::new();
+/// run_inspect(&mut client, b"s:", &mut out)?;
+/// let text = String::from_utf8(out)?;
+/// assert!(text.starts_with("prefix s:: 3 keys\n  string: 2\n  set: 1\n"), "{text}");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn run_inspect(client: &mut dyn Link, prefix: &[u8], mut out: impl Write) -> io::Result<()> {
     let mut pattern = prefix.to_vec();
     pattern.push(b'*');
     let mut cursor: Vec<u8> = b"0".to_vec();

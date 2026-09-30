@@ -28,7 +28,7 @@ kevy-cli -p 6004 IDX.QUERY posts MATCH "search" LIMIT 10 FIELDS title
 
 - `IDX.EXPLAIN posts MATCH "full-text rust"`——只解析、不执行：kind、构建状态、估算行数，以及计划行。
 - `IDX.VERIFY posts` / `IDX.LIST`——实时的 entries / bytes / postings / token 统计。
-- `IDX.DROP posts`——删掉这条声明（目录变更，落在 sidecar 文件里）。
+- `IDX.DROP posts`——删掉这条声明（目录变更，写入日志并随复制下发）。
 
 `MATCH` 接受 `LIMIT`（≤ 1000）和 `FIELDS`；没有 `CURSOR` 形态（原因见“匹配与排名”）。
 

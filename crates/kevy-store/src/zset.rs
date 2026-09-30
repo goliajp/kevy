@@ -64,7 +64,7 @@ impl Store {
     /// One promotion step: inline → flat, or flat-at-threshold →
     /// segmented. Reweighs the entry.
     fn promote_zset_encoding(&mut self, key: &[u8]) {
-        let Some(e) = self.map.get_mut(key) else { return };
+        let Some(e) = self.map.get_mut_quiet(key) else { return };
         match &mut e.value {
             Value::SmallZSetInline(s) => {
                 e.value = Value::ZSet(Arc::new(small_zset::promote(s)));

@@ -13,6 +13,11 @@ use crate::{Entry, SmallBytes, Store, key_heap_bytes_for, tier_codec};
 
 /// RFC §7: 32 records per demotion call, continuation on the shard tick.
 const SPILL_BATCH: usize = 32;
+/// Time one shard tick may spend demoting while over target. One batch a
+/// tick moved about 300 rows a second a shard, slower than a backfill
+/// grows an index, so the floor rose past the budget; a tick now repeats
+/// batches until it is under target, dry, or this much time is gone.
+const TICK_DEMOTE_BUDGET: std::time::Duration = std::time::Duration::from_micros(500);
 /// Backoff ceiling: a dry sampler doubles its skip up to this
 /// many ticks (~6.4 s at the default 10 Hz tick) — the idle cost of
 /// "over target with nothing left to spill" converges to one bounded
@@ -44,7 +49,7 @@ impl Store {
     /// The demotion twin of [`Store::try_evict_after_write`], called
     /// beside it from the write-commit sites. No-op unless tiering is
     /// on AND `used_memory` is past the unified target (the plain
-    /// watermark minus the index/view floor and the stub floor); then
+    /// watermark minus the index/view floor); then
     /// spills at most one batch (a single write never funds an
     /// unbounded spill storm — continuation rides
     /// [`Store::demote_step`] on the tick). Returns keys demoted.
@@ -62,12 +67,12 @@ impl Store {
         n
     }
 
-    /// Tick continuation of [`Store::try_demote_after_write`]: one more
-    /// budgeted batch per shard tick while over the watermark — with
-    /// backoff. A tick whose batch moves nothing while over
+    /// Tick continuation of [`Store::try_demote_after_write`]: batch after
+    /// batch while over the watermark, for at most half a millisecond a tick —
+    /// with backoff. A tick whose batch moves nothing while over
     /// target (every spillable value already cold, or the floor alone
     /// exceeds the budget so `effective_target == 0`) doubles the
-    /// tick's skip up to [`BACKOFF_CEILING_TICKS`]; any demotion — here
+    /// tick's skip up to a fixed ceiling; any demotion — here
     /// or on the write path — resets it. During a backoff window this
     /// is one decrement: the sampler does not run. "Idempotent is not
     /// convergent": before this, an over-target store with nothing left
@@ -80,7 +85,15 @@ impl Store {
             return 0;
         }
         let over = self.used_memory > effective_target(self.tier.as_ref().expect("probed above"));
-        let n = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+        let started = std::time::Instant::now();
+        let mut n = 0;
+        loop {
+            let k = self.demote_if_over(crate::evict::DEMOTE_VISIT_WINDOW);
+            n += k;
+            if k == 0 || started.elapsed() >= TICK_DEMOTE_BUDGET {
+                break;
+            }
+        }
         let t = self.tier.as_mut().expect("still enabled");
         if n == 0 && over {
             t.tick_skip = (t.tick_skip * 2).clamp(1, BACKOFF_CEILING_TICKS);
@@ -130,8 +143,7 @@ impl Store {
 
     /// One budgeted demotion batch: sample → demote, ≤ [`SPILL_BATCH`]
     /// records, stop at the unified target or when sampling runs dry.
-    /// The target is re-read per iteration — every demotion grows
-    /// `stub_bytes`, which lowers it. Ends with the compaction trigger.
+    /// Ends with the compaction trigger.
     fn demote_batch(&mut self, visit_bound: usize) -> usize {
         let policy = self.tier.as_ref().expect("gated by caller").policy;
         let mut demoted = 0usize;
@@ -141,8 +153,9 @@ impl Store {
             if self.used_memory <= target || demoted >= SPILL_BATCH {
                 break;
             }
-            let cap = self.tier.as_ref().expect("gated by caller").max_spill;
-            let victim = crate::evict::sample_pick_with(
+            let t = self.tier.as_ref().expect("gated by caller");
+            let (cap, start) = (t.max_spill, t.hand);
+            let (victim, visited) = crate::evict::sample_pick_at(
                 self,
                 policy,
                 |e| {
@@ -151,7 +164,12 @@ impl Store {
                         && (cap == 0 || e.weight() <= cap)
                 },
                 visit_bound,
+                start,
             );
+            // past the walked window: entries visited times buckets an entry
+            let per = self.map.capacity() / self.map.len().max(1);
+            let hand = start.wrapping_add(visited.max(1) * per.max(1));
+            self.tier.as_mut().expect("gated by caller").hand = hand;
             match victim {
                 None => break,
                 Some(k) if self.demote_in_place(&k) => {
@@ -205,7 +223,7 @@ impl Store {
             return false;
         };
         let key_heap = key_heap_bytes_for(key);
-        let e = self.map.get_mut(key).expect("probed above");
+        let e = self.map.get_mut_quiet(key).expect("probed above");
         let old_w = e.weight();
         let value_w = old_w.saturating_sub(key_heap);
         let stub = ColdRef {
@@ -237,10 +255,20 @@ impl Store {
             Some(Value::Cold(c)) => *c,
             _ => return false,
         };
-        let value = self.tier_read_record(key, cref);
+        // the row is installed, so a general hash its table could hold
+        // takes the packed form here, built straight from the record
+        let form = if self.packed_rows {
+            crate::tier_codec::RowForm::Declared
+        } else {
+            crate::tier_codec::RowForm::AsStored
+        };
+        let value = self.tier_read_record_as(key, cref, form);
+        if let Value::PackedRow(r) = &value {
+            self.share_shape(r.names());
+        }
         let key_heap = key_heap_bytes_for(key);
         let new_w = key_heap + value.weight();
-        let e = self.map.get_mut(key).expect("probed above");
+        let e = self.map.get_mut_quiet(key).expect("probed above");
         e.value = value;
         let delta = new_w as i64 - e.weight() as i64;
         e.set_weight(new_w);
@@ -285,8 +313,10 @@ impl Store {
     /// rewrite, so it never blocks the reactor for a whole-file pass.
     /// Returns records processed (0 = nothing below the live threshold).
     fn tier_compact_step(&mut self, budget: usize) -> usize {
+        // a recorded cold row is read before its record can be moved away
+        self.resolve_cold_rows();
         let Some(t) = self.tier.as_mut() else { return 0 };
-        let mut owner = StoreOwner { map: &mut self.map, renames: &mut t.renames };
+        let mut owner = StoreOwner { map: self.map.quiet_table(), renames: &mut t.renames };
         // An IO error mid-compaction leaves untouched files untouched;
         // surfaced loudly (per-boot spill file — a failure is a bug).
         t.vlog
@@ -312,17 +342,22 @@ pub(crate) fn watermark(budget: u64) -> u64 {
     budget.saturating_mul(WATERMARK_NUM) / WATERMARK_DEN
 }
 
-/// The unified demote target: `budget·19/20 −
-/// reserved_bytes − stub_bytes`, saturating. Demotion can only reclaim
-/// hot values — the index/view floor and the stubs' own RAM cost are
-/// fixed layers, so pressure on them translates into a lower target
-/// for the hot set. **Saturated to 0** = the floor alone exceeds the
-/// budget; the tier can demote nothing further once every spillable
-/// value is cold (`TierStats::effective_target` makes the state
-/// visible in INFO).
+/// The unified demote target `used_memory` is held to: `budget·19/20 −
+/// reserved_bytes − overhead_bytes − growth_reserve`, saturating. The
+/// index/view floor, the measured overhead and the keyspace table's coming
+/// growth are not in `used_memory` (yet), so they lower the target; the cold
+/// stubs live inside it
+/// (their keyspace slots and key bytes are charged from the moment the
+/// key is inserted), so they do not — subtracting them here as well
+/// would count every cold key twice and shrink the hot set by that much.
+/// **Saturated to 0** = the index floor alone exceeds the budget
+/// (`TierStats::effective_target` makes the state visible in INFO).
 #[inline]
 pub(crate) fn effective_target(t: &crate::tier::TierState) -> u64 {
-    watermark(t.budget).saturating_sub(t.reserved_bytes).saturating_sub(t.stub_bytes)
+    watermark(t.budget)
+        .saturating_sub(t.reserved_bytes)
+        .saturating_sub(t.overhead_bytes)
+        .saturating_sub(t.growth_reserve)
 }
 
 /// [`CompactOwner`] over the store map + the rename forward-pointers.

@@ -3738,16 +3738,16 @@ $6
 stream
 $6
 syntax
-$98
-XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]
+$101
+XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]
 $10
 complexity
 $126
 O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
 $6
 compat
-$129
-differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed
+$374
+differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
 $5
 flags
 *1
@@ -3774,12 +3774,12 @@ $72
 XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]
 $10
 complexity
-$109
-O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full
+$81
+O(log P + COUNT log N): at most COUNT x 10 pending entries are looked at per call
 $6
 compat
-$144
-differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip
+$4
+full
 $5
 flags
 *1
@@ -3802,16 +3802,16 @@ $6
 stream
 $6
 syntax
-$127
-XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]
+$143
+XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID] [LASTID lastid]
 $10
 complexity
 $22
 O(A * (log P + log N))
 $6
 compat
-$148
-differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP
+$4
+full
 $5
 flags
 *1
@@ -3866,16 +3866,16 @@ $6
 stream
 $6
 syntax
-$151
-XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer
+$212
+XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD entries-read] | DESTROY key group | SETID key group id|$ [ENTRIESREAD entries-read] | CREATECONSUMER key group consumer | DELCONSUMER key group consumer | HELP
 $10
 complexity
 $94
 CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
 $6
 compat
-$210
-differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
+$4
+full
 $5
 flags
 *1
@@ -3898,16 +3898,16 @@ $6
 stream
 $6
 syntax
-$58
-XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP
+$79
+XINFO STREAM key [FULL [COUNT count]] | GROUPS key | CONSUMERS key group | HELP
 $10
 complexity
-$103
-STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
+$266
+STREAM: O(log N). GROUPS: O(G log N + G log G) — 'lag' reads the stream's head once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name. STREAM FULL: O(K + G * (P log C + C log C)) for K entries shown and P pending entries per group
 $6
 compat
-$207
-differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
+$495
+differs: answers field for field as valkey 9.1 does; against Redis 8.10, XINFO STREAM lacks the six idmp-* / pids-* / iids-* fields of an XADD option kevy does not have, radix-tree-keys and radix-tree-nodes are the nodes and tree nodes valkey's layout would hold for the same history (kevy keeps no radix tree), and where the two disagree on 'lag' and 'entries-read' — an ENTRIESREAD above entries-added, a group before the first entry with a deletion behind it — kevy answers as valkey does
 $5
 flags
 *1
@@ -3966,12 +3966,12 @@ $68
 XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
 $10
 complexity
-$95
-summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)
+$126
+summary: O(P*C + C log C) — the per-consumer tally is a linear find per PEL row, then sorted by name. extended: O(log P + K)
 $6
 compat
-$4
-full
+$142
+differs: answers as valkey 9.1 does, except that a delivery count stops at 9223372036854775807 where valkey's wraps round to a negative number
 $5
 flags
 *1
@@ -4034,8 +4034,8 @@ $64
 O(S * (log N + M)) over S streams; '$' is O(1); the park is O(1)
 $6
 compat
-$86
-differs: the '+' last-id form is not parsed — only explicit IDs and '$' are accepted
+$107
+differs: answers as valkey 9.1 does; Redis 8.10's unbalanced-streams error also names '+' as an accepted ID
 $5
 flags
 *2
@@ -4064,12 +4064,12 @@ $108
 XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]
 $10
 complexity
-$138
-'>' form: O(log N + U + M) — COUNT does NOT bound the scan, the entire undelivered tail is materialised first. Replay form: O(log P + K)
+$119
+'>' form: O(log N + M log P) for M entries handed out. History form: O(log P + K log N) for K entries handed back again
 $6
 compat
-$56
-differs: COUNT is parsed but does not bound the '>' scan
+$4
+full
 $5
 flags
 *2
@@ -4158,16 +4158,16 @@ $6
 stream
 $6
 syntax
-$38
-XTRIM key MAXLEN|MINID [=|~] threshold
+$52
+XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]
 $10
 complexity
 $38
 O(R log N + N*F) for R evicted entries
 $6
 compat
-$156
-differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring
+$163
+differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
 $5
 flags
 *1
@@ -5878,8 +5878,8 @@ $5
 index
 $6
 syntax
-$178
-IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]
+$220
+IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field] [PARTITION local|global] [SPLIT value]…
 $10
 complexity
 $240
@@ -6070,8 +6070,8 @@ IDX.REBUILD
 *14
 $7
 summary
-$44
-Rebuild an ANN index (tombstone compaction).
+$176
+Rebuild an index: a range or unique index packs its leaves, an ANN index compacts its tombstones, a global index samples its split points again. A text or agg index is refused.
 $5
 since
 $5
@@ -6086,8 +6086,8 @@ $16
 IDX.REBUILD name
 $10
 complexity
-$186
-Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
+$283
+Depends on the index kind, on every shard, synchronously. range / unique: O(N) to pack the leaves. global: one sample of every shard's values, then the moved entries. ann: O(V_live * ef_construction * M * dim) distance evaluations — the most expensive verb in the extension surface
 $6
 compat
 $103
@@ -6150,8 +6150,8 @@ $5
 table
 $6
 syntax
-$216
-TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]
+$272
+TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL [SPLIT AT 0xhex ...]]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]
 $10
 complexity
 $234

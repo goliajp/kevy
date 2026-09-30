@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # io_uring 必須、ブロックされてい�
 KEVY_IO_URING=0 kevy --port 6004   # epoll 強制
 ```
 
+**受信バッファ（io_uring）。** 各シャードは、カーネルがデータ到着時に書き込む 16 KiB バッファのリングで受信します。リングはシャードあたり `recv_buffers` × 16 KiB を持ち、トラフィックが一巡するとすべて常駐メモリになります。デフォルトの 1024 ではシャードあたり 16 MiB で、ベンチマークでは以前の固定値 4096（シャードあたり 64 MiB）とスループットが変わりませんでした。リングが空になってもエラーではありません。空を見つけた受信は再登録され、データはソケットで待ちます。つまりこの設定は、メモリとバースト時の再登録の回数を交換するものです。1 シャードあたり数千の接続が同時に送信する場合は増やし、メモリを優先する場合は減らしてください。起動時にのみ読まれ、1 から 32768 までの 2 のべき乗である必要があり、epoll と kqueue のリアクターでは効果がありません。
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # シャードあたり 32 MiB
+```
+
 ### 永続化
 
 AOFポリシーは`appendfsync`（configファイルまたは`CONFIG SET`）で制御します。3つの値はRedisのセマンティクスと一致します：
@@ -79,7 +89,7 @@ AOFポリシーは`appendfsync`（configファイルまたは`CONFIG SET`）で�
 
 **コンテナのサイズは`used_memory`ではなく`process_rss_bytes`から決めてください。**`INFO memory`は両方を報告します。`used_memory`はストアのキースペース会計——`maxmemory`とティアリング予算が作用する対象——であり、`process_rss_bytes`はOSが実際にプロセスへ常駐させているメモリで、そこにはインデックスとビュー、接続とレプリケーションのバッファ、アロケータのオーバーヘッドと断片化が上乗せされています。`used_memory`からコンテナのメモリ上限を決めると、健康なプロセスをOOMキルします。観測したRSSに余裕を足して上限を設定してください。
 
-**オプトインのアロケータ。** `--features kevy-alloc`でビルドすると、glibc mallocがkevy自身のspanアロケータに置き換わります：churn下の定常RSSが約10 %小さくなり、スループットのコストは飽和したコレクション書き込みシャードにだけ現れます。メモリ容量が拘束条件になっているなら、そのビルドの価値はあります。実測のトレードは[docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)を参照してください。
+**アロケータ。** サーバーはデフォルトで kevy 独自の span アロケータ `kevy-alloc` で動きます：シャードごとに一つのヒープ、空いた 4 KiB ページは OS に返し、シャードの tick 上の整理パスが降格や削除の残す穴を詰めます。階層化したサーバーの RSS を予算 × 1.05 に保つのはこれです。glibc と比べると、書き込みコマンドの命令数はどれも glibc 以下で、`LPUSH` と `ZADD` は約 11 % 速くなります。`INFO modules` には `module:name=alloc,impl=kevy-alloc` と出ます。システムアロケータにするには `--no-default-features` でビルドします。malloc をフックするツールを使うときや、ページが 4 KiB より大きくページを返せないシステムが対象です。測定値は[docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)を参照してください。
 
 ### ネットワーク
 

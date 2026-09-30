@@ -25,6 +25,7 @@
 //! used to fail to build here, which only the release pipeline runs — so
 //! it surfaced at tag time instead of in CI.
 #![cfg(debug_assertions)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,11 +106,7 @@ impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-xblock-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("xblock");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();

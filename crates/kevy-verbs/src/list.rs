@@ -3,7 +3,7 @@
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk, encode_simple_string,
 };
-use kevy_store::Store;
+use kevy_store::{InsertPosition, Store};
 
 use crate::args::{arg_i64, rest_borrowed};
 use crate::reply::{
@@ -164,10 +164,13 @@ fn pop<A: ArgvView + ?Sized>(store: &mut Store, args: &A, tail: bool, out: &mut 
 /// `BLPOP` / `BRPOP key [key …] timeout`.
 ///
 /// With one key and a non-empty list this pops and answers
-/// `[key, value]`. Otherwise it writes nothing, and a caller that can
-/// block parks the connection on the key(s); the single-key form is
-/// what it replays when a push wakes it. The timeout is still checked
-/// first, so a malformed one is refused rather than blocked on.
+/// `[key, value]`, recorded as the `LPOP` / `RPOP` it performed.
+/// Otherwise it changes nothing and asks for no record of its own: a
+/// caller that can block parks the connection on the key(s) without
+/// recording anything, so a record asked for here would be left for the
+/// next write on the thread to take. The single-key form is what it
+/// replays when a push wakes it. The timeout is still checked first, so
+/// a malformed one is refused rather than blocked on.
 fn blocking_pop<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
@@ -193,7 +196,8 @@ fn blocking_pop<A: ArgvView + ?Sized>(
                 encode_array_len(out, 2);
                 encode_bulk(out, &args[1]);
                 encode_bulk(out, &v);
-                return Effect::Write;
+                let pop: &[u8] = if tail { b"RPOP" } else { b"LPOP" };
+                return Effect::Record(vec![pop.to_vec(), args[1].to_vec()]);
             }
         }
     }
@@ -207,12 +211,15 @@ fn linsert<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>)
         wrong_args(out, "linsert");
         return Effect::Unchanged;
     }
-    let before = args[2].eq_ignore_ascii_case(b"BEFORE");
-    if !before && !args[2].eq_ignore_ascii_case(b"AFTER") {
+    let position = if args[2].eq_ignore_ascii_case(b"BEFORE") {
+        InsertPosition::Before
+    } else if args[2].eq_ignore_ascii_case(b"AFTER") {
+        InsertPosition::After
+    } else {
         encode_error(out, ERR_SYNTAX);
         return Effect::Unchanged;
-    }
-    let res = store.linsert(&args[1], before, &args[3], &args[4]);
+    };
+    let res = store.linsert(&args[1], position, &args[3], &args[4]);
     let inserted = matches!(res, Ok(n) if n > 0);
     emit_int_result(res, out);
     changed(inserted)

@@ -6,11 +6,45 @@
 use crate::{Routing, Scope};
 
 /// Reasons [`OwnershipTable::new`] can refuse a list of scopes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+///
+/// let err = OwnershipTable::new(vec![
+///     Scope::new(b"app:".to_vec(), "w1".to_string()),
+///     Scope::new(b"app:".to_vec(), "w2".to_string()),
+/// ])
+/// .unwrap_err();
+/// assert_eq!(err.to_string(), r#"duplicate scope prefix "app:""#);
+/// assert!(matches!(err, OwnershipError::DuplicatePrefix { .. }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum OwnershipError {
     /// Two scopes share an identical prefix — ambiguous ownership.
+    ///
+    /// ```
+    /// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+    ///
+    /// let r = OwnershipTable::new(vec![
+    ///     Scope::new(b"p:".to_vec(), "w1".to_string()),
+    ///     Scope::new(b"p:".to_vec(), "w2".to_string()),
+    /// ]);
+    /// assert!(matches!(r, Err(OwnershipError::DuplicatePrefix { .. })));
+    /// ```
     DuplicatePrefix {
         /// The prefix bytes (lossy UTF-8 in the formatted message).
+        ///
+        /// ```
+        /// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+        ///
+        /// let r = OwnershipTable::new(vec![
+        ///     Scope::new(b"p:".to_vec(), "w1".to_string()),
+        ///     Scope::new(b"p:".to_vec(), "w2".to_string()),
+        /// ]);
+        /// let Err(OwnershipError::DuplicatePrefix { prefix }) = r else { panic!("expected a duplicate") };
+        /// assert_eq!(prefix, b"p:");
+        /// ```
         prefix: Vec<u8>,
     },
     /// One scope's prefix is a *strict* prefix of another's
@@ -21,10 +55,42 @@ pub enum OwnershipError {
     /// linter rejects loudly rather than silently masking. To
     /// genuinely want a base + inner scope, use a single declaration
     /// at the innermost level.
+    ///
+    /// ```
+    /// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+    ///
+    /// let r = OwnershipTable::new(vec![
+    ///     Scope::new(b"app:".to_vec(), "w1".to_string()),
+    ///     Scope::new(b"app:billing:".to_vec(), "w2".to_string()),
+    /// ]);
+    /// assert!(matches!(r, Err(OwnershipError::OverlappingPrefix { .. })));
+    /// ```
     OverlappingPrefix {
         /// The longer (more specific) prefix in the conflict.
+        ///
+        /// ```
+        /// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+        ///
+        /// let r = OwnershipTable::new(vec![
+        ///     Scope::new(b"app:".to_vec(), "w1".to_string()),
+        ///     Scope::new(b"app:billing:".to_vec(), "w2".to_string()),
+        /// ]);
+        /// let Err(OwnershipError::OverlappingPrefix { inner, .. }) = r else { panic!("expected an overlap") };
+        /// assert_eq!(inner, b"app:billing:");
+        /// ```
         inner: Vec<u8>,
         /// The shorter (broader) prefix that swallows the inner.
+        ///
+        /// ```
+        /// use kevy_scope::{OwnershipError, OwnershipTable, Scope};
+        ///
+        /// let r = OwnershipTable::new(vec![
+        ///     Scope::new(b"app:billing:".to_vec(), "w2".to_string()),
+        ///     Scope::new(b"app:".to_vec(), "w1".to_string()),
+        /// ]);
+        /// let Err(OwnershipError::OverlappingPrefix { outer, .. }) = r else { panic!("expected an overlap") };
+        /// assert_eq!(outer, b"app:");
+        /// ```
         outer: Vec<u8>,
     },
 }
@@ -52,6 +118,30 @@ impl std::error::Error for OwnershipError {}
 /// Immutable ownership table. Build once at startup from
 /// `[[cluster.scope]]` config; share across reactor threads via
 /// `Arc<OwnershipTable>`.
+///
+/// ```
+/// use kevy_scope::{OwnershipTable, Routing, Scope};
+///
+/// let table = OwnershipTable::new(vec![
+///     Scope::new(b"app:auth:".to_vec(), "embed-auth-1".to_string()),
+///     Scope::new(b"app:billing:".to_vec(), "embed-billing-1".to_string())
+///         .with_fallback("server-eu-1".to_string()),
+/// ])?;
+/// assert_eq!(table.len(), 2);
+/// assert!(!table.is_empty());
+/// assert_eq!(table.lookup(b"app:auth:u:1").map(|s| s.writer()), Some("embed-auth-1"));
+/// assert_eq!(table.scopes_without_fallback().len(), 1);
+/// assert_eq!(
+///     table.route(b"app:billing:inv:1", "server-eu-1"),
+///     Routing::Misdirected { target: "embed-billing-1" },
+/// );
+/// // once the writer is flagged down, its fallback owns the write
+/// let live = table.route_with_fallback_state(b"app:billing:inv:1", "server-eu-1", |n| {
+///     n == "embed-billing-1"
+/// });
+/// assert_eq!(live, Routing::Owned);
+/// # Ok::<(), kevy_scope::OwnershipError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct OwnershipTable {
     /// Sorted by prefix length descending so the first

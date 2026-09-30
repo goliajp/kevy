@@ -35,6 +35,14 @@ pub mod hkdf;
 mod poly1305;
 pub mod x25519;
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<aead::AuthError>();
+    send_sync::<blake2s::Blake2s>();
+};
+
 #[cfg(test)]
 mod tests;
 

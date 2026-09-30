@@ -37,8 +37,8 @@ pub(super) fn clause_chunk(msg: &str) -> Vec<u8> {
 /// `IDX.COUNT … FILTER …`: the per-shard claused count, in the plain
 /// COUNT chunk shape (`[ST_OK][u64]`) so `reduce_count` sums it
 /// unchanged.
-pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+pub(super) fn run_claused_count(ctx: &Ctx<'_>, q: &Query) -> Vec<u8> {
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| {
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         let (min, max) = q.bounds_for(spec, now)?;
         super::probe_window(ctx, &q.name, win, &min);
@@ -48,7 +48,7 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         // segment refuses; never a partial number.
         let cold = match win
             .filter(|w| w.has_cold())
-            .map(|w| w.cold_claused_count(spec.ty, &min, &max, &filters))
+            .map(|w| w.cold_claused_count(spec.ty(), &min, &max, &filters))
             .transpose()
         {
             Ok(n) => n.unwrap_or(0),
@@ -70,7 +70,8 @@ pub(super) fn run_claused_count(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
 }
 
 pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| {
+    let global = super::global::is_global(ctx, &q.name);
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| {
         let now = (kevy_store::now_unix_ms() / 1000) as i64;
         let (min, max) = q.bounds_for(spec, now)?;
         super::probe_window(ctx, &q.name, win, &min);
@@ -78,29 +79,35 @@ pub(super) fn run_claused_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query) -> 
         let sort = sort_field(spec, &q.sort)?;
         let distinct = distinct_field(spec, &q.distinct)?;
         let facets = facet_fields(spec, &q.facets)?;
-        let clauses = ScalarClauses {
-            filters: &filters,
-            sort,
-            distinct,
-            facets: &facets,
-            // Each shard returns limit+offset: the origin drains the
-            // offset AFTER the merge, and a shard cannot know which of
-            // its hits survive it.
-            fetch: q.limit + q.offset,
-        };
-        let cursor = q.cursor(spec.ty);
+        // Each shard returns limit+offset: the origin drains the
+        // offset AFTER the merge, and a shard cannot know which of
+        // its hits survive it.
+        let mut clauses =
+            ScalarClauses::new(q.limit + q.offset).with_filters(&filters).with_facets(&facets);
+        (clauses.sort, clauses.distinct) = (sort, distinct);
+        let cursor = q.cursor(spec.ty());
         let mut page = seg.query_claused(&min, &max, cursor.as_ref(), &clauses);
         if let Some(w) = win.filter(|w| w.has_cold()) {
-            match w.cold_claused(spec.ty, &min, &max, cursor.as_ref(), &clauses) {
+            match w.cold_claused(spec.ty(), &min, &max, cursor.as_ref(), &clauses) {
                 Ok((chits, cfacets)) => merge_cold_claused(&mut page, chits, cfacets, &clauses),
                 Err(_) => return Err(vec![super::ST_NOINDEX]),
             }
         }
-        Ok(page)
+        // a global index's FIELDS come from the partition's stored values
+        let held: Vec<(&kevy_index::IndexValue, &[u8])> =
+            page.hits.iter().map(|h| (&h.value, h.key.as_slice())).collect();
+        let stored = global.then(|| super::global::stored_page(spec, seg, &held, &q.fields));
+        Ok((page, stored.transpose()?))
     });
     match res {
         Ok(Err(chunk)) => chunk,
-        Ok(Ok(page)) => encode_claused_chunk(store, q, &page),
+        Ok(Ok((page, stored))) => {
+            let rows = stored.unwrap_or_else(|| {
+                let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
+                peek_hydration(store, &keys, &q.fields)
+            });
+            encode_claused_chunk(q, &page, &rows)
+        }
         Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
@@ -122,30 +129,27 @@ fn merge_cold_claused(
 ) {
     let all: Vec<(kevy_index::ScalarHit, ())> =
         page.hits.drain(..).chain(chits).map(|h| (h, ())).collect();
-    let merged =
-        kevy_index::merge_claused(all, c.sort.map(|(_, d, _)| d), c.distinct.is_some(), 0, c.fetch);
+    let merged = kevy_index::merge_claused(all, c.sort.map(|(_, order, _)| order), 0, c.fetch);
     page.hits = merged.into_iter().map(|(h, ())| h).collect();
     kevy_index::fold_facets(&mut page.facets, cfacets);
     kevy_index::sort_facets(&mut page.facets);
     page.cursor = match c.selects() || page.hits.len() < c.fetch {
         true => None,
-        false => page
-            .hits
-            .last()
-            .map(|h| kevy_index::Cursor { value: h.value.clone(), key: h.key.clone() }),
+        false => page.hits.last().map(|h| kevy_index::Cursor::new(h.value.clone(), h.key.clone())),
     };
 }
 
 /// Hit block (+ per-hit clause keys when the query carried the clause),
-/// then the facet block. Hydration happens outside the segment borrow —
-/// the hits' rows live on this shard, plain hash reads.
-fn encode_claused_chunk(store: &mut Store, q: &Query, page: &kevy_index::ClausedPage) -> Vec<u8> {
+/// then the facet block. A local index's hydration rows are read outside
+/// the segment borrow as one batched page (cold rows coalesce into one
+/// submission); a global index's come from the partition's stored values.
+fn encode_claused_chunk(
+    q: &Query,
+    page: &kevy_index::ClausedPage,
+    rows: &[super::wire::HydrationRow],
+) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(page.hits.len() as u32).to_le_bytes());
-    // Hydration rows prefetched as ONE batched page (cold rows
-    // coalesce into one submission), then encoded in hit order.
-    let keys: Vec<&[u8]> = page.hits.iter().map(|h| h.key.as_slice()).collect();
-    let rows = peek_hydration(store, &keys, &q.fields);
     for (i, h) in page.hits.iter().enumerate() {
         chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
         chunk.extend_from_slice(&h.key);

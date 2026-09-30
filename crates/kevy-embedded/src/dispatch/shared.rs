@@ -40,7 +40,10 @@ pub(super) const SERVER_ONLY: &[&[u8]] = &[
 /// One single-key command; `false` = the verb is not served here.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     // an internal record verb is applied from a record, never from here
-    if up == kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+    if [kevy_resp::ops_table::CONSUMER_SEEN, kevy_resp::ops_table::PENDING]
+        .iter()
+        .any(|v| up == v.as_bytes())
+    {
         kevy_resp::encode_error(out, kevy_verbs::aof::INTERNAL_REFUSAL);
         return true;
     }
@@ -56,9 +59,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 }
 
 fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    // a call too short to name a key is refused for its arity alone
+    // the dispatcher refused a write on a store that takes none; this
+    // catches only a shutdown that landed since
     if v.write
-        && argv.len() > 1
         && let Err(e) = ensure_writable(s)
     {
         return super::kevy_err(out, &e);
@@ -67,7 +70,7 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if let Some(msg) = refusal(s, up, argv) {
         return kevy_resp::encode_error(out, msg);
     }
-    let args = Args(argv);
+    let args = Args::new(argv);
     let mut g = s.wshard(crate::verb_keys::shard_key(up, &args).unwrap_or_default());
     let mark = out.len();
     let effect = kevy_verbs::exec(&mut g.store, up, &args, out);
@@ -89,9 +92,11 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
             e @ (Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
+            | Effect::RecordAdd(..)
             | Effect::RecordSeen),
         ) => record_outcome(&mut g, argv, &e),
-        _ => Ok(()),
+        None | Some(Effect::Read | Effect::Unchanged | Effect::Skip) => Ok(()),
     };
     if let Err(e) = recorded {
         out.truncate(mark);
@@ -106,7 +111,7 @@ fn refusal(s: &Store, up: &[u8], argv: &[Vec<u8>]) -> Option<&'static str> {
     if !kevy_verbs::is_streams_geo(up) {
         return None;
     }
-    let args = Args(argv);
+    let args = Args::new(argv);
     if crate::verb_keys::blocks(up, &args) {
         return Some("ERR the embedded engine cannot block; call without BLOCK");
     }
@@ -138,7 +143,7 @@ fn record(g: &mut Inner, argv: &[Vec<u8>], swap: Option<(usize, &[u8])>) -> Kevy
         let parts: Vec<&[u8]> = argv.iter().enumerate().map(|(i, a)| swapped(swap, i, a)).collect();
         commit_write(g, &parts)?;
     }
-    for f in kevy_verbs::aof::ttl_followup(&mut g.store, &Args(argv)) {
+    for f in kevy_verbs::aof::ttl_followup(&g.store, &Args::new(argv)) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }
@@ -160,7 +165,7 @@ fn record_outcome(g: &mut Inner, argv: &[Vec<u8>], outcome: &Effect) -> KevyResu
     if !crate::store_glue::records_writes(g) {
         return record(g, argv, None);
     }
-    for f in kevy_verbs::aof::deferred_frames(&g.store, &Args(argv), outcome) {
+    for f in kevy_verbs::aof::deferred_frames(&g.store, &Args::new(argv), outcome) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }

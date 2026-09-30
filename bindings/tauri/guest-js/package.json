@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-kevy-api",
-  "version": "6.4.0",
+  "version": "7.0.0",
   "description": "Guest (webview) binding for tauri-plugin-kevy: a typed kevy client over Tauri's invoke, backed by one shared in-process kevy engine in the Rust backend.",
   "license": "(Apache-2.0 OR MIT)",
   "author": "GOLIA K.K.",
@@ -14,7 +14,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src", "README.md"],
+  "files": ["dist", "src", "README.md", "CHANGELOG.md"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"

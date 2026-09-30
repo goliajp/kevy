@@ -82,20 +82,97 @@ pub(crate) fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
 
 pub(crate) fn run_job(job: PersistJob) -> PersistDone {
     match job {
-        PersistJob::Save { view, snap_path, aof_reset, cursor } => PersistDone::Save {
-            result: crate::persist_worker::write_snapshot_tmp_with_cursor(
-                &view, &snap_path, cursor,
+        PersistJob::Save { view, snap_path, aof_reset, cursor, aux } => PersistDone::Save {
+            result: kevy_persist::write_snapshot_tmp_with_cursor(
+                &kevy_persist::WithAux::new(&view, aux.as_ref()),
+                &snap_path,
+                cursor,
             ),
             snap_path,
             aof_reset,
         },
-        PersistJob::Rewrite { view, tmp } => PersistDone::Rewrite {
+        PersistJob::Rewrite { view, tmp, aux } => PersistDone::Rewrite {
             // dump_aof drop-behinds its own cache and sync_all()s.
-            result: kevy_persist::dump_aof(&tmp, &view).map(|(keys, _bytes)| keys),
+            result: kevy_persist::dump_aof(&tmp, &kevy_persist::WithAux::new(&view, aux.as_ref()))
+                .map(|stats| stats.keys),
             tmp,
         },
         PersistJob::SwapImage { tmp, live, trash, tail } => run_swap(tmp, live, trash, tail),
         PersistJob::Cleanup { paths, bufs } => run_cleanup(paths, bufs),
         PersistJob::TeeAppend { tmp, bytes } => run_tee_append(tmp, bytes),
+    }
+}
+
+/// Append `frame` to a shard's log and sync it: the `record` callback of
+/// [`crate::Commands::on_restored`].
+pub(crate) fn record_durably(
+    aof: &mut Option<kevy_persist::Aof>,
+    shard: usize,
+    frame: &kevy_resp::Argv,
+) -> bool {
+    let Some(aof) = aof.as_mut() else { return false };
+    match aof.append(frame).and_then(|()| aof.sync_now()) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("kevy: shard {shard} could not record a restored frame: {e}");
+            false
+        }
+    }
+}
+
+/// Load a shard's snapshot file at boot, returning the frame it kept
+/// beside the keyspace.
+pub(crate) fn load_snapshot_file(
+    store: &mut kevy_store::Store,
+    path: &std::path::Path,
+) -> std::io::Result<Option<kevy_resp::Argv>> {
+    let file = std::io::BufReader::new(std::fs::File::open(path)?);
+    kevy_persist::load_snapshot_with_aux(store, file, |_| true)
+}
+
+/// Serialize a replica's snapshot off the reactor. On an error the sender
+/// drops, the receiver reads Disconnected, and `pump_snapshot_chunks`
+/// closes the connection.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a send fails only once the replica is gone, which its connection reports"
+)]
+pub(crate) fn spawn_serializer(
+    view: kevy_store::SnapshotView,
+    aux: Option<kevy_resp::Argv>,
+    replica_id: &str,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("kevy-snapshot-{replica_id}"))
+        .spawn(move || {
+            let mut buf = Vec::new();
+            let src = kevy_persist::WithAux::new(&view, aux.as_ref());
+            if kevy_persist::write_snapshot_to(&src, &mut buf).is_ok() {
+                let _ = tx.send(buf);
+            }
+        })
+        .expect("spawn snapshot serializer thread");
+    rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_snapshot_file, record_durably};
+
+    #[test]
+    fn a_shard_without_a_log_records_nothing() {
+        let frame = kevy_resp::Argv::from(vec![b"XINTERNAL.EXAMPLE".to_vec()]);
+        assert!(!record_durably(&mut None, 0, &frame));
+    }
+
+    #[test]
+    fn a_missing_snapshot_file_is_an_error() {
+        let missing = std::env::temp_dir()
+            .join(format!("kevy-rt-no-such-dir-{}", std::process::id()))
+            .join("dump-0.rdb");
+        let mut store = kevy_store::Store::new();
+        let err = load_snapshot_file(&mut store, &missing).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

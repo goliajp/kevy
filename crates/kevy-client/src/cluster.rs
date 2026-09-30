@@ -24,6 +24,8 @@ const NUM_SLOTS: usize = 16384;
 
 /// One open connection per distinct shard node, with a slot → shard index so a
 /// single-key command goes straight to its owner.
+///
+#[doc = include_str!("cluster_docs/cluster_client.md")]
 #[derive(Debug)]
 pub struct ClusterClient {
     /// Per distinct shard node, in first-advertised order.
@@ -55,22 +57,26 @@ impl ClusterClient {
     /// encrypted cluster port. Encrypted, every shard is reached through the
     /// encrypted port the server advertises, with the same keys.
     ///
-    /// ```no_run
-    /// let url = format!("kevys://10.0.0.5:6411?server_key={}", "ab".repeat(32));
+    /// ```
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/secure_node.rs")); }
+    /// # let (port, key) = doc::secure_node();
+    /// # let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+    /// let url = format!("kevys://127.0.0.1:{port}?server_key={hex}");
     /// let mut c = kevy_client::ClusterClient::connect_url(&url)?;
+    /// assert_eq!(c.shard_count(), 1);
     /// c.ping()?;
     /// # Ok::<(), kevy_client::KevyError>(())
     /// ```
     pub fn connect_url(url: &str) -> KevyResult<Self> {
         if url.starts_with("kevys://") {
-            let u = kevy_resp_client::parse_secure_url(url)?;
+            let u = kevy_resp_client::SecureUrl::parse(url)?;
             let me =
                 u.client_key_file.as_deref().map(kevy_resp_client::load_client_key).transpose()?;
             let me = me.as_ref();
             let seed = RespClient::connect_secure(&u.host, u.port, u.server_key, me)?;
             return Self::build(seed, |h, p| RespClient::connect_secure(h, p, u.server_key, me));
         }
-        let p = kevy_resp_client::parse_url(url)?;
+        let p = kevy_resp_client::ParsedUrl::parse(url)?;
         Self::build(RespClient::connect(&p.host, p.port)?, RespClient::connect)
     }
 

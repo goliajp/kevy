@@ -23,6 +23,10 @@ pub(crate) fn geo_store_route<A: ArgvView + ?Sized>(verb: &[u8], args: &A) -> Op
 pub(crate) fn geo_search(store: &mut Store, argv: &[Vec<u8>]) -> GeoHits {
     match kevy_verbs::geo::store_search(store, argv) {
         Ok(pairs) => GeoHits::Pairs(pairs),
-        Err(reply) => GeoHits::Error(reply),
+        Err(e) => {
+            let mut reply = Vec::new();
+            kevy_resp::encode_error(&mut reply, e.as_wire());
+            GeoHits::Error(reply)
+        }
     }
 }

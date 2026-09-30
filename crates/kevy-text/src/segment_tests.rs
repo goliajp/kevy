@@ -1073,15 +1073,19 @@ fn sorting_selects_by_the_key_not_the_score() {
         let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
         Some(n.to_be_bytes().to_vec())
     };
-    let asc =
-        QueryOpts { sort: Some(Sort { field: 0, desc: false, key: &key }), ..Default::default() };
+    let asc = QueryOpts {
+        sort: Some(Sort { field: 0, order: crate::SortOrder::Asc, key: &key }),
+        ..Default::default()
+    };
     let hits = s.matches_query_with(b"rust", 3, asc);
     let keys: Vec<Vec<u8>> = hits.iter().map(|h| h.key.clone()).collect();
     assert_eq!(keys, vec![b"d9".to_vec(), b"d8".to_vec(), b"d7".to_vec()], "cheapest first");
     assert!(hits[0].score < hits[2].score, "scores are still reported, just not ranked by");
 
-    let desc =
-        QueryOpts { sort: Some(Sort { field: 0, desc: true, key: &key }), ..Default::default() };
+    let desc = QueryOpts {
+        sort: Some(Sort { field: 0, order: crate::SortOrder::Desc, key: &key }),
+        ..Default::default()
+    };
     let keys: Vec<Vec<u8>> =
         s.matches_query_with(b"rust", 3, desc).into_iter().map(|h| h.key).collect();
     assert_eq!(keys, vec![b"d0".to_vec(), b"d1".to_vec(), b"d2".to_vec()], "priciest first");
@@ -1097,16 +1101,16 @@ fn documents_without_a_value_sort_last_in_both_directions() {
         let n: u32 = std::str::from_utf8(raw).ok()?.parse().ok()?;
         Some(n.to_be_bytes().to_vec())
     };
-    for desc in [false, true] {
+    for order in [crate::SortOrder::Asc, crate::SortOrder::Desc] {
         let opts =
-            QueryOpts { sort: Some(Sort { field: 0, desc, key: &key }), ..Default::default() };
+            QueryOpts { sort: Some(Sort { field: 0, order, key: &key }), ..Default::default() };
         let all: Vec<Vec<u8>> =
             s.matches_query_with(b"rust", 12, opts).into_iter().map(|h| h.key).collect();
         assert_eq!(all.len(), 12);
         let tail = &all[10..];
         assert!(
             tail.contains(&b"none1".to_vec()) && tail.contains(&b"none2".to_vec()),
-            "missing and uncoercible sort last (desc={desc}): {all:?}"
+            "missing and uncoercible sort last ({order:?}): {all:?}"
         );
     }
 }
@@ -1122,7 +1126,7 @@ fn sorting_composes_with_a_filter() {
     let f = [Filter { field: 0, test: &cheap }];
     let opts = QueryOpts {
         filter: &f,
-        sort: Some(Sort { field: 0, desc: false, key: &key }),
+        sort: Some(Sort { field: 0, order: crate::SortOrder::Asc, key: &key }),
         ..Default::default()
     };
     let keys: Vec<Vec<u8>> =
@@ -1201,7 +1205,7 @@ fn distinct_composes_with_sort_and_filter() {
     // it — a1, b1, c1.
     let opts = QueryOpts {
         distinct: Some(Distinct { field: 0, key: &key }),
-        sort: Some(Sort { field: 0, desc: false, key: &okey }),
+        sort: Some(Sort { field: 0, order: crate::SortOrder::Asc, key: &okey }),
         ..Default::default()
     };
     let hits: Vec<Vec<u8>> =

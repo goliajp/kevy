@@ -5,6 +5,7 @@
 //! production traffic takes.
 
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,33 +20,6 @@ use kevy_embedded::{Config, Store};
 /// first `Runtime` is still mid-binding).
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Stand-in for the `tempfile` crate (workspace 0-dep rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 use kevy_testnet::free_port_block;
 
 struct Server {
@@ -53,7 +27,7 @@ struct Server {
     replication_base: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl Server {
@@ -73,7 +47,7 @@ impl Server {
         let base = free_port_block(2);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-embed-replica-e2e");
+        let dir = kevy_tmpdir::TmpDir::new("embed-replica-e2e");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
@@ -83,7 +57,8 @@ impl Server {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 .with_replication_listener(replication_base)
                 .with_replication_security_opt(security);
             let _ = rt.run(stop_t);
@@ -267,8 +242,7 @@ fn embed_replica_rejects_local_writes_with_readonly() {
     let replica = Store::open(cfg).unwrap();
 
     let err = replica.set(b"k", b"v").expect_err("write should be refused");
-    let msg = err.to_string();
-    assert!(msg.contains("READONLY"), "expected READONLY error, got: {msg}");
+    assert!(matches!(err, kevy_embedded::KevyError::ReadOnly), "expected ReadOnly, got: {err}");
 
     // Reads still work.
     assert_eq!(replica.get(b"k").unwrap(), None);
@@ -334,6 +308,44 @@ fn a_sharded_embed_replica_reads_every_replicated_key() {
         wait_for(Duration::from_secs(5), all),
         "a sharded replica lost keys to the wrong shard"
     );
+    drop(replica);
+    server.shutdown();
+}
+
+/// A server primary's catalog commands reach an embedded replica: the
+/// one made before it connected and the one after.
+#[cfg(feature = "index")]
+#[test]
+fn a_server_primarys_catalog_reaches_the_embed_replica() {
+    let server = Server::start();
+    server.cmd(&[b"HSET", b"user:1", b"age", b"30"]);
+    let create = |name: &[u8]| {
+        let fields: [&[u8]; 11] = [
+            b"IDX.CREATE",
+            name,
+            b"ON",
+            b"PREFIX",
+            b"user:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ];
+        server.cmd(&fields);
+    };
+    create(b"before");
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    create(b"after");
+    let names = || {
+        let mut names: Vec<Vec<u8>> = replica.idx_list().into_iter().map(|i| i.0).collect();
+        names.sort();
+        names
+    };
+    let both = || names() == [b"after".to_vec(), b"before".to_vec()];
+    assert!(wait_for(Duration::from_secs(5), both), "the replica holds {:?}", names());
     drop(replica);
     server.shutdown();
 }
@@ -498,15 +510,14 @@ fn secure_embed_replica_of_secure_server(trusted: [u8; 32]) -> (Server, Store) {
     use kevy_embedded::{Keypair, LinkKeys};
     let primary = Keypair::from_secret([1; 32]);
     let replica = Keypair::from_secret([2; 32]);
-    let server = Server::start_with(Some(kevy_rt::ReplicationSecurity {
-        local: primary,
-        replica_keys: vec![replica.public()],
-    }));
+    let server = Server::start_with(Some(
+        kevy_rt::ReplicationSecurity::new(primary).with_replica_keys(vec![replica.public()]),
+    ));
     let cfg = Config::default()
         .without_aof()
         .with_replica_upstream(format!("127.0.0.1:{}", server.replication_base))
         .with_replica_reconnect(Duration::from_millis(50), Duration::from_millis(200))
-        .with_replica_security(LinkKeys { local: replica, peers: vec![trusted] });
+        .with_replica_security(LinkKeys::new(replica).with_peers(vec![trusted]));
     (server, Store::open(cfg).unwrap())
 }
 

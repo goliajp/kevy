@@ -175,7 +175,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 481 KB, persists to OPFS
+# a browser tab — 619 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -494,7 +494,7 @@ PAGES["choose"] = {
                 ["One program owns the data", "Embedded",
                  "No socket, no second process, nothing to serialise. A function call, not a round trip."],
                 ["The data belongs to the user's device", "Browser",
-                 "481 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."],
+                 "619 KB of WebAssembly. Real TTLs, pub/sub and streams, persisted to the browser's filesystem. Works offline."],
                 ["Code runs at the edge, per request", "Edge",
                  "Nothing to warm up, no connection to open. The store is in the isolate with your code."],
                 ["A device with no OS and no heap", "Bare metal",
@@ -521,7 +521,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "What happens when the machine dies?",
-                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most one tick (~100 ms) of writes to a hard kill and about a second to a power loss; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
+                    "a": "Every write goes to an append-only log first, and the log replays on boot. A hard kill costs an embedded store none of the writes that returned, and a server at most its last reactor iteration; with the default <code>everysec</code> fsync a power loss costs about a second. Set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
                 },
                 {
                     "q": "Can I survive a machine failure?",
@@ -529,7 +529,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "Is there authentication?",
-                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
+                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. Since 7.0 kevy can encrypt its own links, off unless configured: between nodes, both ends proven by their keys, and on a second client port for the Rust clients that can be limited to the client keys you list. <a href=\"~/docs/encrypted-links/\">The encrypted-links guide</a> says what that covers and what it costs. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
                 },
                 {
                     "q": "What if I outgrow it, or just change my mind?",
@@ -1307,7 +1307,7 @@ PAGES["use/embedded"] = {
             "h1": "Put the store<br>inside the thing",
             "lede": (
                 "No server, no socket, no network. The engine is a struct you call, a "
-                "481 KB WebAssembly module, or a no_std library on a chip with no "
+                "619 KB WebAssembly module, or a no_std library on a chip with no "
                 "operating system — <b>and it is the same engine, with the same "
                 "commands, in all three.</b>"
             ),
@@ -1365,7 +1365,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "In a browser tab",
-            "goal": "481 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
+            "goal": "619 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
             "cost_t": "Cost & limits",
             "items": [
                 {
@@ -1383,6 +1383,13 @@ db.pttl("cart:u881");       // the engine expires it, not your code""",
                 {
                     "do": "Hear the other tabs",
                     "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+                {
+                    "do": "Keep an outbox that survives a reload",
+                    "code": """db.cmd("XGROUP", "CREATE", "outbox", "sync", "$", "MKSTREAM");  // once
+db.cmd("XADD", "outbox", "*", "op", "save", "cart", "u881");
+db.cmd("XREADGROUP", "GROUP", "sync", "tab-1", "STREAMS", "outbox", ">");
+// no BLOCK in a tab: read on a timer, XACK once it is sent""",
                 },
             ],
             "cost": (
@@ -1499,8 +1506,8 @@ PAGES["benchmarks"] = {
             "intro": "What you actually ship to a tab.",
             "head": ["", "Size", ""],
             "rows": [
-                ["kevy.wasm", "1442 KB", "the engine, uncompressed"],
-                ["gzipped", "481 KB", "what crosses the wire"],
+                ["kevy.wasm", "1811 KB", "the engine, uncompressed"],
+                ["gzipped", "619 KB", "what crosses the wire"],
                 ["Cold start", "&lt; 20 ms", "compile and instantiate, warm cache"],
             ],
             "note": (
@@ -1515,7 +1522,7 @@ PAGES["benchmarks"] = {
             "t": "code",
             "h2": "Reproduce it",
             "caption": "Two scripts. Everything on this page comes out of them.",
-            "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh",
+            "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD",
         },
     ],
 }

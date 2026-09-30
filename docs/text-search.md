@@ -46,7 +46,7 @@ Supporting verbs work on text indexes like on every other kind:
 - `IDX.VERIFY posts` / `IDX.LIST` — entries / bytes / postings /
   token statistics, live.
 - `IDX.DROP posts` — drop the declaration (catalog mutation,
-  sidecar-persisted).
+  recorded in the log and replicated).
 
 `MATCH` accepts `LIMIT` (≤ 1000) and `FIELDS`; there is no `CURSOR`
 form (see "Matching and ranking" for why).

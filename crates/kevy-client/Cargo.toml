@@ -29,16 +29,21 @@ exclude = ["tests/wrap_parity.rs", "tests/subscribe.rs", "tests/transaction.rs"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "6.4.0" }
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "6.4.0" }
-kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "7.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "7.0.0" }
+kevy-hash = { path = "../kevy-hash", version = "7.0.0" }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "7.0.0" }
 # tests/wrap_parity.rs boots an in-process kevy-rt reactor with the
 # full kevy command set (same harness as crates/kevy/tests/*). Path-
 # only (no version) so publish strips them — mirrors kevy's own
 # dev-dependency on kevy-client; the normal-dep graph stays acyclic.
-kevy = { path = "../kevy", version = "6.4.0" }
-kevy-rt = { path = "../kevy-rt", version = "6.4.0" }
+kevy = { path = "../kevy", version = "7.0.0" }
+kevy-rt = { path = "../kevy-rt", version = "7.0.0" }
+# the documentation's in-process servers: a cluster needs the server's
+# config, and an encrypted port stand-in runs the Noise responder
+kevy-config = { path = "../kevy-config", version = "7.0.0" }
+kevy-noise = { path = "../kevy-noise", version = "7.0.0" }

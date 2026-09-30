@@ -20,11 +20,10 @@ import type { Lang } from './i18n'
 // memory — writing `IDX.CREATE … ON HASH PREFIX … FIELDS city` from
 // memory is exactly how the broken chip got there.
 //
-// The engine reaches 112 of the 191 verbs the server answers: the
-// embedded surface is the ESTORE_OPS manifest, so streams, transactions,
-// geo and scripting are not in it — not omitted from this build, absent
-// from the embedded API. What is here is the whole of what a browser can
-// ask.
+// The engine here is the embedded engine with every feature a browser can
+// host, streams and geo included. Transactions and scripting are outside
+// the embedded surface on every platform, and a read that asks to BLOCK is
+// refused (a tab has one thread to park), so no scenario uses them.
 
 export type Scenario = {
   id: string
@@ -177,6 +176,44 @@ export const SCENARIOS: Scenario[] = [
       'HSET p:2 id 2 name bob age 41',
       'TABLE.LIST',
       'IDX.LIST',
+    ],
+  },
+  {
+    id: 'stream',
+    label: { en: 'Streams', zh: 'Stream', ja: 'ストリーム' },
+    blurb: {
+      en: 'A stream with a consumer group: two workers share the entries, acknowledge what they finish, and one takes over what the other left.',
+      zh: '带消费者组的 stream：两个 worker 分摊条目，做完的确认掉，一个接手另一个没做完的。',
+      ja: 'コンシューマグループ付きのストリーム——二つのワーカーがエントリを分け合い、終えたものを確認し、片方が残したものをもう片方が引き取る。',
+    },
+    // Explicit ids so XACK can name one; `XADD orders * …` works the same.
+    // No BLOCK: a tab has one thread, so a blocking read answers an error.
+    lines: [
+      'XGROUP CREATE orders shipping $ MKSTREAM',
+      'XADD orders 1-0 sku A-1 qty 2',
+      'XADD orders 2-0 sku B-7 qty 1',
+      'XADD orders 3-0 sku C-3 qty 5',
+      'XREADGROUP GROUP shipping worker-1 COUNT 2 STREAMS orders >',
+      'XACK orders shipping 1-0',
+      'XPENDING orders shipping',
+      'XAUTOCLAIM orders shipping worker-2 0 0 COUNT 1',
+      'XREADGROUP GROUP shipping worker-2 STREAMS orders >',
+      'XPENDING orders shipping - + 10',
+    ],
+  },
+  {
+    id: 'geo',
+    label: { en: 'Geo', zh: '地理位置', ja: '位置情報' },
+    blurb: {
+      en: 'Places by longitude and latitude: the distance between two, and everything within a radius.',
+      zh: '按经纬度存地点：两点之间的距离，以及一个半径内的所有地点。',
+      ja: '経度と緯度で場所を持つ——二点間の距離と、半径内のすべての場所。',
+    },
+    lines: [
+      'GEOADD shops 139.7671 35.6812 tokyo-stn 139.7006 35.6896 shinjuku 135.4959 34.7025 osaka-umeda',
+      'GEODIST shops tokyo-stn shinjuku km',
+      'GEOSEARCH shops FROMLONLAT 139.75 35.68 BYRADIUS 10 km ASC WITHDIST',
+      'GEOPOS shops osaka-umeda',
     ],
   },
   {

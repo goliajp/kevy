@@ -2,9 +2,11 @@
 //! [`kevy::verb_meta::VERB_META`], the same table COMMAND DOCS and
 //! the MCP schema answer from. One source of truth, three faces.
 //!
-//!   gen_docs <repo-root>          — (re)write both files
-//!   gen_docs <repo-root> --check  — exit 1 if either file is stale
-//!                                    (the aigate phase-2 CI clamp)
+//! ```text
+//! gen_docs <repo-root>          — (re)write both files
+//! gen_docs <repo-root> --check  — exit 1 if either file is stale
+//!                                  (the aigate phase-2 CI clamp)
+//! ```
 
 // `write!` into a `String` returns a `Result` because `fmt::Write` must,
 // not because it can fail: `String`'s impl is infallible. Discarding it

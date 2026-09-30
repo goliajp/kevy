@@ -104,7 +104,7 @@ fn parse_compose(s: &Store, argv: &[Vec<u8>]) -> Option<ComposeParsed> {
 
 fn parse_sub(s: &Store, argv: &[Vec<u8>], i: usize) -> Option<(Sub, usize)> {
     let name = argv.get(i)?.clone();
-    let ty = spec_of(s, &name)?.ty;
+    let ty = spec_of(s, &name)?.ty();
     let (min, max, next) = parse_bounds(ty, argv.get(i + 1)?, argv, i + 2)?;
     Some(((name, min, max), next))
 }
@@ -137,7 +137,7 @@ fn hybrid_impl(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let Some(spec) = spec_of(s, &q.ann_idx) else {
         return no_such_index(out, &q.ann_idx);
     };
-    let dim = spec.ann.map_or(0, |a| a.dim) as usize;
+    let dim = spec.ann().map_or(0, |a| a.dim) as usize;
     let Some(vec) = kevy_vector::parse_vector(&q.vec, dim) else {
         return badargs(out, "IDX.QUERY", &q.ann_idx);
     };

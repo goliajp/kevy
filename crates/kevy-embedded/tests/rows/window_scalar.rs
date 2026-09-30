@@ -23,25 +23,24 @@ fn run(s: &Store, argv: &[&[u8]]) -> Vec<u8> {
 use kevy_index::{IndexKind, IndexValue, TableIndex, TableSpec, ValType, WindowSpec};
 
 fn table(name: &[u8], windowed: bool) -> TableSpec {
-    TableSpec {
-        name: name.to_vec(),
-        prefix: b"ev:".to_vec(),
-        pk: b"id".to_vec(),
-        columns: vec![
+    {
+        let mut t = TableSpec::default();
+        t.name = name.to_vec();
+        t.prefix = b"ev:".to_vec();
+        t.pk = b"id".to_vec();
+        t.columns = vec![
             (b"id".to_vec(), ValType::Str),
             (b"at".to_vec(), ValType::I64),
             (b"prio".to_vec(), ValType::I64),
             (b"tag".to_vec(), ValType::Str),
-        ],
-        indexes: vec![TableIndex {
-            column: b"at".to_vec(),
-            kind: IndexKind::Range,
-            values: vec![b"at".to_vec(), b"prio".to_vec(), b"tag".to_vec()],
-        }],
-        orderpaths: vec![],
-        window: windowed.then_some(WindowSpec { column: b"at".to_vec(), span: 100, bucket: 10 }),
-        autodeclare: 0,
-        auto_added: vec![],
+        ];
+        t.indexes = vec![{
+            let mut ix = TableIndex::new(b"at".to_vec(), IndexKind::Range);
+            ix.values = vec![b"at".to_vec(), b"prio".to_vec(), b"tag".to_vec()];
+            ix
+        }];
+        t.window = windowed.then_some(WindowSpec::new(b"at".to_vec(), 100, 10));
+        t
     }
 }
 
@@ -96,13 +95,15 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
         std::thread::sleep(Duration::from_millis(25));
     }
 
-    // Memory really shrank: the windowed index's hot tree holds only
-    // the in-window entries, the control still holds all 30.
+    // The windowed index's hot tree holds only the in-window entries, the
+    // control still holds all 30. Bytes are whole leaves and 30 rows fit in
+    // one, so here they can only tie; a cut freeing whole leaves is
+    // asserted where the tree lives
     let ev = s.idx_stats(b"ev.at").expect("stats ev");
     let ctl = s.idx_stats(b"ctl.at").expect("stats ctl");
     assert_eq!(ctl.entries, 30);
     assert!(ev.entries < 30, "nothing left the hot tree: {}", ev.entries);
-    assert!(ev.approx_bytes < ctl.approx_bytes);
+    assert!(ev.approx_bytes <= ctl.approx_bytes);
 
     let compare = |tag: &str| {
         for (lo, hi) in [(-1000, 1000), (0, 100), (150, 250), (200, 300), (400, 500), (50, 50)] {
@@ -119,21 +120,25 @@ fn embedded_window_slides_and_stays_semantically_equivalent() {
         let filter_tag = [ValueFilter::Eq { field: b"tag", value: b"beta" }];
         let facet_tag = [b"tag".to_vec()];
         let shapes: &[(&str, ScalarQueryOpts)] = &[
-            ("filter-prio", ScalarQueryOpts { filters: &filter_prio, ..Default::default() }),
-            ("filter-tag", ScalarQueryOpts { filters: &filter_tag, ..Default::default() }),
-            ("sort-asc", ScalarQueryOpts { sort: Some((b"prio", false)), ..Default::default() }),
-            ("sort-desc", ScalarQueryOpts { sort: Some((b"prio", true)), ..Default::default() }),
-            ("distinct", ScalarQueryOpts { distinct: Some(b"tag"), ..Default::default() }),
-            ("facet", ScalarQueryOpts { facets: &facet_tag, ..Default::default() }),
-            ("offset", ScalarQueryOpts { offset: 3, ..Default::default() }),
+            ("filter-prio", ScalarQueryOpts::default().with_filters(&filter_prio)),
+            ("filter-tag", ScalarQueryOpts::default().with_filters(&filter_tag)),
+            (
+                "sort-asc",
+                ScalarQueryOpts::default().with_sort(b"prio", kevy_embedded::SortOrder::Asc),
+            ),
+            (
+                "sort-desc",
+                ScalarQueryOpts::default().with_sort(b"prio", kevy_embedded::SortOrder::Desc),
+            ),
+            ("distinct", ScalarQueryOpts::default().with_distinct(b"tag")),
+            ("facet", ScalarQueryOpts::default().with_facets(&facet_tag)),
+            ("offset", ScalarQueryOpts::default().with_offset(3)),
             (
                 "combo",
-                ScalarQueryOpts {
-                    filters: &filter_prio,
-                    sort: Some((b"prio", true)),
-                    offset: 1,
-                    ..Default::default()
-                },
+                ScalarQueryOpts::default()
+                    .with_filters(&filter_prio)
+                    .with_sort(b"prio", kevy_embedded::SortOrder::Desc)
+                    .with_offset(1),
             ),
         ];
         for (label, opts) in shapes {

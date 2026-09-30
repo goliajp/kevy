@@ -23,6 +23,9 @@ NEW=$(cd "$(dirname "$NEW")" && pwd)/$(basename "$NEW")
 cd "$(dirname "$0")/.."
 CLI=target/release/kevy-cli
 [ -x "$CLI" ] || CLI=target/debug/kevy-cli
+# without a CLI every probe fails and the first one reads as a server that
+# never came up
+[ -x "$CLI" ] || { echo "upgrade-interop: REFUSED — no kevy-cli in target/release or target/debug (cargo build --release -p kevy-cli)"; exit 2; }
 command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 
 # Ports clear of every other gate script's range (see availgate's

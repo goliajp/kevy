@@ -26,7 +26,7 @@ use kevy_noise::Keypair;
 /// assert!(kevy::secure::keygen(&path).is_err(), "never overwrites a key");
 /// std::fs::remove_file(&path).unwrap();
 /// ```
-pub fn keygen(path: &Path) -> io::Result<[u8; 32]> {
+pub fn keygen(path: impl AsRef<Path>) -> io::Result<[u8; 32]> {
     let mut secret = [0u8; 32];
     kevy_sys::fill_random(&mut secret)?;
     let mut opts = std::fs::OpenOptions::new();
@@ -176,17 +176,15 @@ impl ReplLinks {
         let mut last = kevy_replicate::replica::ReplicaError::HandshakeRejected;
         for i in 0..n {
             let idx = (first + i) % n;
-            let sec = kevy_replicate::replica::ReplicaSecurity {
-                local: self.local.clone(),
-                primary_key: self.primaries[idx],
-            };
-            match kevy_replicate::replica::ReplicaClient::connect_secure(
+            let sec = kevy_replicate::replica::ReplicaSecurity::new(
+                self.local.clone(),
+                self.primaries[idx],
+            );
+            match kevy_replicate::replica::ReplicaClient::connect_with(
                 addr,
-                replica_id,
-                generation,
-                from_offset,
-                std::time::Duration::from_secs(5),
-                &sec,
+                &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                    .with_from(kevy_replicate::feed::FeedPosition::new(generation, from_offset))
+                    .with_security(sec),
             ) {
                 Ok(c) => {
                     self.last_good.store(idx, Ordering::Relaxed);
@@ -232,7 +230,7 @@ mod tests {
         let store = kevy_embedded::Store::open(
             kevy_embedded::Config::default()
                 .with_embed_writer("127.0.0.1:0")
-                .with_writer_security(kevy_embedded::LinkKeys { local, peers: Vec::new() }),
+                .with_writer_security(kevy_embedded::LinkKeys::new(local)),
         )
         .unwrap();
         let port = store.writer_addr().unwrap().port();

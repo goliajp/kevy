@@ -14,6 +14,7 @@
 
 use kevy_resp::{Argv, ArgvView};
 use kevy_rt::{BlockHint, BlockKind, Route, Store, XGroupCtx};
+use kevy_store::AckMode;
 
 /// Classify an uppercased verb into its blocking-command hint. The runtime
 /// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
@@ -208,12 +209,8 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
             b"BLOCK" => return Route::Local,
             b"COUNT" => {
                 // Malformed COUNT → route single so cmd_xread emits the error.
-                match args
-                    .get(i + 1)
-                    .and_then(|b| std::str::from_utf8(b).ok())
-                    .and_then(|s| s.parse::<usize>().ok())
-                {
-                    Some(c) => count = Some(c),
+                match args.get(i + 1).and_then(stream_count) {
+                    Some(c) => count = c,
                     None => return Route::Single(1),
                 }
                 i = i.saturating_add(2);
@@ -223,6 +220,17 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
         }
     }
     Route::Local
+}
+
+/// A `COUNT` as the stream commands read it: `None` when it is not an
+/// integer they take, `Some(None)` for zero or less (read everything).
+fn stream_count(b: &[u8]) -> Option<Option<usize>> {
+    let digits = b.strip_prefix(b"-").unwrap_or(b);
+    let canonical = !digits.is_empty()
+        && digits.iter().all(u8::is_ascii_digit)
+        && (digits[0] != b'0' || b == b"0");
+    let n: i64 = std::str::from_utf8(b).ok().filter(|_| canonical)?.parse().ok()?;
+    Some(usize::try_from(n).ok().filter(|n| *n > 0))
 }
 
 /// Decide the route for an `XREAD … STREAMS k1 … kn id1 … idn` tail (start =
@@ -276,19 +284,15 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                 if i + 1 >= args.len() {
                     return Route::Local; // cmd_xreadgroup emits the error
                 }
-                let group =
-                    XGroupCtx { group: args[2].to_vec(), consumer: args[3].to_vec(), noack };
+                let ack = if noack { AckMode::NoAck } else { AckMode::Pending };
+                let group = XGroupCtx::new(args[2].to_vec(), args[3].to_vec()).with_ack(ack);
                 return xread_streams_route(args, i + 1, count, Some(group));
             }
             b"COUNT" => {
                 // Malformed COUNT → single-key route so the command body
                 // emits the precise syntax error.
-                match args
-                    .get(i + 1)
-                    .and_then(|b| std::str::from_utf8(b).ok())
-                    .and_then(|s| s.parse::<usize>().ok())
-                {
-                    Some(c) => count = Some(c),
+                match args.get(i + 1).and_then(stream_count) {
+                    Some(c) => count = c,
                     None => return Route::Single(1),
                 }
                 i = i.saturating_add(2);

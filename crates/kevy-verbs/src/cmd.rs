@@ -10,6 +10,11 @@
 //! assert_eq!(out, b"+OK\r\n");
 //! ```
 
+#[cfg(feature = "streams-geo")]
+pub use crate::stream::xinfo;
+#[cfg(feature = "streams-geo")]
+pub use crate::stream::xreadgroup_refusal;
+pub use crate::stream_resp3::stream_resp3;
 pub use crate::strings::set;
 pub use crate::zset::parse_zadd_flags;
 pub use crate::zset_range::{zrange, zrangebyscore};

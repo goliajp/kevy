@@ -1,5 +1,7 @@
 //! Client libraries, RESP3, pub/sub, Lua, encrypted clients, sockets and slowlog.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

@@ -1,7 +1,7 @@
 //! VIEW.* origin-side reduce: merge per-shard chunks into RESP
 //! (split from [`crate::cmd_view`] under the 500-LOC house rule).
 
-use kevy_index::{IndexValue, Tree, ViewMode};
+use kevy_index::{IndexValue, Tree};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 use kevy_rt::ExtensionReduced;
 
@@ -65,7 +65,7 @@ fn reduce_query(
         return ExtensionReduced::Reply(out);
     };
     let spec = catalogs.view().and_then(|c| c.get(&q.name).cloned());
-    let desc = spec.as_ref().is_some_and(|s| s.desc);
+    let desc = spec.as_ref().is_some_and(|s| s.order == kevy_index::SortOrder::Desc);
     let mut all = collect_chunk_rows(&chunks);
     all.sort();
     if desc {
@@ -211,13 +211,7 @@ fn render_view_list(catalogs: &CatalogState) -> Vec<u8> {
             encode_bulk(&mut out, b"name");
             encode_bulk(&mut out, &spec.name);
             encode_bulk(&mut out, b"mode");
-            encode_bulk(
-                &mut out,
-                match spec.mode {
-                    ViewMode::Virtual => b"virtual" as &[u8],
-                    ViewMode::Materialized { .. } => b"materialized",
-                },
-            );
+            encode_bulk(&mut out, spec.mode.name().as_bytes());
             encode_bulk(&mut out, b"order_by");
             encode_bulk(&mut out, &spec.order_by);
             encode_bulk(&mut out, b"leaves");

@@ -104,6 +104,8 @@ fuzz_target!(|data: &[u8]| {
         Err(e @ ConfigError::IoOpen { .. }) => {
             panic!("from_toml_str does no file I/O but returned {e}");
         }
+        // a new refusal kind needs its own invariant here before it can pass
+        Err(e) => panic!("an error kind this target holds no invariant for: {e}"),
     }
     let _ = kevy_config::parse_size(&text);
 });

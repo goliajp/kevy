@@ -7,6 +7,8 @@
 //! Run: `cargo run -p kevy-embedded --example bench_embed_mt --release`
 //! (pin to disjoint cores, e.g. `taskset -c 0-9`). `KEVY_BENCH_N` = ops/thread.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_embedded::{Config, Store};
 use std::thread;
 use std::time::Instant;

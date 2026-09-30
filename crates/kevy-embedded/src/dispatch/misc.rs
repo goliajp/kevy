@@ -76,12 +76,12 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "feed.tail");
             } else {
                 match s.changes_tail() {
-                    Ok((g, o)) => {
+                    Ok(tail) => {
                         encode_array_len(out, 2);
-                        encode_integer(out, g as i64);
-                        encode_integer(out, o as i64);
+                        encode_integer(out, tail.generation as i64);
+                        encode_integer(out, tail.offset as i64);
                     }
-                    Err(e) => encode_error(out, &format!("ERR feed: {e:?}")),
+                    Err(e) => encode_error(out, &e.wire_text()),
                 }
             }
         }
@@ -114,11 +114,12 @@ fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         }
         prefixes = argv[5..].iter().map(Vec::as_slice).collect();
     }
-    match s.changes_since(g as u64, o as u64, limit.clamp(1, 10_000) as usize, &prefixes) {
+    let from = crate::FeedPosition::new(g as u64, o as u64);
+    match s.changes_since(from, limit.clamp(1, 10_000) as usize, &prefixes) {
         Ok(batch) => {
             encode_array_len(out, 3);
-            encode_integer(out, batch.next.0 as i64);
-            encode_integer(out, batch.next.1 as i64);
+            encode_integer(out, batch.next.generation as i64);
+            encode_integer(out, batch.next.offset as i64);
             encode_array_len(out, batch.changes.len() as i64);
             for f in &batch.changes {
                 encode_array_len(out, f.argv.len() as i64);
@@ -127,6 +128,6 @@ fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
                 }
             }
         }
-        Err(e) => encode_error(out, &format!("ERR feed: {e:?}")),
+        Err(e) => encode_error(out, &e.wire_text()),
     }
 }

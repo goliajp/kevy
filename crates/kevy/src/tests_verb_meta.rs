@@ -14,7 +14,8 @@ use crate::verb_meta::{VERB_META, verb_meta};
 /// Verbs dispatch reaches that are deliberately NOT documented:
 /// internal fan-out continuations and internal record verbs (not
 /// wire-facing top-level verbs).
-const UNDOCUMENTED_INTERNAL: &[&str] = &["AGG.FETCH", "VIEW.HYDRATE", "XINTERNAL.CONSUMERSEEN"];
+const UNDOCUMENTED_INTERNAL: &[&str] =
+    &["AGG.FETCH", "VIEW.HYDRATE", "XINTERNAL.CATALOG", "XINTERNAL.CONSUMERSEEN"];
 
 #[test]
 fn op_table_server_verbs_all_documented() {
@@ -107,33 +108,16 @@ fn route_matches_resolve_route_for_every_verb() {
     }
 }
 
-/// The DOC face and the AOF/propagation gate answer different questions,
-/// and for these verbs they answer differently. `OP_TABLE.write` asks
-/// "does this verb itself produce the replayable data effect?";
-/// `VERB_META.flags` asks what `COMMAND DOCS` should tell a client — and
-/// a client uses that to decide what never to send to a read-only
-/// replica. Marking these `readonly` in the doc face would be a lie to
-/// every client that routes on it.
+/// Verbs whose `write` flag the doc face (`COMMAND DOCS`, which a client
+/// reads to decide what never to send to a read-only replica) and the
+/// command table (what the server records and refuses on a replica) give
+/// differently, with the reason. There are none: a client that routes on
+/// the doc face sends a replica only what it serves.
 ///
 /// The ledger is EXACT, in the manner of `ops_table::KNOWN_GAPS`: a new
 /// divergence fails here by name, and so does removing one that still
-/// exists. Reasons are the ones OP_TABLE states at each row.
-const WRITE_FLAG_DIVERGES: &[(&str, &str)] = &[
-    ("BLPOP", "the blocked-serve path executes and AOF-logs the effect as a plain LPOP"),
-    ("BRPOP", "the blocked-serve path executes and AOF-logs the effect as a plain RPOP"),
-    ("RENAME", "routed at the runtime Op level (Route::Rename -> exec_op synthesis)"),
-    ("RENAMENX", "routed at the runtime Op level (Route::Rename -> exec_op synthesis)"),
-    ("IDX.CREATE", "catalog mutation, sidecar-persisted; indexes are derived state"),
-    ("IDX.DROP", "catalog mutation, sidecar-persisted; indexes are derived state"),
-    ("IDX.REBUILD", "catalog mutation, sidecar-persisted; indexes are derived state"),
-    ("VIEW.CREATE", "catalog mutation, sidecar-persisted; views are derived state"),
-    ("VIEW.DROP", "catalog mutation, sidecar-persisted; views are derived state"),
-    ("VIEW.REBUILD", "catalog mutation, sidecar-persisted; views are derived state"),
-    ("TABLE.DECLARE", "catalog op, sidecar-persisted - same reasoning as IDX.*"),
-    ("TABLE.ENSURE", "catalog op, sidecar-persisted - same reasoning as IDX.*"),
-    ("TABLE.REPLACE", "catalog op, sidecar-persisted - same reasoning as IDX.*"),
-    ("TABLE.DROP", "catalog op, sidecar-persisted - same reasoning as IDX.*"),
-];
+/// exists.
+const WRITE_FLAG_DIVERGES: &[(&str, &str)] = &[];
 
 /// Every SERVER verb's `write` flag agrees between the two registries,
 /// except the ones registered above — checked in both directions, so the
@@ -142,7 +126,7 @@ const WRITE_FLAG_DIVERGES: &[(&str, &str)] = &[
 /// Nothing held this before: the sibling test above asks whether every
 /// OP_TABLE verb HAS a doc row, never whether the two rows AGREE. The
 /// module header meanwhile claimed the doc face mirrors OP_TABLE's write
-/// column literally, which all fourteen of these have never done.
+/// column literally, which none of these has ever done.
 #[test]
 fn the_write_flag_diverges_only_where_registered() {
     let registered: HashSet<&str> = WRITE_FLAG_DIVERGES.iter().map(|(n, _)| *n).collect();

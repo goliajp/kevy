@@ -25,12 +25,55 @@
 #[non_exhaustive]
 pub struct CompressionStats {
     /// Value bytes as the caller handed them in, before encoding.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-raw-bytes");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// v.append(b"a", &[b'x'; 300])?;
+    /// v.append(b"b", b"hello")?;
+    /// assert_eq!(v.compression().raw_bytes, 305);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub raw_bytes: u64,
     /// Encoded payload bytes on disk, frame headers excluded.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-payload-bytes");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// let r = v.append(b"k", &[b'x'; 300])?;
+    /// let c = v.compression();
+    /// assert!(c.payload_bytes < c.raw_bytes, "a run compresses");
+    /// // the body is the 4-byte key length, the key, then the frame
+    /// assert_eq!(u64::from(r.len), 4 + 1 + c.frame_header_bytes + c.payload_bytes);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub payload_bytes: u64,
     /// Frame headers on disk: a tag byte and the LEB128 original length.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-frame-header-bytes");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1 << 20)?;
+    /// v.append(b"a", &[0; 100])?;
+    /// assert_eq!(v.compression().frame_header_bytes, 1 + 1);
+    /// // 200 needs two LEB128 bytes
+    /// v.append(b"b", &[0; 200])?;
+    /// assert_eq!(v.compression().frame_header_bytes, 2 + 1 + 2);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub frame_header_bytes: u64,
     /// Dictionary bytes held in memory, one dictionary per file.
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-dict-bytes");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1)?;
+    /// v.append(b"a", b"a value that the next file's dictionary learns from")?;
+    /// // the first file has no predecessor to learn from
+    /// assert_eq!(v.compression().dict_bytes, 0);
+    /// // rotation trains the new file's dictionary on the old file's values
+    /// v.append(b"b", b"another value")?;
+    /// assert!(v.compression().dict_bytes > 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub dict_bytes: u64,
 }
 

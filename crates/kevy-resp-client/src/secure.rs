@@ -16,12 +16,14 @@ const TAG: usize = 16;
 
 /// A TCP stream to a kevy encrypted client port, sealed both ways.
 ///
-/// ```no_run
+/// ```
 /// use std::io::{Read, Write};
 /// use kevy_resp_client::SecureStream;
+/// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+/// # let (port, key) = doc::serve_secure();
 ///
-/// let server_key = [0xab; 32]; // printed by `kevy keygen` on the server
-/// let mut s = SecureStream::connect("127.0.0.1", 6404, server_key, None)?;
+/// let server_key = key; // printed by `kevy keygen` on the server
+/// let mut s = SecureStream::connect("127.0.0.1", port, server_key, None)?;
 /// s.write_all(b"*1\r\n$4\r\nPING\r\n")?;
 /// let mut reply = [0u8; 7];
 /// s.read_exact(&mut reply)?;
@@ -69,10 +71,13 @@ impl SecureStream {
     /// server lists `client_keys`. Without one, a fresh key pair is drawn
     /// for this connection: still encrypted, just not a listed identity.
     ///
-    /// ```no_run
+    /// ```
     /// # use kevy_resp_client::SecureStream;
-    /// let refused = SecureStream::connect("127.0.0.1", 6404, [0; 32], None);
-    /// assert!(refused.is_err()); // no server holds that key
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// assert!(SecureStream::connect("127.0.0.1", port, server_key, None).is_ok());
+    /// let refused = SecureStream::connect("127.0.0.1", port, [0; 32], None);
+    /// assert!(refused.is_err()); // this server does not hold that key
     /// ```
     pub fn connect(
         host: &str,
@@ -88,10 +93,14 @@ impl SecureStream {
     /// [`Self::connect`] over a socket the caller has already opened, for
     /// callers that dial with their own timeout or address choice.
     ///
-    /// ```no_run
+    /// ```
     /// # use kevy_resp_client::SecureStream;
-    /// let tcp = std::net::TcpStream::connect("127.0.0.1:6404")?;
-    /// let s = SecureStream::handshake(tcp, [0xab; 32], None)?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// let tcp = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    /// tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    /// let s = SecureStream::handshake(tcp, server_key, None)?;
+    /// assert_eq!(s.socket().peer_addr()?.port(), port);
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn handshake(
@@ -134,10 +143,14 @@ impl SecureStream {
 
     /// The underlying socket, for timeouts and shutdown.
     ///
-    /// ```no_run
+    /// ```
     /// # use kevy_resp_client::SecureStream;
-    /// let s = SecureStream::connect("127.0.0.1", 6404, [0xab; 32], None)?;
-    /// s.socket().set_read_timeout(Some(std::time::Duration::from_secs(1)))?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// let s = SecureStream::connect("127.0.0.1", port, server_key, None)?;
+    /// let timeout = Some(std::time::Duration::from_secs(1));
+    /// s.socket().set_read_timeout(timeout)?;
+    /// assert_eq!(s.socket().read_timeout()?, timeout);
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn socket(&self) -> &TcpStream {
@@ -148,10 +161,17 @@ impl SecureStream {
     /// the socket before reading must read these first: they will not make
     /// the socket readable again.
     ///
-    /// ```no_run
+    /// ```
+    /// use std::io::{Read, Write};
     /// # use kevy_resp_client::SecureStream;
-    /// let s = SecureStream::connect("127.0.0.1", 6404, [0xab; 32], None)?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// let mut s = SecureStream::connect("127.0.0.1", port, server_key, None)?;
     /// assert_eq!(s.buffered(), 0);
+    /// s.write_all(b"*1\r\n$4\r\nPING\r\n")?;
+    /// let mut first = [0u8; 1];
+    /// s.read_exact(&mut first)?; // decrypts the whole `+PONG\r\n` message
+    /// assert_eq!(s.buffered(), 6, "the rest of it waits here, not on the socket");
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn buffered(&self) -> usize {
@@ -162,12 +182,17 @@ impl SecureStream {
     /// thread; messages from both are sealed in the order they reach the
     /// wire.
     ///
-    /// ```no_run
-    /// # use std::io::Write;
+    /// ```
+    /// # use std::io::{Read, Write};
     /// # use kevy_resp_client::SecureStream;
-    /// let s = SecureStream::connect("127.0.0.1", 6404, [0xab; 32], None)?;
+    /// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+    /// # let (port, server_key) = doc::serve_secure();
+    /// let mut s = SecureStream::connect("127.0.0.1", port, server_key, None)?;
     /// let mut w = s.writer()?;
-    /// std::thread::spawn(move || w.write_all(b"*1\r\n$4\r\nPING\r\n"));
+    /// std::thread::spawn(move || w.write_all(b"*1\r\n$4\r\nPING\r\n")).join().unwrap()?;
+    /// let mut reply = [0u8; 7];
+    /// s.read_exact(&mut reply)?; // the reply comes back on the reading half
+    /// assert_eq!(&reply, b"+PONG\r\n");
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn writer(&self) -> io::Result<SecureWriter> {
@@ -217,12 +242,17 @@ impl Write for SecureStream {
 
 /// The writing half of a [`SecureStream`], from [`SecureStream::writer`].
 ///
-/// ```no_run
-/// # use std::io::Write;
+/// ```
+/// # use std::io::{Read, Write};
 /// # use kevy_resp_client::SecureStream;
-/// let s = SecureStream::connect("127.0.0.1", 6404, [0xab; 32], None)?;
+/// # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs")); }
+/// # let (port, server_key) = doc::serve_secure();
+/// let mut s = SecureStream::connect("127.0.0.1", port, server_key, None)?;
 /// let mut w: kevy_resp_client::SecureWriter = s.writer()?;
-/// w.write_all(b"*1\r\n$4\r\nPING\r\n")?;
+/// w.write_all(b"*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n")?;
+/// let mut reply = [0u8; 8];
+/// s.read_exact(&mut reply)?;
+/// assert_eq!(&reply, b"$2\r\nhi\r\n");
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub struct SecureWriter {
@@ -268,7 +298,7 @@ fn random32() -> io::Result<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::ClientStream;
-    use crate::{load_client_key, parse_secure_url};
+    use crate::{SecureUrl, load_client_key};
     use kevy_noise::Responder;
     use std::net::TcpListener;
     use std::path::Path;
@@ -366,7 +396,7 @@ mod tests {
             format!("kevys://:1?server_key={k}"),
             format!("kevys://h:1?server_key={}", "zz".repeat(32)),
         ] {
-            let e = parse_secure_url(&url).unwrap_err();
+            let e = SecureUrl::parse(&url).unwrap_err();
             assert_eq!(e.kind(), io::ErrorKind::InvalidInput, "{url}");
         }
         assert!(load_client_key(Path::new("/nonexistent/kevy.key")).is_err());

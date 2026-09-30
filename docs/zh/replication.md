@@ -203,11 +203,12 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 | 关注点 | 回答 |
 |---|---|
 | 写入耐久性 | 帧落进本地 store 和 backlog 环之后主节点就 ack。副本随后追赶；`WAIT n timeout` 阻塞到至少 n 个副本确认（副本 ack 不是 fsync——见 availability.md）。 |
-| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, consistent = true)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
+| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, ReadConsistency::Primary)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
 | 副本掉队 | 重连请求的 offset 已从环里老化时，主节点就地内联推送一份该 shard 的快照，再从快照末端 offset 衔接实时帧——没有空洞，无需人工介入。快照替换副本键空间期间，副本上的客户端读回答 `-LOADING`（`PING` / `INFO` / `HELLO` 照常应答，健康检查不受影响）。 |
 | backlog 容量估算 | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。偏大无害；偏小会退化成快照发送。 |
 | 切主后什么会变 | 写入改发新主节点——配了 `kevy-elect` 就自动，否则手工。已有的 `kevy-cluster-rw` 客户端得知新主后自动改道；切换空档内正在进行的写会显式失败。 |
 | 切主后什么不会变 | 跨数据中心流量、gossip 发现的 peer、在线 reshard、AUTH/TLS——kevy 一概不提供。仅限单数据中心。 |
+| 索引、视图、表 | 主节点的 catalog 和键一样复制：副本在全量同步里拿到它，之后每次改动走实时流，重启后仍在。只读副本对 `IDX.CREATE` / `DROP` / `REBUILD`、`VIEW.CREATE` / `DROP` / `REBUILD`、`TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP` 一律回 `-READONLY`，要声明就在主节点上声明。 |
 | 链式复制 | 协议层不支持。副本的 apply 路径不会再向下游发出；这种误配置会被防御性拒绝。 |
 | 分区期间少数派的写入 | 有界，然后丢失。多数派集群中的主节点一旦看不到严格多数，会在一个租约窗口内围栏自己的写入（`-NOREPLICAS primary lost quorum; writes fenced`），所以静默吸收窗口约 5 s，且窗口内每笔写都显式失败。分区里的少数派无法提升；分区愈合时它自降，未复制出去的分叉后缀丢弃，通过快照重同步到多数派的历史。 |
 
@@ -241,7 +242,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 
 ## 以 embedded 作主节点（v3.2）
 
-嵌入式应用也可以反过来当 PRIMARY，让一台 kevy 服务器作它的副本——给进程内 store 换来读扩展和完整的查询面（副本可以在复制过来的数据上声明自己的索引/视图/聚合）：
+嵌入式应用也可以反过来当 PRIMARY，让一台 kevy 服务器作它的副本——给进程内 store 换来读扩展和完整的查询面（应用声明的索引、视图和表会复制到副本，并在副本上基于复制过来的数据应答）：
 
 ```rust
 // the application (primary)
@@ -264,4 +265,4 @@ single_source = true          # ONE upstream stream, hash-routed locally
 
 与 CDC feed（[docs/cdc.md](cdc.md)）的关系：两者按设计共存。复制源服务的是副本一致性（基础设施平面，per-source offset）；feed 服务的是应用级 CDC（`(generation, offset)` 游标、前缀过滤、at-least-once）。硬把两者统一，会把面向应用的 CDC 语义绑死在副本协议上。
 
-Gate：`bench/repligate.sh`——真双进程验证：对全新副本的快照发送、静默后 digest 稳定性、重启后重同步，以及副本本地在复制数据之上的 `IDX.CREATE`/`IDX.QUERY`。
+Gate：`bench/repligate.sh`——真双进程验证：对全新副本的快照发送、静默后 digest 稳定性、重启后重同步，主节点的索引在副本上应答 `IDX.QUERY`，以及副本拒绝自己的 `IDX.CREATE`。

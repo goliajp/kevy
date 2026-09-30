@@ -21,13 +21,13 @@ redis-cli -p 6379 GET hello
 
 kevy 以三种形态交付，全部构建自同一个引擎：
 
-- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，94 条命令的
+- **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，99 条命令的
   回复逐字节对照 valkey 9.1 校验。
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
   Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
   裸 `core` KV 一路到完整的索引/复制面——并且两个极端都够得着：
-  浏览器（npm 上的 [`@goliapkg/kevy`](docs/zh/wasm.md)）和 655 KB
-  的 IoT 构建（[docs/iot.md](docs/iot.md)）。
+  浏览器（npm 上的 [`@goliapkg/kevy`](docs/zh/wasm.md)）和
+  655 KB 的 IoT 构建（[docs/iot.md](docs/iot.md)）。
 - **客户端**——`kevy-client`（阻塞式）与 `kevy-client-async`（每种
   运行时一个 feature flag：tokio / smol / async-std）。两者都接受
   一个 URL，所以同一段代码既能对接 TCP 服务器（`kevy://host:port`），
@@ -35,7 +35,7 @@ kevy 以三种形态交付，全部构建自同一个引擎：
 
 ## kevy 4——serving engine（服务引擎），一次定型
 
-3.x 宣告 kevy 成为 **serving engine**：让原本要跑"RDS + 前置缓存"的
+3.x 宣告 kevy 成为 **serving engine**：让原本要跑「RDS + 前置缓存」的
 应用把 kevy 当作主存储。在完整 Redis 兼容之上，你会得到：声明式二级
 索引（range / unique / CJK 全文 / 向量 ANN，含服务端混合 BM25 + KNN
 融合）加一跳 hydration、可组合视图（虚拟与物化 top-K）、带精确恢复点
@@ -49,7 +49,8 @@ token、有界陈旧读、多数派围栏写入）——见
 [docs/zh/availability.md](docs/zh/availability.md)。
 4.0 把这一切一次定型：公开 Rust API 做了一次性整备——统一错误类型
 （`KevyError`）、统一 builder、借用化写面
-（[docs/UPGRADING.md](docs/UPGRADING.md)）——此后冻结、只增不减；
+（[docs/UPGRADING.md](docs/UPGRADING.md)）——整个 6.x 只增不减（7.0 为了符合
+Rust API Guidelines 又改了一次，见 [docs/rust-api-7.0.md](docs/rust-api-7.0.md)）；
 运行时按实例作用域化，一个进程可以跑多个互不干扰的 kevy；同一个
 引擎现在还能进浏览器、上边缘设备（见下面两节）。
 4.0 还把容量上限抬了一档：数据集不必再装进 RAM。**透明分层存储**给
@@ -70,9 +71,9 @@ index-only 查询即使全表皆冷也只读 RAM。见
 
 | 场景 | 选择 |
 |---|---|
-| 我已有 Redis 客户端库，想要一个更快、更轻的 Redis | 服务器（`kevy`） |
-| 我有一个 Rust 应用，不想再跑一个单独的进程 | 嵌入式库（`kevy-embedded`） |
-| 我写 Rust，想跟 kevy 或 Redis 服务器通信 | `kevy-client`（阻塞式） |
+| 我已有 Redis 客户端库，想要一个更快、更轻的 Redis | 服务器（`kevy`）|
+| 我有一个 Rust 应用，不想再跑一个单独的进程 | 嵌入式库（`kevy-embedded`）|
+| 我写 Rust，想跟 kevy 或 Redis 服务器通信 | `kevy-client`（阻塞式）|
 | 我写 Rust，基于 `tokio` / `smol` / `async-std` | `kevy-client-async` |
 | 我想让同一份代码用一个 URL 在嵌入式和服务器之间切换 | `kevy-client` + `kevy-embedded` |
 
@@ -89,7 +90,7 @@ CI 里对一台真实服务器跑同一套梯子（**clientgate**）：
 | Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
 | .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
 | Python | `pip install redis` | `execute_command(...)` |
-| C | `hiredis`（用你的包管理器） | `redisCommand(...)` |
+| C | `hiredis`（用你的包管理器）| `redisCommand(...)` |
 | Rust | `cargo add kevy-client` | 类型化接口，外加 `cmd(...)` |
 
 各语言完整示例见 [docs/clients.md](docs/clients.md)（英文）。
@@ -103,7 +104,7 @@ Flutter、React Native、Electron 的官方包在 [`bindings/`](bindings) 下，
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
 pip install kevy                                 # Python
 dotnet add package kevy                          # C#
-go get github.com/goliajp/kevy-go/v6             # Go
+go get github.com/goliajp/kevy-go/v7             # Go
 flutter pub add flutter_kevy                     # Flutter
 npx expo install expo-kevy                       # React Native (Expo)
 npm i react-native-kevy-nitro                    # React Native (Nitro)
@@ -111,7 +112,7 @@ npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
 <dependency>                                     <!-- Java / Kotlin -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 
@@ -209,8 +210,8 @@ let v = conn.get(b"k").await?;
 kevy 在浏览器里是一个真正的存储：npm 包
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把
 编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
-loader——没有 wasm-bindgen，边界两侧都是零依赖；六个文件，打包约
-231 KB（过网络时 gzip 后 218 KB）。
+loader——没有 wasm-bindgen，边界两侧都是零依赖；七个文件，打包约
+633 KB（过网络时 gzip 后 619 KB）。
 
 ```sh
 npm install @goliapkg/kevy
@@ -300,14 +301,23 @@ recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 一个完整的服务器是一个 768 KB 的 stripped 二进制，启动后驻留内存
 不到 5 MB。
 
-**要升级？** [docs/UPGRADING.md](docs/UPGRADING.md) 一处讲清两跳
-——3.x → 4.0（wire 与磁盘原样延续；Rust API 做了一次性变更，每个
-改名都有对照表和一条规则）以及 2.x → 3.x（换二进制 + 升依赖）。
-沿升级方向，快照和 AOF 跨 major 原样加载。
+**要升级？** 当前这一跳是 [docs/zh/upgrading-6.4-to-7.0.md](docs/zh/upgrading-6.4-to-7.0.md)：
+协议客户端不用改代码，数据目录原样打开。换二进制之前，先检查
+`maxmemory`（同样的数据，`used_memory` 读数约高 1.5 倍）；有副本的话，
+先升级主节点。Rust 调用方照 [docs/rust-api-7.0.md](docs/rust-api-7.0.md)
+改，Go 调用方改用 `kevy-go/v7`，把 `kevy-cli doctor` 等工具当裸词调用的
+脚本要把工具挪到 `--kevy` 后面。指南还写了退回 6.4 之前要做什么、修掉了
+哪些丢数据的缺陷；里面每一条关于新旧版本混用的说法，都对 6.4.0 的二进制
+实测过。更早的几跳见 [docs/zh/upgrading-6.3-to-6.4.md](docs/zh/upgrading-6.3-to-6.4.md)
+和 [docs/zh/upgrading-6.2-to-6.3.md](docs/zh/upgrading-6.2-to-6.3.md)。
+[docs/UPGRADING.md](docs/UPGRADING.md) 讲更老的 major——3.x → 4.0（wire
+与磁盘原样延续；Rust API 做了一次性变更，每个改名都有对照表和一条规则）
+以及 2.x → 3.x（换二进制 + 升依赖）。沿升级方向，快照和 AOF 跨 major
+原样加载。
 
 ## 兼容性
 
-94 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
+99 条命令的回复对照 valkey 9.1 逐字节校验，覆盖全部五种 Redis 数据
 类型（String、Hash、List、Set、Sorted Set）外加 Streams、Pub/Sub
 （频道 + 模式）、事务（`MULTI` / `EXEC` / `WATCH` / `UNWATCH`）、
 阻塞式 pop，以及标准的运维操作和持久化 verb。完整命令清单见
@@ -351,7 +361,7 @@ recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 | [`kevy-uring`](crates/kevy-uring) | 纯 Rust io_uring 绑定——不链接 liburing |
 | [`kevy-geo`](crates/kevy-geo) | 地理空间命令原语 |
 | [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliapkg/kevy` loader |
-| [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时） |
+| [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时）|
 
 其余 crate（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
@@ -360,17 +370,17 @@ recall 对齐（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 构建，但终端用户通常用的是上面那些表面。
 
 **给 AI agent 与工具**：[`llms.txt`](llms.txt)（机器优先的索引）·
-[verb 参考](docs/verb-reference.md)（全部 189 个 verb，由服务器
+[verb 参考](docs/verb-reference.md)（全部 209 个 verb，由服务器
 自身的元数据生成——与 `COMMAND DOCS` 返回的是同一批行）。
 
 ## 主题指南
 
 | 主题 | 文档 |
 |---|---|
-| RDS workload 映射（SQL → kevy） | [`docs/zh/rds-workloads.md`](docs/zh/rds-workloads.md) |
+| RDS workload 映射（SQL → kevy）| [`docs/zh/rds-workloads.md`](docs/zh/rds-workloads.md) |
 | 迁移手册与工具链 | [`docs/migration.md`](docs/migration.md) |
 | 配置调优 | [`docs/zh/tuning.md`](docs/zh/tuning.md) |
-| 持久化（AOF + RDB） | [`docs/zh/persistence.md`](docs/zh/persistence.md) |
+| 持久化（AOF + RDB）| [`docs/zh/persistence.md`](docs/zh/persistence.md) |
 | Pub/Sub | [`docs/zh/pubsub.md`](docs/zh/pubsub.md) |
 | 复制 | [`docs/zh/replication.md`](docs/zh/replication.md) |
 | Cluster 模式 | [`docs/zh/cluster.md`](docs/zh/cluster.md) |
@@ -414,11 +424,12 @@ Stable Rust 1.97.0，Rust 2024 edition。在 Linux（`x86_64`、`aarch64`）
 
 ## 路线图与稳定性
 
-workspace 当前处在 v4.x 线上。持久化格式、RESP 线协议、公开的
+workspace 当前处在 7.x 线上。持久化格式、RESP 线协议、公开的
 Rust API、CLI 参数、环境变量、TOML schema 以及驱逐语义在每条主线内
-**只增不减**——而且磁盘格式跨 major 延续：v2.0 写出的快照或 AOF
-在每一个 3.x 和 4.x 构建上都能原样加载（见
-[docs/UPGRADING.md](docs/UPGRADING.md)）。新增功能在 minor 发布里
+**只增不减**——而且沿升级方向，磁盘格式跨 major 延续：v2.0 写出的
+快照或 AOF 在每一个 3.x 和 4.x 构建上都能原样加载，7.0 也能原样打开
+6.4 的目录（见 [docs/UPGRADING.md](docs/UPGRADING.md) 和每一跳的指南）。
+退回上一个 major 要按文档走一步，不保证原样可用。新增功能在 minor 发布里
 落地，不破坏既有代码。完整的稳定性契约见
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)。
 

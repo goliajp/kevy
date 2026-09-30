@@ -8,7 +8,9 @@
 //! as "the packed row barely helps" when nothing had been packed at all.
 
 use kevy_store::Store;
+use kevy_store::packed_row::ColumnNames;
 
+use crate::key_walk::KeyWalk;
 use crate::state::Ctx;
 
 /// Give a row under a declared prefix the packed representation.
@@ -26,10 +28,11 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
     if !store.packed_rows_enabled() {
         return;
     }
-    let Some(tables) = ctx.state.catalogs.table() else { return };
-    let Some(spec) = tables.iter().find(|t| key.starts_with(&t.prefix)) else { return };
-    let names: Vec<Vec<u8>> = spec.columns.iter().map(|(n, _)| n.clone()).collect();
-    store.pack_row(key, &names);
+    let mut bf = ctx.shard.packing.borrow_mut();
+    let Some((_, names)) = bf.tables(ctx).iter().find(|(prefix, _)| key.starts_with(prefix)) else {
+        return;
+    };
+    store.pack_row(key, names);
 }
 
 /// One table's un-packed rows, and how far through them this shard is.
@@ -38,17 +41,38 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
 /// reach rows that already exist, and there can be two million of them.
 #[derive(Debug)]
 pub(crate) struct PackJob {
-    names: Vec<Vec<u8>>,
-    keys: Vec<Vec<u8>>,
-    pos: usize,
+    names: ColumnNames,
+    walk: KeyWalk,
 }
 
-/// This shard's packing backfill.
+/// This shard's packing backfill, and its tables' column names.
 #[derive(Debug, Default)]
 pub(crate) struct PackBackfill {
     /// The table-catalog generation these jobs were built from.
     generation: u64,
     jobs: Vec<PackJob>,
+    /// Each declared table's prefix and column names, built once per
+    /// catalog generation. Every row of a table is packed on this one
+    /// list, so the rows share it instead of each holding a copy.
+    tables: Vec<(Vec<u8>, ColumnNames)>,
+    /// The generation `tables` was built from; `None` before the first.
+    tables_generation: Option<u64>,
+}
+
+impl PackBackfill {
+    /// The declared tables, rebuilt only when the catalog has changed.
+    fn tables(&mut self, ctx: &Ctx<'_>) -> &[(Vec<u8>, ColumnNames)] {
+        let generation = ctx.state.catalogs.table_gen();
+        if self.tables_generation != Some(generation) {
+            self.tables = ctx.state.catalogs.table().map_or_else(Vec::new, |tables| {
+                let names =
+                    |t: &kevy_index::TableSpec| t.columns.iter().map(|(n, _)| n.clone()).collect();
+                tables.iter().map(|t| (t.prefix.clone(), names(t))).collect()
+            });
+            self.tables_generation = Some(generation);
+        }
+        &self.tables
+    }
 }
 
 /// Keys converted per tick — the index backfill's batch, so the two
@@ -70,44 +94,33 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
     let mut bf = ctx.shard.packing.borrow_mut();
     let generation = ctx.state.catalogs.table_gen();
     if bf.generation != generation {
-        bf.jobs = collect_jobs(ctx, store);
+        bf.jobs = start_jobs(bf.tables(ctx));
         bf.generation = generation;
     }
-    let Some(job) = bf.jobs.iter_mut().find(|j| j.pos < j.keys.len()) else { return };
-    let end = (job.pos + BATCH).min(job.keys.len());
-    // Split the borrow: `pack_row` takes the store, the job holds the keys.
-    let slice: Vec<Vec<u8>> = job.keys[job.pos..end].to_vec();
+    let Some(job) = bf.jobs.iter_mut().find(|j| !j.walk.is_done()) else { return };
+    let keys = job.walk.next_batch(store, BATCH);
     let names = job.names.clone();
-    job.pos = end;
-    let done = job.pos >= job.keys.len();
     drop(bf);
-    for key in &slice {
+    for key in &keys {
         store.pack_row(key, &names);
-    }
-    if done {
-        // The key list is the expensive part — a Vec per key, taken while
-        // the rows were still unpacked. Drop it as soon as it is spent
-        // rather than holding it until the next declaration.
-        let mut bf = ctx.shard.packing.borrow_mut();
-        bf.jobs.retain(|j| j.pos < j.keys.len());
     }
 }
 
-/// Snapshot each declared table's keys on THIS shard. Live writes from now
-/// on hit `on_write` first and pack there; `pack_row` is a no-op on a row
-/// that is already packed, so the two cannot fight.
-fn collect_jobs(ctx: &Ctx<'_>, store: &mut Store) -> Vec<PackJob> {
-    let Some(tables) = ctx.state.catalogs.table() else { return Vec::new() };
+/// A snapshot load put rows in place without the write hook, after any
+/// walk this shard ran: walk every table again at the next tick.
+pub(crate) fn on_snapshot_loaded(ctx: &Ctx<'_>) {
+    ctx.shard.packing.borrow_mut().generation = u64::MAX;
+}
+
+/// Start a walk over each declared table's keys on THIS shard. Live
+/// writes from now on hit `on_write` first and pack there; `pack_row` is a
+/// no-op on a row that is already packed, so the two cannot fight.
+fn start_jobs(tables: &[(Vec<u8>, ColumnNames)]) -> Vec<PackJob> {
     tables
         .iter()
-        .map(|t| {
-            let mut pat = t.prefix.clone();
-            pat.push(b'*');
-            PackJob {
-                names: t.columns.iter().map(|(n, _)| n.clone()).collect(),
-                keys: store.collect_keys(Some(&pat), None),
-                pos: 0,
-            }
-        })
+        .map(|(prefix, names)| PackJob { names: names.clone(), walk: KeyWalk::new(prefix) })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

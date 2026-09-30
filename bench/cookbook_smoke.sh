@@ -49,8 +49,31 @@ LINES=$(awk '
     fence && /^kevy-cli/ { print }
 ' "$DOC")
 
+# The AI recipes (16-18) are judged by what they answer, not only by
+# running: an exit code of 0 says nothing about which chunk a hybrid
+# query ranked first. Each expectation names a line by a fragment of it;
+# one that matches no line fails the gate, so a reworded recipe cannot
+# quietly drop its check.
+keys_in() { printf '%s' "$1" | grep -oE "$2:[0-9]+" | awk '!seen[$0]++'; }
+expect_line() {
+    case $1 in
+        *"MATCH 'typed key prefix'"*) want="chunk:1"; got=$(keys_in "$2" chunk | head -1) ;;
+        *"MATCH 'change frame'"*)     want="chunk:3"; got=$(keys_in "$2" chunk | head -1) ;;
+        *"IDX.QUERY mem_ann KNN"*)    want="mem:1";   got=$(keys_in "$2" mem | head -1) ;;
+        *"IDX.QUERY mem_ts RANGE"*)   want="mem:2 mem:3"; got=$(keys_in "$2" mem | sort | xargs) ;;
+        *"IDX.QUERY COMPOSE AND"*)    want="mem:3";   got=$(keys_in "$2" mem | xargs) ;;
+        *) return 0 ;;
+    esac
+    checked=$((checked + 1))
+    [ "$got" = "$want" ] && return 0
+    echo "cookbook-smoke: FAIL — answered $got, the recipe says $want: $1"
+    printf '%s\n' "$2"
+    return 1
+}
+
 total=0
 skipped=0
+checked=0
 while IFS= read -r line; do
     [ -n "$line" ] || continue
     case $line in
@@ -79,10 +102,19 @@ while IFS= read -r line; do
         printf '%s\n' "$out"
         exit 1
     done
+    expect_line "$line" "$out" || exit 1
     total=$((total + 1))
 done <<EOF
 $LINES
 EOF
 
 [ $total -gt 0 ] || { echo "cookbook-smoke: FAIL — extracted 0 kevy-cli lines from $DOC"; exit 1; }
-echo "cookbook-smoke: PASS ($total commands, $skipped skipped)"
+[ $checked -eq 5 ] || { echo "cookbook-smoke: FAIL — $checked of 5 recipe answers found a line to check"; exit 1; }
+# recipe 16: the renewed lease and the last turn are what the session holds
+turns=$("$CLI" -p $PORT HGET session:a7 turns)
+ttl=$("$CLI" -p $PORT TTL session:a7)
+if [ "$turns" != "7" ] || [ "${ttl:-0}" -le 0 ] || [ "$ttl" -gt 3600 ]; then
+    echo "cookbook-smoke: FAIL — session:a7 turns=$turns ttl=$ttl, the recipe leaves turns 7 under a 3600 s lease"
+    exit 1
+fi
+echo "cookbook-smoke: PASS ($total commands, $skipped skipped, 6 recipe answers checked)"

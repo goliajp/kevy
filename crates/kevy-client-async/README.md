@@ -4,13 +4,17 @@ The async mirror of [`kevy-client`](https://crates.io/crates/kevy-client).
 The API surface mirrors blocking 1:1 — every method takes `.await`,
 and the same URL backends are accepted.
 
-```rust,no_run
+```rust
 use kevy_client_async::AsyncConnection;
 
-# async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
+# include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/doc_serve.rs"));
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> std::io::Result<()> {
+# let addr = serve(&[("SET k v", "+OK\r\n"), ("GET k", "$1\r\nv\r\n")]).await?;
+let mut conn = AsyncConnection::connect(&format!("tcp://{addr}")).await?;
 conn.set(b"k", b"v").await?;
 let v = conn.get(b"k").await?;
+assert_eq!(v.as_deref(), Some(&b"v"[..]));
 # Ok(())
 # }
 ```
@@ -32,16 +36,25 @@ Enabling zero or more than one runtime feature triggers a
 
 Collapse N commands into one TCP round-trip:
 
-```rust,no_run
+```rust
 use kevy_client_async::AsyncConnection;
+use kevy_resp::Reply;
 
-# async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
+# include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/doc_serve.rs"));
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> std::io::Result<()> {
+# let addr = serve(&[
+#     ("SET a 1", "+OK\r\n"),
+#     ("GET a", "$1\r\n1\r\n"),
+#     ("INCR hits", ":1\r\n"),
+# ]).await?;
+let mut conn = AsyncConnection::connect(&format!("tcp://{addr}")).await?;
 let replies = conn.pipeline()
     .set(b"a", b"1")
     .get(b"a")
     .incr(b"hits")
     .run(&mut conn).await?;
+assert_eq!(replies, [Reply::Simple(b"OK".to_vec()), Reply::Bulk(b"1".to_vec()), Reply::Int(1)]);
 # Ok(())
 # }
 ```

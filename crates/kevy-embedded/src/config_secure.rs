@@ -10,15 +10,16 @@ pub use kevy_noise::Keypair;
 /// ```
 /// use kevy_embedded::{Keypair, LinkKeys};
 ///
-/// let keys = LinkKeys { local: Keypair::from_secret([1; 32]), peers: vec![[2; 32]] };
+/// let keys = LinkKeys::new(Keypair::from_secret([1; 32])).with_peers(vec![[2; 32]]);
 /// assert_eq!(keys.peers.len(), 1);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LinkKeys {
     /// This store's static key pair.
     ///
     /// ```
-    /// let keys = kevy_embedded::LinkKeys { local: kevy_embedded::Keypair::from_secret([1; 32]), peers: vec![] };
+    /// let keys = kevy_embedded::LinkKeys::new(kevy_embedded::Keypair::from_secret([1; 32]));
     /// assert_ne!(keys.local.public(), [0; 32]);
     /// ```
     pub local: Keypair,
@@ -28,13 +29,38 @@ pub struct LinkKeys {
     ///
     /// ```
     /// let primary = kevy_embedded::Keypair::from_secret([2; 32]);
-    /// let keys = kevy_embedded::LinkKeys {
-    ///     local: kevy_embedded::Keypair::from_secret([1; 32]),
-    ///     peers: vec![primary.public()],
-    /// };
+    /// let keys = kevy_embedded::LinkKeys::new(kevy_embedded::Keypair::from_secret([1; 32]))
+    ///     .with_peers(vec![primary.public()]);
     /// assert_eq!(keys.peers[0], primary.public());
     /// ```
     pub peers: Vec<[u8; 32]>,
+}
+
+impl LinkKeys {
+    /// This end's key pair `local`, with no peers yet. The key has no
+    /// default: without it the link authenticates nobody.
+    ///
+    /// ```
+    /// let keys = kevy_embedded::LinkKeys::new(kevy_embedded::Keypair::from_secret([1; 32]));
+    /// assert!(keys.peers.is_empty());
+    /// ```
+    #[must_use]
+    pub fn new(local: Keypair) -> Self {
+        Self { local, peers: Vec::new() }
+    }
+
+    /// Set [`Self::peers`].
+    ///
+    /// ```
+    /// let keys = kevy_embedded::LinkKeys::new(kevy_embedded::Keypair::from_secret([1; 32]))
+    ///     .with_peers(vec![[2; 32], [3; 32]]);
+    /// assert_eq!(keys.peers.len(), 2);
+    /// ```
+    #[must_use]
+    pub fn with_peers(mut self, peers: Vec<[u8; 32]>) -> Self {
+        self.peers = peers;
+        self
+    }
 }
 
 /// The keys for each replication direction; `None` keeps it plaintext.
@@ -57,7 +83,7 @@ impl Config {
     ///     Config::default()
     ///         .without_aof()
     ///         .with_replica_upstream("127.0.0.1:16004")
-    ///         .with_replica_security(LinkKeys { local: Keypair::from_secret([1; 32]), peers })
+    ///         .with_replica_security(LinkKeys::new(Keypair::from_secret([1; 32])).with_peers(peers))
     /// };
     /// assert!(Store::open(replica(vec![primary.public()]))?.is_replica());
     /// // a secure replica that trusts no primary does not open
@@ -80,7 +106,7 @@ impl Config {
     /// let writer = Store::open(
     ///     Config::default()
     ///         .with_embed_writer("127.0.0.1:0")
-    ///         .with_writer_security(LinkKeys { local: Keypair::from_secret([1; 32]), peers: vec![] }),
+    ///         .with_writer_security(LinkKeys::new(Keypair::from_secret([1; 32]))),
     /// )?;
     /// assert!(writer.writer_addr().is_some());
     /// # Ok::<(), kevy_embedded::KevyError>(())

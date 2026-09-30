@@ -28,16 +28,18 @@
 //! on `open` — restart-safe out of the box. Snapshot (`dump-0.rdb`) is
 //! loaded first if present; AOF (`aof-0.aof`) is replayed on top.
 //!
-//! ```no_run
+//! ```
 //! use kevy_embedded::{Store, Config};
 //!
 //! # fn main() -> kevy_embedded::KevyResult<()> {
-//! let s = Store::open(Config::default().with_persist("./data"))?;
+//! # let tmp = kevy_tmpdir::TmpDir::new("embedded-persist");
+//! # let data = tmp.path();
+//! let s = Store::open(Config::default().with_persist(data))?;
 //! s.set(b"counter", b"42")?;
 //! drop(s); // flushes AOF on drop
 //!
 //! // Next process: state survives.
-//! let s2 = Store::open(Config::default().with_persist("./data"))?;
+//! let s2 = Store::open(Config::default().with_persist(data))?;
 //! assert_eq!(s2.get(b"counter")?, Some(b"42".to_vec()));
 //! # Ok(())
 //! # }
@@ -96,20 +98,26 @@
 //! | `vector` | HNSW vector index segments (implies `index`) |
 //! | `replicate` | embed-as-replica / embed-as-writer + CDC feed (implies `persist`) |
 //! | `listener` | the read-only RESP listener |
+//! | `host-log` | `Store::dispatch_argv_recorded`: the frames a command's write records, for a host that keeps the log itself |
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod config;
 #[cfg(feature = "replicate")]
 mod config_secure;
+mod config_stage;
 mod dispatch;
+#[cfg(feature = "host-log")]
+mod host_log;
 mod info;
 // Unconditional: `OpenReport` rides the DropGuard and the Store
 // handle in every archetype (a no-persist open reports zeros); only
 // the sink WIRING stays persist-gated in config.rs.
+mod assert_traits;
 #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
 mod listener;
 mod metric;
+mod modes;
 mod op_manifest;
 mod ops;
 mod ops_atomic;
@@ -126,9 +134,13 @@ mod ops_hash_ttl;
 #[cfg(feature = "index")]
 mod ops_index;
 #[cfg(feature = "index")]
+mod ops_index_changes;
+#[cfg(feature = "index")]
 mod ops_index_cold;
 #[cfg(feature = "index")]
 mod ops_index_sync;
+#[cfg(feature = "index")]
+mod ops_index_tidy;
 #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
 mod ops_index_window;
 mod ops_keyspace;
@@ -138,6 +150,9 @@ mod ops_p3;
 mod ops_pipeline;
 mod ops_reconcile;
 mod ops_scan;
+pub use ops_scan::KeysIter;
+#[cfg(feature = "index")]
+mod catalog_record;
 mod ops_snapshot_view;
 #[cfg(feature = "index")]
 mod ops_table;
@@ -169,6 +184,8 @@ mod replica_wire;
 mod shard;
 #[cfg(feature = "persist")]
 mod shard_restore;
+#[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
+mod shard_tier;
 mod store;
 mod store_inner;
 #[cfg(feature = "persist")]
@@ -185,8 +202,10 @@ pub use config_secure::{Keypair, LinkKeys};
 #[cfg(feature = "tier")]
 mod config_tier;
 #[cfg(feature = "persist")]
-pub use config::AppendFsync;
+pub use config::{AppendFsync, ReplayMode};
 pub use info::{KevyInfo, KevyTierCompression, KevyTierInfo};
+#[cfg(feature = "index")]
+pub use kevy_index::SortOrder;
 #[cfg(feature = "index")]
 pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
 #[cfg(feature = "index")]
@@ -196,13 +215,18 @@ pub use kevy_index::{
 };
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+pub use kevy_replicate::feed::FeedPosition;
 pub use kevy_store::{
-    ExpireStats, GetShared, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound,
-    StoreError, ZAggregate, ZaddFlags, ZaddReport,
+    ExpireStats, GetShared, HExpireCode, HExpireCond, InsertPosition, KevyError, KevyResult,
+    ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport,
 };
 #[cfg(feature = "persist")]
 pub use metric::KevyMetric;
 pub use metric::OpenReport;
+pub use modes::CopyMode;
+#[cfg(feature = "text")]
+pub use modes::TokenPositions;
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 #[cfg(feature = "index")]
@@ -210,9 +234,13 @@ pub use ops_index::IndexPage;
 #[cfg(feature = "index")]
 pub use ops_index::advise::IdxAdvice;
 #[cfg(feature = "index")]
-pub use ops_index::claused::{ScalarPage, ScalarQueryOpts, ValueFilter};
+pub use ops_index::claused::ScalarPage;
 #[cfg(feature = "text")]
-pub use ops_index::highlight::{FacetCounts, MatchOpts, MatchPage};
+pub use ops_index::highlight::{FacetCounts, MatchPage};
+#[cfg(feature = "text")]
+pub use ops_index::opts::MatchOpts;
+#[cfg(feature = "index")]
+pub use ops_index::opts::{ScalarQueryOpts, ValueFilter};
 pub use ops_reconcile::ReconcileReport;
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
 #[cfg(feature = "index")]
@@ -227,8 +255,12 @@ pub use kevy_index::{IndexVerify, OrderPath, TableEnsure, TableIndex, TableSpec,
 // `each_prefix` hands the callback a `kevy_store::Value` — same class of
 // gap: a public signature whose type the facade could not name.
 pub use kevy_store::Value;
-pub use pubsub::{PubsubFrame, Subscription};
+pub use pubsub::{PubsubEvent, Subscription};
 pub use store::{Store, WeakStore};
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 /// Feed kevy's clocks on `wasm32-unknown-unknown`, which has neither
 /// `Instant` nor `SystemTime`. Without a host-fed clock, TTL operations and

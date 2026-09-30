@@ -25,7 +25,7 @@
 //!   measures held-out values against a trained dictionary — the shape
 //!   `kevy-vlog` produces — and reports, per value:
 //!
-//!   | path | `decode` | [`decode_with`] + [`Dict`] |
+//!   | path | `decode` | [`Dict::decode`] |
 //!   |---|---|---|
 //!   | fast | 0.543 GB/s | **2.079 GB/s** |
 //!   | compaction | 0.045 GB/s | **1.265 GB/s** |
@@ -44,7 +44,7 @@
 //!   time was flat in input size — an 8-byte value cost more than a
 //!   6 KiB one, because almost none of the work was about the value.
 //!
-//!   | path | `encode` | [`encode_with`] + [`Dict`] |
+//!   | path | `encode` | [`Dict::encode`] |
 //!   |---|---|---|
 //!   | fast | 35.2 us/value | **0.47 us** |
 //!   | compaction | 38.4 us/value | **2.86 us** |
@@ -122,24 +122,10 @@ mod decode;
 mod dict;
 mod encode;
 mod huff;
+mod tag;
 
-pub use dict::{Dict, decode_with, encode_high_with, encode_with};
-
-/// Frame tag: payload is the original bytes verbatim.
-pub const TAG_RAW: u8 = 0;
-/// Frame tag: LZ token stream, history is the output alone.
-pub const TAG_LZ: u8 = 1;
-/// Frame tag: LZ token stream, history is `dict ++ output`.
-pub const TAG_LZ_DICT: u8 = 2;
-/// Frame tag: high (compaction) level — literals Huffman-coded as one
-/// block, byte-aligned sequence stream after it.
-pub const TAG_LZH: u8 = 3;
-/// Frame tag: high level with dictionary history.
-pub const TAG_LZH_DICT: u8 = 4;
-
-/// Longest back-reference the 16-bit offset can express, which also
-/// bounds how much trailing dictionary is reachable.
-pub const MAX_OFFSET: usize = u16::MAX as usize;
+pub use dict::Dict;
+pub use tag::{MAX_OFFSET, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW};
 
 /// Magic prefix of a structured dictionary: `[magic][128 B code
 /// lengths][content]`. The embedded table is the file-scoped entropy
@@ -180,14 +166,16 @@ fn parse_dict(dict: &[u8]) -> (Option<[u8; 256]>, &[u8]) {
 /// // A frame the decoder cannot trust is refused, not half-decoded.
 /// assert!(decode(b"", b"\x01truncated").is_err());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Corrupt;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DecodeError;
 
-impl core::fmt::Display for Corrupt {
+impl core::fmt::Display for DecodeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("kevy-compress: corrupt or truncated frame")
     }
 }
+
+impl core::error::Error for DecodeError {}
 
 /// Close a frame, or throw it away and store the input verbatim.
 ///
@@ -285,18 +273,18 @@ pub fn encode_high(dict: &[u8], input: &[u8]) -> Vec<u8> {
 /// assert!(decode(b"", b"").is_err());
 /// assert!(decode(b"", b"\xff\xff\xff").is_err());
 /// ```
-pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
+pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, DecodeError> {
     // The tag first. `parse_dict` used to run above this line, so a
     // `TAG_RAW` or `TAG_LZ` frame — which never reads the dictionary —
     // still paid 128 header bytes unpacked into a 256-entry array and a
     // Kraft sum over all of it. Measured at +0.138 us, which is 111% of
     // a 400 B decode and 79% of a 64 B one.
-    let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
+    let (&tag, rest) = frame.split_first().ok_or(DecodeError)?;
     let (orig_len, payload) = read_varint(rest)?;
     if matches!(tag, TAG_RAW | TAG_LZ) {
         return match tag {
             TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
-            TAG_RAW => Err(Corrupt),
+            TAG_RAW => Err(DecodeError),
             _ => decode::lz(&[], payload, orig_len),
         };
     }
@@ -304,7 +292,7 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
     match tag {
         TAG_LZ_DICT => {
             if content.is_empty() {
-                return Err(Corrupt);
+                return Err(DecodeError);
             }
             decode::lz(content, payload, orig_len)
         }
@@ -315,18 +303,18 @@ pub fn decode(dict: &[u8], frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
             // try_high). Those on-disk frames need the dict's lens
             // table: retry with it before declaring corrupt. The
             // record's CRC already vouched for the bytes.
-            Err(Corrupt) if lens.is_some() => {
+            Err(DecodeError) if lens.is_some() => {
                 decode::lz_high(&[], lens.as_ref(), None, payload, orig_len)
             }
             r => r,
         },
         TAG_LZH_DICT => {
             if content.is_empty() {
-                return Err(Corrupt);
+                return Err(DecodeError);
             }
             decode::lz_high(content, lens.as_ref(), None, payload, orig_len)
         }
-        _ => Err(Corrupt),
+        _ => Err(DecodeError),
     }
 }
 
@@ -458,12 +446,12 @@ fn finish_header(frame: &mut Vec<u8>, tag: u8, orig_len: usize) {
     frame.splice(0..0, header);
 }
 
-pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), Corrupt> {
+pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), DecodeError> {
     let mut v: u64 = 0;
     let mut shift = 0u32;
     for (i, &b) in buf.iter().enumerate() {
         if shift >= 35 {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         v |= u64::from(b & 0x7f) << shift;
         if b & 0x80 == 0 {
@@ -471,8 +459,16 @@ pub(crate) fn read_varint(buf: &[u8]) -> Result<(usize, &[u8]), Corrupt> {
         }
         shift += 7;
     }
-    Err(Corrupt)
+    Err(DecodeError)
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<DecodeError>();
+    send_sync::<Dict>();
+};
 
 #[cfg(test)]
 mod tests;

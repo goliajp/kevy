@@ -16,14 +16,14 @@ categories = ["database", "command-line-utilities"]
 [lints]
 workspace = true
 
-# Runtime closure: pure std, zero dependencies (charter). kevy-index is a
-# DEV-dependency only — the round-trip test feeds every compiled
-# TABLE.DECLARE argv back through the engine's own wire parser, so the
-# compiler and the engine cannot drift on the grammar.
+# Runtime closure: first-party crates only, and nothing here runs inside
+# a serving engine. kevy-index supplies the column type compiled
+# declarations carry (the engine's own `ValType`, so the compiler and the
+# engine cannot name a type differently); the round-trip test also feeds
+# every compiled TABLE.DECLARE argv back through the engine's wire
+# parser, so the two cannot drift on the grammar either.
 [dependencies]
+kevy-index = { path = "../kevy-index", version = "7.0.0" }
 # kevy-scalar: the V1 constant folder (`SELECT lower('X')` with no
 # FROM) — still a build/CLI-time face, never inside a serving engine.
-kevy-scalar = { path = "../kevy-scalar", version = "6.4.0" }
-
-[dev-dependencies]
-kevy-index = { path = "../kevy-index", version = "6.4.0" }
+kevy-scalar = { path = "../kevy-scalar", version = "7.0.0" }

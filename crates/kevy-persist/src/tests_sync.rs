@@ -144,14 +144,14 @@ fn an_unconfirmed_sync_is_retried_on_the_next_tick() {
 // a pipe stands in for a failing log: writes fail once the read end is
 // gone, and no platform can fsync a pipe
 #[cfg(unix)]
-fn pipe_file(keep_reader: bool) -> (std::fs::File, Option<std::io::PipeReader>) {
+pub(crate) fn pipe_file(keep_reader: bool) -> (std::fs::File, Option<std::io::PipeReader>) {
     let (r, w) = std::io::pipe().unwrap();
     let file = std::fs::File::from(std::os::fd::OwnedFd::from(w));
     (file, keep_reader.then_some(r))
 }
 
 #[cfg(unix)]
-fn onto(aof: &mut Aof, file: std::fs::File) {
+pub(crate) fn onto(aof: &mut Aof, file: std::fs::File) {
     aof.file = std::io::BufWriter::with_capacity(crate::aof::AOF_BUF_CAP, file);
 }
 

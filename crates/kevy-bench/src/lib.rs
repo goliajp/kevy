@@ -49,23 +49,79 @@ pub use std::hint::black_box;
 /// // The order the summary always holds, whatever the machine did.
 /// assert!(s.min_ns <= s.median_ns && s.median_ns <= s.p95_ns);
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Stats {
     /// Number of samples collected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(7, 10, || { std::hint::black_box(1u8); });
+    /// assert_eq!(s.samples, 7); // one timed sample per outer repetition
+    /// ```
     pub samples: usize,
     /// Iterations timed per sample (the divisor applied to each sample).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(3, 250, || { std::hint::black_box(1u8); });
+    /// // each sample's elapsed time was divided by this
+    /// assert_eq!(s.inner, 250);
+    /// ```
     pub inner: usize,
     /// Fastest sample — the least-disturbed run, closest to the true cost.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(20, 100, || { std::hint::black_box(1u8); });
+    /// // no sample was faster, so the median and the mean sit at or above it
+    /// assert!(s.min_ns <= s.median_ns && s.min_ns <= s.mean_ns);
+    /// ```
     pub min_ns: u64,
     /// Median sample — the headline figure, robust to occasional hiccups.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let s = kevy_bench::bench(3, 1, || std::thread::sleep(Duration::from_micros(200)));
+    /// // a 200 µs sleep never measures shorter than that
+    /// assert!(s.median_ns >= 200_000);
+    /// ```
     pub median_ns: u64,
     /// 95th-percentile sample — tail behaviour under scheduler noise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(40, 100, || { std::hint::black_box(1u8); });
+    /// assert!(s.p95_ns >= s.median_ns); // the tail sits at or above the median
+    /// ```
     pub p95_ns: u64,
     /// Mean across all samples.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let s = kevy_bench::bench(4, 1, || std::thread::sleep(Duration::from_micros(100)));
+    /// // every sample took at least the sleep, so their average did too
+    /// assert!(s.mean_ns >= 100_000 && s.mean_ns >= s.min_ns);
+    /// ```
     pub mean_ns: u64,
     /// Sample standard deviation across samples (Bessel-corrected; 0 when
     /// `samples == 1`). Reported alongside the median in baseline tables so
     /// a future delta can be judged against the run-to-run noise band.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let one = kevy_bench::bench(1, 100, || { std::hint::black_box(1u8); });
+    /// assert_eq!(one.stdev_ns, 0); // a single sample has no spread
+    /// ```
     pub stdev_ns: u64,
 }
 
@@ -75,6 +131,11 @@ pub struct Stats {
 /// One untimed warm-up sample primes caches/branch predictors first. Pick
 /// `inner` large enough that one sample is comfortably above `Instant`
 /// resolution (≥ a few µs); for ns-scale ops use `inner` in the thousands.
+///
+/// # Panics
+///
+/// When `samples` or `inner` is zero.
+///
 /// # Examples
 ///
 /// ```
@@ -136,6 +197,11 @@ pub fn bench<F: FnMut()>(samples: usize, inner: usize, mut op: F) -> Stats {
 /// dev (unoptimised) is typically 5–25× slower than release, and a loaded host
 /// adds more — so size the budget off the *release* number times a safety factor
 /// and document the observed dev figure alongside it.
+///
+/// # Panics
+///
+/// When `iters` is zero.
+///
 /// # Examples
 ///
 /// ```
@@ -157,19 +223,21 @@ pub fn time_median<F: FnMut()>(iters: usize, mut op: F) -> Duration {
     samples[iters / 2]
 }
 
-/// Print one labelled timing line.
-///
-/// # Examples
-///
-/// ```
-/// let s = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
-/// kevy_bench::report("noop", s); // median / p95 / min, one line
-/// ```
-pub fn report(label: &str, s: Stats) {
-    println!(
-        "  {label:<30} median {:>8} ns   p95 {:>8} ns   min {:>8} ns",
-        s.median_ns, s.p95_ns, s.min_ns
-    );
+impl Stats {
+    /// Print one labelled timing line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = kevy_bench::bench(3, 100, || { std::hint::black_box(1u32); });
+    /// s.report("noop"); // median / p95 / min, one line
+    /// ```
+    pub fn report(&self, label: &str) {
+        println!(
+            "  {label:<30} median {:>8} ns   p95 {:>8} ns   min {:>8} ns",
+            self.median_ns, self.p95_ns, self.min_ns
+        );
+    }
 }
 
 /// Print both timings and the candidate's speedup over the baseline (by median).
@@ -187,13 +255,20 @@ pub fn report(label: &str, s: Stats) {
 /// assert!(ratio > 0.0 && ratio.is_finite());
 /// ```
 pub fn compare(base_label: &str, base: Stats, cand_label: &str, cand: Stats) -> f64 {
-    report(base_label, base);
-    report(cand_label, cand);
+    base.report(base_label);
+    cand.report(cand_label);
     let ratio = base.median_ns as f64 / (cand.median_ns.max(1)) as f64;
     let verdict = if ratio >= 1.0 { "faster" } else { "slower" };
     println!("  → {cand_label} is {ratio:.2}× {verdict} than {base_label} (median)\n");
     ratio
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Stats>();
+};
 
 #[cfg(test)]
 mod tests {

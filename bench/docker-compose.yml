@@ -20,7 +20,7 @@ services:
     networks: [bench]
 
   redis:
-    image: redis:8.10.1
+    image: redis:8.10.2
     command:
       ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
     cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"

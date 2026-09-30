@@ -26,6 +26,22 @@
 //! reads the CQ tail with `Acquire` and publishes the CQ head with
 //! `Release`. `IoUring` owns its ring fd and three mappings, freed on
 //! drop.
+//!
+//! # Example
+//!
+//! ```
+//! # #[cfg(target_os = "linux")] fn main() -> std::io::Result<()> {
+//! use kevy_uring::IoUring;
+//!
+//! let mut ring = IoUring::new(8)?;
+//! assert!(ring.prep_nop(7), "the queue has room");
+//! ring.submit_and_wait(1)?;
+//! let mut tags = Vec::new();
+//! ring.for_each_completion(|c| tags.push(c.user_data));
+//! assert_eq!(tags, vec![7]);
+//! # Ok(()) }
+//! # #[cfg(not(target_os = "linux"))] fn main() {}
+//! ```
 
 #![cfg(target_os = "linux")]
 #![warn(missing_docs)]
@@ -50,3 +66,19 @@ pub use file_batch::FileRead;
 pub use layout::KernelTimespec;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    const fn send<T: Send>() {}
+    send_sync::<Completion>();
+    send_sync::<FileRead>();
+    send_sync::<KernelTimespec>();
+    send::<IoUring>();
+    send::<ProvidedBufRing>();
+};

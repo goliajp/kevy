@@ -12,9 +12,8 @@ use crate::state::{ReplicationState, RuntimeState};
 
 /// The primary-side keys when `[replication] secure` is on.
 fn link_security(repl: &ReplicationState) -> Option<kevy_rt::ReplicationSecurity> {
-    repl.links().map(|l| kevy_rt::ReplicationSecurity {
-        local: l.local.clone(),
-        replica_keys: l.replicas.clone(),
+    repl.links().map(|l| {
+        kevy_rt::ReplicationSecurity::new(l.local.clone()).with_replica_keys(l.replicas.clone())
     })
 }
 
@@ -59,7 +58,8 @@ pub(crate) fn apply<C: Commands>(
         ReplicationRole::Primary => {
             repl.set_min_replicas(cfg.replication.min_replicas_to_write);
             runtime
-                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication(true)
+                .with_replication_buffer_size(cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
                 .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
@@ -75,12 +75,14 @@ pub(crate) fn apply<C: Commands>(
             // (ReplicatedApplyGuard), so the standing cost is the
             // idle backlog buffer.
             runtime
-                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication(true)
+                .with_replication_buffer_size(cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
                 .with_replication_security_opt(link_security(repl))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Standalone => runtime,
+        other => unimplemented!("no replication wiring for role {other:?}"),
     }
 }
 
@@ -202,5 +204,18 @@ mod tests {
         // [::1] is stripped + parsed as IPv6.
         let got = resolve_host("[::1]");
         assert!(matches!(got, Some(IpAddr::V6(_))));
+    }
+
+    #[test]
+    fn a_secure_primary_serves_with_its_own_key_and_the_configured_replicas() {
+        let repl = ReplicationState::new(1, false, 6004);
+        assert!(link_security(&repl).is_none(), "no secure link configured");
+        let local = kevy_noise::Keypair::from_secret([3; 32]);
+        let mut cfg = Config::default();
+        cfg.replication.replica_keys = vec![[4; 32], [5; 32]];
+        repl.set_links(crate::secure::ReplLinks::from_config(&cfg, &local));
+        let sec = link_security(&repl).expect("links are set");
+        assert_eq!(sec.local.public(), local.public());
+        assert_eq!(sec.replica_keys, vec![[4; 32], [5; 32]]);
     }
 }

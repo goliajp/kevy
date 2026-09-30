@@ -8,7 +8,19 @@
 /// The prefix is `Vec<u8>` (not `String`) because keys are arbitrary
 /// bytes in kevy; restricting to UTF-8 would be a stricter contract
 /// than the RESP wire offers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_scope::Scope;
+///
+/// let s = Scope::new(b"app:billing:".to_vec(), "embed-billing-1".to_string())
+///     .with_fallback("server-eu-1".to_string());
+/// assert_eq!(s.prefix(), b"app:billing:");
+/// assert_eq!(s.writer(), "embed-billing-1");
+/// assert_eq!(s.fallback(), Some("server-eu-1"));
+/// assert!(s.matches(b"app:billing:invoice:42"));
+/// assert!(!s.matches(b"app:auth:user:1"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Scope {
     pub(crate) prefix: Vec<u8>,
     pub(crate) writer: String,

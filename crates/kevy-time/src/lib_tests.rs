@@ -11,8 +11,8 @@ fn civil_round_trips_over_a_million_days() {
     for day in (-500_000..500_000).step_by(97) {
         for off in [0i64, 1, 43_199, 86_399] {
             let secs = day * 86_400 + off;
-            let c = civil_from_epoch(secs);
-            assert_eq!(epoch_from_civil(c), secs, "drift at {secs} ({c:?})");
+            let c = Civil::from_epoch(secs);
+            assert_eq!(c.to_epoch(), secs, "drift at {secs} ({c:?})");
             assert!((1..=12).contains(&c.m) && c.d >= 1 && c.d <= 31);
         }
     }
@@ -22,26 +22,26 @@ fn civil_round_trips_over_a_million_days() {
 fn known_dates_pin_the_calendar() {
     // The epoch itself, and the leap rules: 2000 (div-400 leap),
     // 1900 (century non-leap), 2024 (plain leap).
-    assert_eq!(epoch_from_civil(Civil { y: 1970, m: 1, d: 1, h: 0, min: 0, s: 0 }), 0);
-    assert_eq!(civil_from_epoch(951_782_400), Civil { y: 2000, m: 2, d: 29, h: 0, min: 0, s: 0 });
+    assert_eq!(Civil { y: 1970, m: 1, d: 1, h: 0, min: 0, s: 0 }.to_epoch(), 0);
+    assert_eq!(Civil::from_epoch(951_782_400), Civil { y: 2000, m: 2, d: 29, h: 0, min: 0, s: 0 });
     assert_eq!(eval(b"@1900-02-29", 0), None, "1900 was not a leap year");
     assert!(eval(b"@2024-02-29", 0).is_some());
     // A negative epoch decodes correctly.
-    assert_eq!(civil_from_epoch(-86_400).d, 31);
-    assert_eq!(civil_from_epoch(-86_400).y, 1969);
+    assert_eq!(Civil::from_epoch(-86_400).d, 31);
+    assert_eq!(Civil::from_epoch(-86_400).y, 1969);
 }
 
 #[test]
 fn add_months_clamps_month_ends() {
-    let jan31 = epoch_from_civil(Civil { y: 2026, m: 1, d: 31, h: 12, min: 0, s: 0 });
-    assert_eq!(civil_from_epoch(add_months(jan31, 1)).d, 28, "2026-02 clamps to 28");
-    let jan31_leap = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
-    assert_eq!(civil_from_epoch(add_months(jan31_leap, 1)).d, 29, "2024-02 clamps to 29");
+    let jan31 = Civil { y: 2026, m: 1, d: 31, h: 12, min: 0, s: 0 }.to_epoch();
+    assert_eq!(Civil::from_epoch(add_months(jan31, 1)).d, 28, "2026-02 clamps to 28");
+    let jan31_leap = Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 }.to_epoch();
+    assert_eq!(Civil::from_epoch(add_months(jan31_leap, 1)).d, 29, "2024-02 clamps to 29");
     // A year back and forth across the year boundary.
-    let c = civil_from_epoch(add_months(jan31, -13));
+    let c = Civil::from_epoch(add_months(jan31, -13));
     assert_eq!((c.y, c.m, c.d), (2024, 12, 31));
     // The time of day survives.
-    assert_eq!(civil_from_epoch(add_months(jan31, 1)).h, 12);
+    assert_eq!(Civil::from_epoch(add_months(jan31, 1)).h, 12);
 }
 
 #[test]
@@ -57,11 +57,11 @@ fn eval_speaks_the_whole_grammar() {
     assert_eq!(eval(b"@now+2y", now), Some(add_months(now, 24)));
     assert_eq!(
         eval(b"@2026-08-03", 0),
-        Some(epoch_from_civil(Civil { y: 2026, m: 8, d: 3, h: 0, min: 0, s: 0 }))
+        Some(Civil { y: 2026, m: 8, d: 3, h: 0, min: 0, s: 0 }.to_epoch())
     );
     assert_eq!(
         eval(b"@2026-08-03T09:15:30", 0),
-        Some(epoch_from_civil(Civil { y: 2026, m: 8, d: 3, h: 9, min: 15, s: 30 }))
+        Some(Civil { y: 2026, m: 8, d: 3, h: 9, min: 15, s: 30 }.to_epoch())
     );
 }
 
@@ -154,20 +154,54 @@ fn the_checked_helpers_refuse_every_way_the_arithmetic_can_leave_i64() {
 
     // And the same for the civil-to-epoch direction.
     let far = Civil { y: i64::MAX / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
-    assert_eq!(checked_epoch_from_civil(far), None);
+    assert_eq!(far.checked(), None);
     let back = Civil { y: i64::MIN / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
-    assert_eq!(checked_epoch_from_civil(back), None);
+    assert_eq!(back.checked(), None);
 
     // The floor: ordinary values must still answer, or "refuse
     // everything" would satisfy every assertion above.
     assert_eq!(checked_add_months(0, 1), Some(2_678_400));
     assert_eq!(checked_add_months(0, -1), Some(-2_678_400));
     for t in [0i64, 1_700_000_000, -2_208_988_800] {
-        assert_eq!(checked_epoch_from_civil(civil_from_epoch(t)), Some(t), "round trip at {t}");
+        assert_eq!(
+            Civil::from_epoch(t).checked().map(Civil::to_epoch),
+            Some(t),
+            "round trip at {t}"
+        );
     }
 
     // `add_months` keeps its signature and must never panic: it
     // saturates where the checked form refuses.
     assert_eq!(add_months(0, i64::MAX), i64::MAX);
     assert_eq!(add_months(0, i64::MIN), i64::MIN);
+}
+
+/// A `Civil` is always an instant an `i64` epoch holds, so the checked
+/// constructors must refuse exactly the fields past either end — and
+/// accept the ends themselves.
+#[test]
+fn the_constructors_hold_the_epoch_range_to_the_second() {
+    let c = Civil::from_epoch(i64::MAX);
+    let date = Civil::from_date(c.year(), c.month(), c.day()).expect("the last date");
+    let exact = date.with_time(c.hour(), c.minute(), c.second()).expect("the end itself");
+    assert_eq!(exact.to_epoch(), i64::MAX);
+    let c = Civil::from_epoch(i64::MIN);
+    let exact = c.with_time(c.hour(), c.minute(), c.second()).expect("the start itself");
+    assert_eq!(exact.to_epoch(), i64::MIN);
+    let last = Civil::from_epoch(i64::MAX);
+    assert!(last.second() < 59 || last.minute() < 59 || last.hour() < 23);
+    assert_eq!(last.with_time(23, 59, 59), None, "one step past i64::MAX must refuse");
+    let first = Civil::from_epoch(i64::MIN);
+    assert!(first.hour() > 0 || first.minute() > 0 || first.second() > 0);
+    assert_eq!(
+        Civil::from_date(first.year(), first.month(), first.day()),
+        None,
+        "midnight before i64::MIN must refuse"
+    );
+    for (m, d) in [(0, 1), (13, 1), (2, 30), (4, 31), (1, 0)] {
+        assert_eq!(Civil::from_date(2024, m, d), None, "{m}-{d}");
+    }
+    for (h, min, s) in [(24, 0, 0), (0, 60, 0), (0, 0, 60)] {
+        assert_eq!(Civil::from_epoch(0).with_time(h, min, s), None, "{h}:{min}:{s}");
+    }
 }

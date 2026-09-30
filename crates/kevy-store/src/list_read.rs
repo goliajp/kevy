@@ -61,7 +61,7 @@ impl Store {
                 // O(segments + span).
                 Value::SegList(l) => Ok(match range_bounds(start, stop, l.len()) {
                     None => Vec::new(),
-                    Some((s, end)) => l.iter_range(s, end - s + 1).cloned().collect(),
+                    Some((s, end)) => l.range(s, end - s + 1).cloned().collect(),
                 }),
                 Value::SmallListInline(l) => Ok(match range_bounds(start, stop, l.len()) {
                     None => Vec::new(),

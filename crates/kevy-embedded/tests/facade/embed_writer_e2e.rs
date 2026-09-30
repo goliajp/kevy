@@ -197,7 +197,7 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
         writer_a.set(format!("a:{i}").as_bytes(), b"old").unwrap();
     }
     let mut sub = ReplicaClient::connect(addr_a.as_str(), "sub-restart", 0).unwrap();
-    let gen_a = sub.primary_gen_at_handshake();
+    let gen_a = sub.primary_at_handshake().generation;
     assert_ne!(gen_a, 0, "writer must advertise a real generation");
     let (_payload, ack_a) = drain_snapshot(&mut sub);
     assert_eq!(ack_a, 3, "boot A as-of offset");
@@ -214,10 +214,13 @@ fn writer_restart_generation_fence_ships_instead_of_aliasing() {
     }
 
     // Resume claim from boot A's history: (gen_a, offset 3).
-    let mut sub =
-        ReplicaClient::connect_at(addr_b.as_str(), "sub-restart", gen_a, 3, Duration::from_secs(5))
-            .unwrap();
-    let gen_b = sub.primary_gen_at_handshake();
+    let mut sub = ReplicaClient::connect_with(
+        addr_b.as_str(),
+        &kevy_replicate::replica::ConnectOptions::new("sub-restart")
+            .with_from(kevy_replicate::feed::FeedPosition::new(gen_a, 3)),
+    )
+    .unwrap();
+    let gen_b = sub.primary_at_handshake().generation;
     assert_ne!(gen_b, gen_a, "each boot mints its own generation");
     // The fence must answer with a FULL snapshot of boot B's
     // keyspace — drain_snapshot panics if a live frame arrives
@@ -264,30 +267,33 @@ fn embed_writer_sends_stream_writes_as_what_they_did() {
         || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
     let (from, read, to) = (now(), call("XREADGROUP GROUP g c STREAMS s >"), now());
     assert!(read.starts_with("*1\r\n"), "{read}");
-    let seen = words(&next_frame(&mut client, Duration::from_secs(2)));
-    assert_eq!(seen[..4], ["XINTERNAL.CONSUMERSEEN", "s", "g", "c"]);
-    let met: u128 = seen[4].parse().expect("a contact time");
-    assert!((from..=to).contains(&met), "seen at {met}, read between {from} and {to}");
     let setid = words(&next_frame(&mut client, Duration::from_secs(2)));
-    assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id]);
+    assert_eq!(setid, ["XGROUP", "SETID", "s", "g", &id, "ENTRIESREAD", "1"]);
     let claim = words(&next_frame(&mut client, Duration::from_secs(2)));
     assert_eq!(claim[..6], ["XCLAIM", "s", "g", "c", "0", &id]);
     assert_eq!(claim[8..], ["RETRYCOUNT", "1", "FORCE", "JUSTID"]);
     let at: u128 = claim[7].parse().expect("a delivery time");
     assert!((from..=to).contains(&at), "delivered at {at}, read between {from} and {to}");
+    // last, so the claim's replay does not stamp the consumer afterwards
+    let seen = words(&next_frame(&mut client, Duration::from_secs(2)));
+    assert_eq!(seen[..4], ["XINTERNAL.CONSUMERSEEN", "s", "g", "c"]);
+    let met: u128 = seen[4].parse().expect("a contact time");
+    assert!((from..=to).contains(&met), "seen at {met}, read between {from} and {to}");
+    assert_eq!(seen[5], seen[4], "the read that met it made it active");
     // a store applying what the subscriber got holds the writer's state
     let mirror = Store::open(Config::default()).unwrap();
     let frames = [
         vec![b"XADD".to_vec(), b"s".to_vec(), id.as_bytes().to_vec(), b"f".to_vec(), b"v".to_vec()],
         ["XGROUP", "CREATE", "s", "g", "0"].iter().map(|p| p.as_bytes().to_vec()).collect(),
-        seen.iter().map(|p| p.as_bytes().to_vec()).collect(),
         setid.iter().map(|p| p.as_bytes().to_vec()).collect(),
         claim.iter().map(|p| p.as_bytes().to_vec()).collect(),
+        seen.iter().map(|p| p.as_bytes().to_vec()).collect(),
     ];
     for f in frames {
         mirror.apply_frame(&kevy_persist::Argv::from(f));
     }
-    for read in ["XRANGE s - +", "XINFO GROUPS s", "XPENDING s g"] {
+    // FULL shows the consumer's times and the delivery time as they are
+    for read in ["XRANGE s - +", "XINFO GROUPS s", "XPENDING s g", "XINFO STREAM s FULL"] {
         let argv: Vec<Vec<u8>> = read.split(' ').map(|p| p.as_bytes().to_vec()).collect();
         let mut out = Vec::new();
         mirror.dispatch_argv(&argv, &mut out);

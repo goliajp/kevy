@@ -3,6 +3,8 @@
 //! live frames with acked-offset tracking, ships snapshots, and
 //! honors dynamic `REPLICAOF` — plus the WAIT / REPL.* barrier verbs.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -151,7 +153,8 @@ impl Server {
                 .shards(nshards)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
                 // Scales with `patience()` for the same reason the waits do.
                 // The default is 60s, the same order as an instrumented run of
                 // this suite -- so under covgate the replica's slot expired
@@ -218,7 +221,7 @@ fn live_generation(replication_port: u16) -> u64 {
         0,
     )
     .expect("probe handshake");
-    probe.primary_gen_at_handshake()
+    probe.primary_at_handshake().generation
 }
 
 /// Raw 6-arg 4.0 handshake: `REPLICATE FROM <generation> <offset> ID
@@ -474,7 +477,8 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
         }
     }
     let buf = &buf[start..];
-    let (offset, argv, used) = kevy_replicate::wire::decode_frame(buf).expect("decode frame");
+    let (kevy_replicate::replica::DecodedFrame { offset, argv, .. }, used) =
+        kevy_replicate::wire::decode_frame(buf).expect("decode frame");
     assert_eq!(offset, 0);
     assert_eq!(argv.len(), 3);
     assert_eq!(argv.get(0), Some(&b"SET"[..]));
@@ -516,7 +520,7 @@ fn streaming_replica_receives_multiple_frames_in_order() {
                 continue;
             }
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
-                Ok((offset, argv, used)) => {
+                Ok((kevy_replicate::replica::DecodedFrame { offset, argv, .. }, used)) => {
                     frames.push((offset, argv));
                     cursor += used;
                     continue;
@@ -594,7 +598,7 @@ fn streaming_replica_receives_only_its_shards_writes() {
             }
             // Try to decode out of what's buffered.
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
-                Ok((_, argv, used)) => {
+                Ok((kevy_replicate::replica::DecodedFrame { argv, .. }, used)) => {
                     cursor += used;
                     total_received += 1;
                     all_keys.push(argv.get(1).unwrap().to_vec());
@@ -639,15 +643,14 @@ fn replica_client_handshake_and_receive_set_frame() {
     // Resume-shaped claim (the live generation at offset 0), so the
     // fence serves frames instead of the full snapshot a no-claim
     // cursor now gets — this test is about the frame contract.
-    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "replica-via-client",
-        live_generation(server.replication_base),
-        0,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("replica-via-client").with_from(
+            kevy_replicate::feed::FeedPosition::new(live_generation(server.replication_base), 0),
+        ),
     )
     .expect("connect + handshake");
-    assert_eq!(client.primary_offset_at_handshake(), 0);
+    assert_eq!(client.primary_at_handshake().offset, 0);
     assert_eq!(client.expected_offset(), 0);
 
     // Run a SET via the main port.
@@ -678,11 +681,10 @@ fn replica_client_handshake_failure_on_closed_port() {
     let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = probe.local_addr().unwrap().port();
     drop(probe);
-    let result = kevy_replicate::replica::ReplicaClient::connect_with_timeout(
+    let result = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", port),
-        "replica-x",
-        0,
-        std::time::Duration::from_millis(200),
+        &kevy_replicate::replica::ConnectOptions::new("replica-x")
+            .with_timeout(std::time::Duration::from_millis(200)),
     );
     assert!(result.is_err(), "connect to released port should fail, got Ok",);
 }
@@ -709,7 +711,8 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, buffer_size)
+            .with_replication(true)
+            .with_replication_buffer_size(buffer_size)
             .with_replication_listener(replication_base);
         let _ = rt.run(stop_thread);
     });
@@ -959,12 +962,11 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     // in-process recipe.
     let server = Server::start(1);
     // Resume-shaped claim — see replica_client_handshake_and_receive_set_frame.
-    let mut client = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut client = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "replica-apply",
-        live_generation(server.replication_base),
-        0,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("replica-apply").with_from(
+            kevy_replicate::feed::FeedPosition::new(live_generation(server.replication_base), 0),
+        ),
     )
     .expect("connect + handshake");
 
@@ -1281,6 +1283,9 @@ impl ReplicaServer {
                                         argv: frame.argv,
                                     }
                                 }
+                                // nothing to apply for an event this test
+                                // runner cannot name
+                                _ => continue,
                             };
                             if sender.send(apply).is_err() {
                                 return;
@@ -1511,6 +1516,11 @@ fn server_replica_applies_the_internal_consumer_record() {
 /// none. Doubles as a discard-the-reply consumer for the pop storm.
 fn read_resp_bulks(s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
     let head = read_line(s);
+    read_resp_bulks_after(head, s)
+}
+
+/// [`read_resp_bulks`] for a reply whose first line was already read.
+fn read_resp_bulks_after(head: Vec<u8>, s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
     match head[0] {
         b'+' | b':' => Vec::new(),
         b'$' => {
@@ -2112,7 +2122,7 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
         0,
     )
     .expect("probe handshake");
-    let gen1 = probe.primary_gen_at_handshake();
+    let gen1 = probe.primary_at_handshake().generation;
     assert_ne!(gen1, 0, "fresh dir draws a random feed generation");
     drop(probe);
     drop(client);
@@ -2136,16 +2146,14 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
     // Old-history resume claim: (gen 1, offset 5). Pre-fence, the
     // pump would serve frames 5..10 of the NEW history — silently
     // missing new0..new4. The fence must ship a full snapshot.
-    let mut replica = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "fence-probe",
-        gen1,
-        5,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("fence-probe")
+            .with_from(kevy_replicate::feed::FeedPosition::new(gen1, 5)),
     )
     .expect("resume handshake");
     assert_ne!(
-        replica.primary_gen_at_handshake(),
+        replica.primary_at_handshake().generation,
         gen1,
         "unclean restart must draw a fresh feed generation"
     );
@@ -2191,14 +2199,12 @@ fn ahead_cursor_ships_snapshot_instead_of_wedging() {
         0,
     )
     .expect("probe handshake");
-    let live_gen = probe.primary_gen_at_handshake();
+    let live_gen = probe.primary_at_handshake().generation;
     drop(probe);
-    let mut replica = kevy_replicate::replica::ReplicaClient::connect_at(
+    let mut replica = kevy_replicate::replica::ReplicaClient::connect_with(
         ("127.0.0.1", server.replication_base),
-        "ahead-probe",
-        live_gen,
-        999_999,
-        std::time::Duration::from_secs(5),
+        &kevy_replicate::replica::ConnectOptions::new("ahead-probe")
+            .with_from(kevy_replicate::feed::FeedPosition::new(live_gen, 999_999)),
     )
     .expect("ahead handshake");
     let mut pings = 0;
@@ -2349,7 +2355,8 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
             .shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
-            .with_replication(true, 1024 * 1024)
+            .with_replication(true)
+            .with_replication_buffer_size(1024 * 1024)
             .with_replication_listener(node_repl_base)
             .with_replica_inboxes(receivers);
         let _ = rt.run(stop_thread);
@@ -2415,5 +2422,76 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
     stop.store(true, Ordering::SeqCst);
     let _ = std::net::TcpStream::connect(("127.0.0.1", node_port));
     let _ = handle.join();
+    primary.shutdown();
+}
+
+/// A blocking pop that finds data pops on the primary, and a replica
+/// pops the same element; a rename moves the key on the replica too.
+#[test]
+fn blocking_pops_and_renames_reach_a_replica() {
+    let primary = Server::start(1);
+    let mut w = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+    send_resp(&mut w, &[b"RPUSH", b"q", b"a", b"b", b"c", b"d"]);
+    assert_eq!(read_line(&mut w), b":4\r\n");
+    send_resp(&mut w, &[b"SET", b"r1", b"v"]);
+    assert_eq!(read_line(&mut w), b"+OK\r\n");
+
+    let replica_commands = kevy::KevyCommands::sharded(1);
+    let receivers = replica_commands.state().take_replica_inboxes().expect("fresh state");
+    let replica_port = free_port_block(1) + 1;
+    let replica_dir = TmpDir::new("kevy-replica-blocking-pop");
+    let replica_dir_path = replica_dir.path().to_path_buf();
+    // SAFETY: see Server::start.
+    unsafe {
+        std::env::set_var("KEVY_IO_URING", "0");
+    }
+    let replica_stop = Arc::new(AtomicBool::new(false));
+    let replica_stop_thread = replica_stop.clone();
+    let replica_handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::builder(replica_commands)
+            .bind([127, 0, 0, 1], replica_port)
+            .shards(1)
+            .with_data_dir(replica_dir_path)
+            .with_aof(false)
+            .with_replica_inboxes(receivers);
+        let _ = rt.run(replica_stop_thread);
+    });
+    wait_port(replica_port, "server");
+    let mut admin = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    let base = primary.replication_base.to_string();
+    send_resp(&mut admin, &[b"REPLICAOF", b"127.0.0.1", base.as_bytes()]);
+    assert_eq!(read_line(&mut admin), b"+OK\r\n");
+
+    let mut r = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    fn settles(s: &mut std::net::TcpStream, probe: &[&[u8]], want: &[u8]) -> bool {
+        for _ in 0..250 {
+            send_resp(s, probe);
+            let head = read_line(s);
+            // `-LOADING` while the join's snapshot lands is not an answer yet
+            if !head.starts_with(b"-") && read_resp_bulks_after(head, s).concat() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+    assert!(settles(&mut r, &[b"LRANGE", b"q", b"0", b"-1"], b"abcd"), "replica never caught up");
+
+    send_resp(&mut w, &[b"BLPOP", b"q", b"0"]);
+    assert_eq!(read_resp_bulks(&mut w), [b"q".to_vec(), b"a".to_vec()]);
+    send_resp(&mut w, &[b"BRPOP", b"q", b"0"]);
+    assert_eq!(read_resp_bulks(&mut w), [b"q".to_vec(), b"d".to_vec()]);
+    send_resp(&mut w, &[b"RENAME", b"r1", b"r2"]);
+    assert_eq!(read_line(&mut w), b"+OK\r\n");
+    assert!(
+        settles(&mut r, &[b"LRANGE", b"q", b"0", b"-1"], b"bc"),
+        "the replica still holds the elements the primary popped",
+    );
+    assert!(settles(&mut r, &[b"GET", b"r2"], b"v"), "the rename never reached it");
+    assert!(settles(&mut r, &[b"GET", b"r1"], b""), "the renamed key stayed behind");
+
+    replica_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(("127.0.0.1", replica_port));
+    let _ = replica_handle.join();
     primary.shutdown();
 }

@@ -1,0 +1,2 @@
+kevy-table-catalog v1
+users	users%3A	id	id:i64,email:str	email:unique	-

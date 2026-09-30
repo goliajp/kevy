@@ -7,7 +7,8 @@
 //! - multi-key: first key empty + second has data → returns from second
 //! - negative timeout → ERR reply
 //! - wrong-type key → WRONGTYPE reply
-//! - wake-on-ZADD: parked BZPOPMIN unblocks when a sibling conn ZADDs
+//! - wake-on-ZADD: parked BZPOPMIN unblocks when a sibling conn ZADDs,
+//!   directly or from inside an EVAL script
 //!
 //! All tests spin a real in-process kevy runtime + TCP socket so the
 //! BlockHint resolve / arm / wake / pop chain is exercised end-to-end —
@@ -91,11 +92,7 @@ impl Server {
     fn start(nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-bzpopmin-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("bzpopmin");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -259,6 +256,20 @@ fn bzpopmin_woken_by_concurrent_zadd() {
     let _ = read_reply(&mut producer); // :1
     let reply = read_reply(&mut consumer);
     assert_eq!(reply, b"*3\r\n$8\r\nwakeable\r\n$5\r\nhello\r\n$2\r\n42\r\n");
+}
+
+#[test]
+fn bzpopmin_woken_by_zadd_inside_eval() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    consumer.write_all(&req(&[b"BZPOPMIN", b"marker", b"5"])).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let script: &[u8] = b"return redis.call('ZADD', KEYS[1], 7, 'job')";
+    producer.write_all(&req(&[b"EVAL", script, b"1", b"marker"])).unwrap();
+    assert_eq!(read_reply(&mut producer), b":1\r\n");
+    let reply = read_reply(&mut consumer);
+    assert_eq!(reply, b"*3\r\n$6\r\nmarker\r\n$3\r\njob\r\n$1\r\n7\r\n");
 }
 
 #[test]

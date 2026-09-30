@@ -39,6 +39,8 @@ use crate::Fsync;
 #[must_use = "the fsync only happens when `run` is called"]
 pub struct PendingSync {
     file: File,
+    /// The mapped chunks to `msync` first, for a log that maps its appends.
+    maps: Vec<crate::aof::MapHandle>,
     generation: u64,
     confirmed: Arc<AtomicU64>,
 }
@@ -66,6 +68,7 @@ impl PendingSync {
     /// # }
     /// ```
     pub fn run(self) -> io::Result<()> {
+        crate::aof::sync_handles(&self.maps)?;
         self.file.sync_data()?;
         self.confirmed.fetch_max(self.generation, Ordering::Release);
         Ok(())
@@ -105,6 +108,7 @@ impl Aof {
         if matches!(self.fsync, Fsync::Always) {
             return Ok(None);
         }
+        self.drain_stage()?;
         self.file.flush()?;
         match self.fsync {
             Fsync::EverySec => self.start_everysec_sync(),
@@ -140,6 +144,7 @@ impl Aof {
             self.sync_started += 1;
             Some(PendingSync {
                 file,
+                maps: self.map_handles(),
                 generation: self.sync_started,
                 confirmed: Arc::clone(&self.sync_confirmed),
             })

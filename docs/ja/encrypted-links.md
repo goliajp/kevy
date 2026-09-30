@@ -68,7 +68,7 @@ let writer_public = writer_key.public();
 let writer = Store::open(
     Config::default()
         .with_embed_writer("0.0.0.0:7101")
-        .with_writer_security(LinkKeys { local: writer_key, peers: vec![] }),
+        .with_writer_security(LinkKeys::new(writer_key)),
 )?;
 
 // レプリカ：ライターの公開鍵を信頼する
@@ -76,7 +76,7 @@ let replica = Store::open(
     Config::default()
         .without_aof()
         .with_replica_upstream("writer.internal:7101")
-        .with_replica_security(LinkKeys { local: replica_key, peers: vec![writer_public] }),
+        .with_replica_security(LinkKeys::new(replica_key).with_peers(vec![writer_public])),
 )?;
 # Ok::<(), kevy_embedded::KevyError>(())
 ```

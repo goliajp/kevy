@@ -1,0 +1,48 @@
+# mmkvgate (Apple) — kevy's embedded engine vs MMKV through XCTest, on a
+# simulator or a device. Generated into an Xcode project by
+# bench/mmkvgate/run-apple.sh; the project itself is not tracked.
+name: mmkvgate
+options:
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  KevyKit:
+    path: ../../..
+  MMKV:
+    url: https://github.com/Tencent/MMKV.git
+    exactVersion: 2.4.2
+settings:
+  base:
+    DEVELOPMENT_TEAM: KF79DRC524
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  MmkvgateHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.golia.kevy.mmkvgate
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  mmkvgateTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests/mmkvgateTests]
+    dependencies:
+      - target: MmkvgateHost
+      - package: KevyKit
+        product: KevyKit
+      - package: MMKV
+        product: MMKV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.golia.kevy.mmkvgate.tests
+schemes:
+  mmkvgate:
+    build:
+      targets:
+        MmkvgateHost: all
+    test:
+      config: Release
+      targets: [mmkvgateTests]

@@ -7,10 +7,9 @@
 //! to dispatch without a table row (or vice versa) fails here with
 //! the exact (op, property) named.
 
-use kevy_resp::ops_table::{KNOWN_GAPS, NotifyKind, OP_TABLE, surface};
+use kevy_resp::ops_table::{KNOWN_GAPS, OP_TABLE, surface};
 
 use crate::verb_meta::VERB_META;
-use kevy_rt::NotifyClass;
 
 use crate::cmd::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
 use crate::cmd_block::wake_idx_for_verb;
@@ -53,17 +52,7 @@ fn notify_class_matches_table() {
         }
         let got = notify_class_for_verb(o.name.as_bytes());
         let want = o.notify;
-        let matches = matches!(
-            (got, want),
-            (None, None)
-                | (Some(NotifyClass::String), Some(NotifyKind::String))
-                | (Some(NotifyClass::Hash), Some(NotifyKind::Hash))
-                | (Some(NotifyClass::List), Some(NotifyKind::List))
-                | (Some(NotifyClass::Set), Some(NotifyKind::Set))
-                | (Some(NotifyClass::Zset), Some(NotifyKind::Zset))
-                | (Some(NotifyClass::Stream), Some(NotifyKind::Stream))
-                | (Some(NotifyClass::Generic), Some(NotifyKind::Generic))
-        );
+        let matches = got == want;
         assert!(
             matches,
             "{}: notify_class_for_verb = {:?}, OP_TABLE.notify = {:?}",

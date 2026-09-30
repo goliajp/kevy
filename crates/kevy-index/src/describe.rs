@@ -11,8 +11,9 @@
 //! the grammar needs them, the auto loop's additions left out (they are
 //! runtime provenance, not declaration intent — [`TableSpec::sans_auto`]).
 
-use crate::catalog::{IndexKind, IndexSpec, ValType};
-use crate::table::{TableSpec, compile_table, dotted};
+use crate::Partitioning;
+use crate::table::TableSpec;
+use crate::{IndexKind, IndexSpec, ValType};
 
 /// One node of a describe reply. Numbers travel as bulk strings and an
 /// absent part as `-`, the same conventions `TABLE.LIST` uses, so a
@@ -23,13 +24,13 @@ use crate::table::{TableSpec, compile_table, dotted};
 ///
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
 /// assert_eq!(fields[0], Described::Bulk(b"name".to_vec()));
 /// assert_eq!(fields[13], Described::Bulk(b"-".to_vec())); // no window
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Described {
     /// A bulk string — a name, a keyword, or a number in decimal.
     ///
@@ -68,153 +69,6 @@ pub(crate) fn argv(words: Vec<Vec<u8>>) -> Described {
     Described::Array(words.into_iter().map(Described::Bulk).collect())
 }
 
-/// `TABLE.DESCRIBE`: `name prefix pk columns indexes orderpaths window
-/// autodeclare declaration`, label/value. Indexes and orderpaths carry
-/// the compiled path name and whether the auto loop added them.
-///
-/// ```
-/// use kevy_index::{Described, describe_table, parse_table_declare};
-///
-/// let t = parse_table_declare(&[
-///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
-///     b"COLUMN", b"id", b"i64", b"COLUMN", b"age", b"i64", b"INDEX", b"age", b"range",
-/// ])
-/// .unwrap();
-/// let Described::Array(fields) = describe_table(&t) else { unreachable!() };
-/// let Described::Array(indexes) = &fields[9] else { unreachable!() };
-/// let Described::Array(index) = &indexes[0] else { unreachable!() };
-/// assert_eq!(index[1], Described::Bulk(b"u.age".to_vec()));
-/// ```
-pub fn describe_table(t: &TableSpec) -> Described {
-    let columns = t.columns.iter().map(|(c, ty)| Described::Array(vec![b(c), b(ty.tag())]));
-    let window = match &t.window {
-        None => b("-"),
-        Some(w) => Described::Array(vec![
-            b("column"),
-            b(&w.column),
-            b("span"),
-            n(w.span),
-            b("bucket"),
-            n(w.bucket),
-        ]),
-    };
-    Described::Array(vec![
-        b("name"),
-        b(&t.name),
-        b("prefix"),
-        b(&t.prefix),
-        b("pk"),
-        b(&t.pk),
-        b("columns"),
-        Described::Array(columns.collect()),
-        b("indexes"),
-        table_indexes(t),
-        b("orderpaths"),
-        table_orderpaths(t),
-        b("window"),
-        window,
-        b("autodeclare"),
-        n(t.autodeclare),
-        b("declaration"),
-        argv(table_declaration(&t.sans_auto())),
-    ])
-}
-
-fn table_indexes(t: &TableSpec) -> Described {
-    let rows = t.indexes.iter().map(|ix| {
-        let path = dotted(&t.name, &ix.column);
-        Described::Array(vec![
-            b("path"),
-            b(&path),
-            b("column"),
-            b(&ix.column),
-            b("kind"),
-            b(ix.kind.tag()),
-            b("values"),
-            argv(ix.values.clone()),
-            b("auto"),
-            flag(t.auto_added.contains(&path)),
-        ])
-    });
-    Described::Array(rows.collect())
-}
-
-fn table_orderpaths(t: &TableSpec) -> Described {
-    let rows = t.orderpaths.iter().map(|op| {
-        let path = dotted(&t.name, &op.name);
-        let on = op.on.iter().map(|(c, desc)| Described::Array(vec![b(c), b(order(*desc))]));
-        Described::Array(vec![
-            b("path"),
-            b(&path),
-            b("name"),
-            b(&op.name),
-            b("on"),
-            Described::Array(on.collect()),
-            b("auto"),
-            flag(t.auto_added.contains(&path)),
-        ])
-    });
-    Described::Array(rows.collect())
-}
-
-/// The `TABLE.DECLARE` argv that recreates `t` as written.
-///
-/// ```
-/// use kevy_index::{parse_table_declare, table_declaration};
-///
-/// // Keywords come back upper-case, kinds lower-case: the canonical form.
-/// let t = parse_table_declare(&[
-///     b"table.declare", b"u", b"prefix", b"u:", b"pk", b"id",
-///     b"column", b"id", b"I64", b"index", b"id", b"UNIQUE",
-/// ])
-/// .unwrap();
-/// let argv = table_declaration(&t);
-/// let refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
-/// assert_eq!(refs, [&b"TABLE.DECLARE"[..], b"u", b"PREFIX", b"u:", b"PK", b"id",
-///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique"]);
-/// assert_eq!(parse_table_declare(&refs).unwrap(), t);
-/// ```
-pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
-    let mut w: Vec<Vec<u8>> = vec![
-        b"TABLE.DECLARE".to_vec(),
-        t.name.clone(),
-        b"PREFIX".to_vec(),
-        t.prefix.clone(),
-        b"PK".to_vec(),
-        t.pk.clone(),
-    ];
-    for (c, ty) in &t.columns {
-        w.extend([b"COLUMN".to_vec(), c.clone(), ty.tag().into()]);
-    }
-    for ix in &t.indexes {
-        w.extend([b"INDEX".to_vec(), ix.column.clone(), ix.kind.tag().into()]);
-        if !ix.values.is_empty() {
-            w.push(b"VALUES".to_vec());
-            w.extend(ix.values.iter().cloned());
-        }
-    }
-    for op in &t.orderpaths {
-        w.extend([b"ORDERPATH".to_vec(), op.name.clone(), b"ON".to_vec()]);
-        for (i, (c, desc)) in op.on.iter().enumerate() {
-            if i > 0 {
-                w.push(b"THEN".to_vec());
-            }
-            w.push(c.clone());
-            if *desc {
-                w.push(b"DESC".to_vec());
-            }
-        }
-    }
-    if let Some(win) = &t.window {
-        w.extend([b"WINDOW".to_vec(), win.column.clone(), b"SPAN".to_vec()]);
-        w.extend([win.span.to_string().into(), b"BUCKET".to_vec(), win.bucket.to_string().into()]);
-    }
-    if t.autodeclare != 0 {
-        w.extend([b"AUTODECLARE".to_vec(), t.autodeclare.to_string().into()]);
-    }
-    w
-}
-
 /// `IDX.DESCRIBE`: `name prefix kind type fields values positions maxmem
 /// groupby ann composite table declaration`. An index a table compiled
 /// names that table and has no declaration of its own (`-`): it is
@@ -223,15 +77,36 @@ pub fn table_declaration(t: &TableSpec) -> Vec<Vec<u8>> {
 /// ```
 /// use kevy_index::{Described, IndexKind, IndexSpec, ValType, describe_index};
 ///
-/// let s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
 /// let Described::Array(fields) = describe_index(&s, []) else { unreachable!() };
 /// assert_eq!(fields[22], Described::Bulk(b"table".to_vec()));
 /// assert_eq!(fields[23], Described::Bulk(b"-".to_vec()));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn describe_index<'a>(
     s: &IndexSpec,
+    tables: impl IntoIterator<Item = &'a TableSpec>,
+) -> Described {
+    describe_index_partitioned(s, &Partitioning::Local, tables)
+}
+
+/// [`describe_index`] for an index spread as `part` says: a
+/// `partitioning` pair before the declaration names it (`local`, or
+/// `global` with the split values), and the declaration carries the
+/// `PARTITION` options.
+///
+/// ```
+/// use kevy_index::{Described, IndexKind, IndexSpec, Partitioning, ValType, describe_index_partitioned, order_key};
+///
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+/// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
+/// let Described::Array(fields) = describe_index_partitioned(&s, &p, []) else { unreachable!() };
+/// assert_eq!(fields[24], Described::Bulk(b"partitioning".to_vec()));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn describe_index_partitioned<'a>(
+    s: &IndexSpec,
+    part: &Partitioning,
     tables: impl IntoIterator<Item = &'a TableSpec>,
 ) -> Described {
     let owner = owner_of(tables, &s.name);
@@ -241,7 +116,7 @@ pub fn describe_index<'a>(
         None => b("-"),
         Some(cols) => Described::Array(
             cols.iter()
-                .map(|c| Described::Array(vec![b(&c.name), b(c.ty.tag()), b(order(c.desc))]))
+                .map(|c| Described::Array(vec![b(&c.name), b(c.ty.tag()), b(order(c.order))]))
                 .collect(),
         ),
     };
@@ -270,9 +145,32 @@ pub fn describe_index<'a>(
         composite,
         b("table"),
         owner.map_or_else(|| b("-"), |t| b(&t.name)),
+        b("partitioning"),
+        partitioning_described(s, part),
         b("declaration"),
-        if owner.is_some() || s.composite.is_some() { b("-") } else { argv(index_declaration(s)) },
+        declaration_described(owner.is_some(), s, part),
     ])
+}
+
+/// The `IDX.CREATE` that recreates the index — `-` for one a table
+/// compiled (its table recreates it) or a composite (no such spelling).
+fn declaration_described(from_table: bool, s: &IndexSpec, part: &Partitioning) -> Described {
+    if from_table || s.composite.is_some() {
+        b("-")
+    } else {
+        argv(index_declaration_partitioned(s, part))
+    }
+}
+
+/// `local`, or `global` with its split values.
+fn partitioning_described(s: &IndexSpec, part: &Partitioning) -> Described {
+    match part {
+        Partitioning::Local => b("local"),
+        Partitioning::Global { splits } => {
+            let splits = splits.iter().map(|p| b(s.split_point_text(p))).collect();
+            Described::Array(vec![b("global"), Described::Array(splits)])
+        }
+    }
 }
 
 fn index_ann(s: &IndexSpec) -> Described {
@@ -297,11 +195,11 @@ fn index_ann(s: &IndexSpec) -> Described {
 /// let t = parse_table_declare(&[
 ///     b"TABLE.DECLARE", b"u", b"PREFIX", b"u:", b"PK", b"id",
 ///     b"COLUMN", b"id", b"i64", b"INDEX", b"id", b"unique",
-/// ])
-/// .unwrap();
+/// ])?;
 /// let tables = [t];
 /// assert_eq!(owner_of(&tables, b"u.id").map(|t| t.name.as_slice()), Some(&b"u"[..]));
 /// assert!(owner_of(&tables, b"age").is_none());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn owner_of<'a>(
     tables: impl IntoIterator<Item = &'a TableSpec>,
@@ -309,7 +207,7 @@ pub fn owner_of<'a>(
 ) -> Option<&'a TableSpec> {
     tables
         .into_iter()
-        .find(|t| compile_table(t).is_ok_and(|compiled| compiled.iter().any(|c| c.name == index)))
+        .find(|t| t.compile().is_ok_and(|compiled| compiled.iter().any(|c| c.name == index)))
 }
 
 /// The `IDX.CREATE` argv that recreates a directly declared index.
@@ -317,15 +215,35 @@ pub fn owner_of<'a>(
 /// ```
 /// use kevy_index::{IndexKind, IndexSpec, ValType, index_declaration};
 ///
-/// let mut s = IndexSpec::single_field(
-///     b"age".to_vec(), b"user:".to_vec(), b"age".to_vec(), ValType::I64, IndexKind::Range,
-/// );
-/// s.max_bytes = 4096;
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64)
+///     .with_field("age")
+///     .with_max_bytes(4096)
+///     .build()?;
 /// let line: Vec<String> =
 ///     index_declaration(&s).iter().map(|w| String::from_utf8_lossy(w).into_owned()).collect();
 /// assert_eq!(line.join(" "), "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range MAXMEM 4096");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
+    index_declaration_partitioned(s, &Partitioning::Local)
+}
+
+/// [`index_declaration`] with the `PARTITION global` / `SPLIT` options a
+/// global index needs to be recreated as it is.
+///
+/// ```
+/// use kevy_index::{IndexKind, IndexSpec, Partitioning, ValType, index_declaration_partitioned, order_key};
+///
+/// let s = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64).with_field("age").build()?;
+/// let p = Partitioning::Global { splits: vec![order_key(ValType::I64, b"30").unwrap()] };
+/// let line: Vec<String> = index_declaration_partitioned(&s, &p)
+///     .iter()
+///     .map(|w| String::from_utf8_lossy(w).into_owned())
+///     .collect();
+/// assert!(line.join(" ").ends_with("KIND range PARTITION global SPLIT 30"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn index_declaration_partitioned(s: &IndexSpec, part: &Partitioning) -> Vec<Vec<u8>> {
     let mut w: Vec<Vec<u8>> =
         vec![b"IDX.CREATE".to_vec(), s.name.clone(), b"ON".to_vec(), b"PREFIX".to_vec()];
     w.push(s.prefix.clone());
@@ -345,6 +263,12 @@ pub fn index_declaration(s: &IndexSpec) -> Vec<Vec<u8>> {
     }
     w.extend([b"TYPE".to_vec(), s.ty.tag().into(), b"KIND".to_vec(), s.kind.tag().into()]);
     index_options(s, &mut w);
+    if let Partitioning::Global { splits } = part {
+        w.extend([b"PARTITION".to_vec(), b"global".to_vec()]);
+        for p in splits {
+            w.extend([b"SPLIT".to_vec(), s.split_point_text(p)]);
+        }
+    }
     w
 }
 
@@ -375,8 +299,11 @@ fn index_options(s: &IndexSpec, w: &mut Vec<Vec<u8>>) {
     }
 }
 
-fn order(desc: bool) -> &'static str {
-    if desc { "desc" } else { "asc" }
+pub(crate) fn order(o: kevy_text::SortOrder) -> &'static str {
+    match o {
+        kevy_text::SortOrder::Asc => "asc",
+        kevy_text::SortOrder::Desc => "desc",
+    }
 }
 
 /// The sidecar's distance code as `IDX.CREATE` spells it (kevy-vector's
@@ -392,6 +319,9 @@ fn distance_tag(code: u8) -> &'static str {
     }
 }
 
+pub use crate::describe_table::{
+    describe_table, describe_table_partitioned, table_declaration, table_declaration_partitioned,
+};
 pub use crate::describe_view::{describe_view, view_declaration};
 
 #[cfg(test)]

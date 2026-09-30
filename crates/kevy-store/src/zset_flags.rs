@@ -4,64 +4,144 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::{Store, StoreError};
+use crate::{ScoreCompare, SetCondition, Store, StoreError};
 
-/// Parsed `ZADD` condition flags. `CH` only changes the *reply*
-/// (changed count instead of added count) — callers read
-/// [`ZaddReport::changed`] when set; the engine behavior is identical.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Parsed `ZADD` condition flags: `NX` / `XX` as a [`SetCondition`],
+/// `GT` / `LT` as a [`ScoreCompare`], and `CH`. Only Redis's legal
+/// combinations can be built — [`ZaddFlags::new`] refuses `NX` with
+/// `GT` / `LT` — so the store never has a combination to reject. `CH`
+/// only changes the *reply* (changed count instead of added count);
+/// [`ZaddReport`] carries both counts either way.
+///
+/// ```
+/// use kevy_store::{ScoreCompare, SetCondition, ZaddFlags};
+/// let f = ZaddFlags::new(SetCondition::IfPresent, ScoreCompare::Greater).unwrap().with_ch(true);
+/// assert_eq!((f.condition(), f.compare(), f.ch()), (SetCondition::IfPresent, ScoreCompare::Greater, true));
+/// assert!(ZaddFlags::new(SetCondition::IfAbsent, ScoreCompare::Less).is_none());
+/// assert_eq!(ZaddFlags::default(), ZaddFlags::new(SetCondition::Always, ScoreCompare::Any).unwrap());
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ZaddFlags {
-    /// Only add new members; never update existing ones.
-    pub nx: bool,
-    /// Only update existing members; never add new ones.
-    pub xx: bool,
-    /// Only update when the new score is greater than the current.
-    pub gt: bool,
-    /// Only update when the new score is less than the current.
-    pub lt: bool,
-    /// Reply with changed (added + updated) instead of added.
-    pub ch: bool,
+    condition: SetCondition,
+    compare: ScoreCompare,
+    ch: bool,
 }
 
 impl ZaddFlags {
-    /// Redis 6.2 rule: `GT`, `LT` and `NX` are mutually exclusive
-    /// (and `GT`+`LT` together are, too). `XX`+`NX` likewise.
-    pub fn valid(self) -> bool {
-        !(self.nx && (self.xx || self.gt || self.lt)) && !(self.gt && self.lt)
+    /// The flags for `condition` and `compare`, or `None` for the one
+    /// combination Redis refuses: `NX` together with `GT` or `LT`.
+    pub fn new(condition: SetCondition, compare: ScoreCompare) -> Option<Self> {
+        let legal = condition != SetCondition::IfAbsent || compare == ScoreCompare::Any;
+        legal.then_some(Self { condition, compare, ch: false })
+    }
+
+    /// Set `CH`: the reply counts changed members instead of added ones.
+    ///
+    /// ```
+    /// assert!(kevy_store::ZaddFlags::default().with_ch(true).ch());
+    /// ```
+    #[must_use]
+    pub fn with_ch(mut self, ch: bool) -> Self {
+        self.ch = ch;
+        self
+    }
+
+    /// `NX` / `XX`, or neither.
+    pub fn condition(self) -> SetCondition {
+        self.condition
+    }
+
+    /// `GT` / `LT`, or neither.
+    pub fn compare(self) -> ScoreCompare {
+        self.compare
+    }
+
+    /// Whether `CH` was given.
+    pub fn ch(self) -> bool {
+        self.ch
+    }
+
+    /// Whether these flags veto replacing an existing member's `old`
+    /// score with `new`.
+    fn vetoes_update(self, old: f64, new: f64) -> bool {
+        self.condition == SetCondition::IfAbsent
+            || match self.compare {
+                ScoreCompare::Greater => new <= old,
+                ScoreCompare::Less => new >= old,
+                ScoreCompare::Any => false,
+            }
     }
 }
 
 /// Outcome of a flags-aware `ZADD`.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
+/// let mut s = Store::new();
+/// s.zadd(b"z", &[(5.0, b"a".as_slice())])?;
+/// let gt = ZaddFlags::new(SetCondition::Always, ScoreCompare::Greater).unwrap();
+/// let r = s.zadd_flags(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b")], gt)?;
+/// assert_eq!((r.added, r.changed), (1, 1)); // `a` vetoed, `b` added
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct ZaddReport {
     /// Members newly added.
+    ///
+    /// ```
+    /// use kevy_store::{Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice())])?;
+    /// let r = s.zadd_flags(b"z", &[(2.0, b"a".as_slice()), (1.0, b"b")], ZaddFlags::default())?;
+    /// assert_eq!(r.added, 1); // only `b` is new
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub added: usize,
     /// Members added or whose score actually changed (`CH` reply).
+    ///
+    /// ```
+    /// use kevy_store::{Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (1.0, b"c")])?;
+    /// let pairs = [(2.0, b"a".as_slice()), (1.0, b"b"), (1.0, b"c")];
+    /// let r = s.zadd_flags(b"z", &pairs, ZaddFlags::default().with_ch(true))?;
+    /// assert_eq!(r.changed, 2); // `a` moved, `b` added, `c` unchanged
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub changed: usize,
     /// The `(score, member)` pairs actually applied, in input order —
     /// vetoed pairs are absent. Lets an AOF writer log the *effect*
     /// as a plain unconditional `ZADD` (deterministic on replay; a
     /// conditional replayed against divergent state could veto
     /// differently).
+    ///
+    /// ```
+    /// use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(5.0, b"a".as_slice())])?;
+    /// let lt = ZaddFlags::new(SetCondition::Always, ScoreCompare::Less).unwrap();
+    /// let r = s.zadd_flags(b"z", &[(9.0, b"a".as_slice()), (3.0, b"b")], lt)?;
+    /// assert_eq!(r.applied, [(3.0, b"b".to_vec())]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub applied: Vec<(f64, Vec<u8>)>,
 }
 
 impl Store {
-    /// Flags-aware `ZADD`. Caller validates [`ZaddFlags::valid`] at
-    /// its input boundary (RESP parse / typed API) — invalid combos
-    /// here are a caller bug.
+    /// Flags-aware `ZADD`: each pair is added or updated as `flags`
+    /// allow, and the report says what actually happened.
     pub fn zadd_flags(
         &mut self,
         key: &[u8],
         pairs: &[(f64, &[u8])],
         flags: ZaddFlags,
     ) -> Result<ZaddReport, StoreError> {
-        debug_assert!(flags.valid(), "caller must reject invalid flag combos");
-        let mut rep = ZaddReport { added: 0, changed: 0, applied: Vec::new() };
+        let mut rep = ZaddReport::default();
         for (score, m) in pairs {
             match self.zscore(key, m)? {
                 Some(old) => {
-                    if flags.nx || (flags.gt && *score <= old) || (flags.lt && *score >= old) {
+                    if flags.vetoes_update(old, *score) {
                         continue;
                     }
                     if *score != old {
@@ -71,7 +151,7 @@ impl Store {
                     }
                 }
                 None => {
-                    if flags.xx {
+                    if flags.condition == SetCondition::IfPresent {
                         continue;
                     }
                     self.zadd(key, &[(*score, m)])?;
@@ -93,24 +173,23 @@ impl Store {
         member: &[u8],
         flags: ZaddFlags,
     ) -> Result<Option<f64>, StoreError> {
-        debug_assert!(flags.valid(), "caller must reject invalid flag combos");
         match self.zscore(key, member)? {
             Some(old) => {
-                if flags.nx {
+                if flags.condition == SetCondition::IfAbsent {
                     return Ok(None);
                 }
                 let next = old + delta;
                 if !next.is_finite() {
                     return Err(StoreError::NotFloat);
                 }
-                if (flags.gt && next <= old) || (flags.lt && next >= old) {
+                if flags.vetoes_update(old, next) {
                     return Ok(None);
                 }
                 self.zadd(key, &[(next, member)])?;
                 Ok(Some(next))
             }
             None => {
-                if flags.xx {
+                if flags.condition == SetCondition::IfPresent {
                     return Ok(None);
                 }
                 if !delta.is_finite() {
@@ -131,14 +210,20 @@ mod tests {
         ZaddFlags::default()
     }
 
+    fn flags(c: SetCondition, s: ScoreCompare) -> ZaddFlags {
+        ZaddFlags::new(c, s).unwrap()
+    }
+
     #[test]
-    fn validity_matrix() {
-        assert!(zf().valid());
-        assert!(ZaddFlags { gt: true, ch: true, ..zf() }.valid());
-        assert!(ZaddFlags { xx: true, gt: true, ..zf() }.valid());
-        assert!(!ZaddFlags { nx: true, xx: true, ..zf() }.valid());
-        assert!(!ZaddFlags { nx: true, gt: true, ..zf() }.valid());
-        assert!(!ZaddFlags { gt: true, lt: true, ..zf() }.valid());
+    fn only_nx_with_a_comparison_is_refused() {
+        use ScoreCompare::{Any, Greater, Less};
+        use SetCondition::{Always, IfAbsent, IfPresent};
+        for c in [Always, IfAbsent, IfPresent] {
+            for s in [Any, Greater, Less] {
+                let refused = c == IfAbsent && s != Any;
+                assert_eq!(ZaddFlags::new(c, s).is_none(), refused, "{c:?} {s:?}");
+            }
+        }
     }
 
     #[test]
@@ -146,7 +231,11 @@ mod tests {
         let mut s = Store::new();
         s.zadd(b"z", &[(1.0, b"m".as_slice())]).unwrap();
         let r = s
-            .zadd_flags(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { nx: true, ..zf() })
+            .zadd_flags(
+                b"z",
+                &[(9.0, b"m"), (2.0, b"n")],
+                flags(SetCondition::IfAbsent, ScoreCompare::Any),
+            )
             .unwrap();
         assert_eq!((r.added, r.changed), (1, 1));
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(1.0)); // untouched
@@ -158,7 +247,11 @@ mod tests {
         let mut s = Store::new();
         s.zadd(b"z", &[(1.0, b"m".as_slice())]).unwrap();
         let r = s
-            .zadd_flags(b"z", &[(9.0, b"m"), (2.0, b"n")], ZaddFlags { xx: true, ..zf() })
+            .zadd_flags(
+                b"z",
+                &[(9.0, b"m"), (2.0, b"n")],
+                flags(SetCondition::IfPresent, ScoreCompare::Any),
+            )
             .unwrap();
         assert_eq!((r.added, r.changed), (0, 1));
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(9.0));
@@ -169,7 +262,7 @@ mod tests {
     fn gt_is_monotonic_heal() {
         let mut s = Store::new();
         s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
-        let gt = ZaddFlags { gt: true, ..zf() };
+        let gt = flags(SetCondition::Always, ScoreCompare::Greater);
         // Stale (lower) score: vetoed.
         let r = s.zadd_flags(b"z", &[(3.0, b"m")], gt).unwrap();
         assert_eq!(r.changed, 0);
@@ -187,7 +280,7 @@ mod tests {
     fn lt_mirror() {
         let mut s = Store::new();
         s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
-        let lt = ZaddFlags { lt: true, ..zf() };
+        let lt = flags(SetCondition::Always, ScoreCompare::Less);
         assert_eq!(s.zadd_flags(b"z", &[(7.0, b"m")], lt).unwrap().changed, 0);
         assert_eq!(s.zadd_flags(b"z", &[(3.0, b"m")], lt).unwrap().changed, 1);
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(3.0));
@@ -201,7 +294,7 @@ mod tests {
             .zadd_flags(
                 b"z",
                 &[(9.0, b"a"), (1.0, b"b"), (5.0, b"c")],
-                ZaddFlags { gt: true, ..zf() },
+                flags(SetCondition::Always, ScoreCompare::Greater),
             )
             .unwrap();
         // a updated, b vetoed, c added.
@@ -212,23 +305,23 @@ mod tests {
     fn incr_form_vetoes_to_none() {
         let mut s = Store::new();
         s.zadd(b"z", &[(5.0, b"m".as_slice())]).unwrap();
-        let gt = ZaddFlags { gt: true, ..zf() };
+        let gt = flags(SetCondition::Always, ScoreCompare::Greater);
         // Negative delta under GT: next < old → nil, score untouched.
         assert_eq!(s.zadd_incr(b"z", -2.0, b"m", gt).unwrap(), None);
         assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(5.0));
         assert_eq!(s.zadd_incr(b"z", 2.0, b"m", gt).unwrap(), Some(7.0));
         // XX on a missing member → nil.
-        let xx = ZaddFlags { xx: true, ..zf() };
+        let xx = flags(SetCondition::IfPresent, ScoreCompare::Any);
         assert_eq!(s.zadd_incr(b"z", 1.0, b"nope", xx).unwrap(), None);
         // NX on an existing member → nil.
-        let nx = ZaddFlags { nx: true, ..zf() };
+        let nx = flags(SetCondition::IfAbsent, ScoreCompare::Any);
         assert_eq!(s.zadd_incr(b"z", 1.0, b"m", nx).unwrap(), None);
     }
 
     #[test]
     fn wrongtype_propagates() {
         let mut s = Store::new();
-        s.set(b"str", b"v".to_vec(), None, false, false);
+        s.set(b"str", b"v".to_vec(), None, SetCondition::Always);
         assert!(s.zadd_flags(b"str", &[(1.0, b"m")], zf()).is_err());
         assert!(s.zadd_incr(b"str", 1.0, b"m", zf()).is_err());
     }

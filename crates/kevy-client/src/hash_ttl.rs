@@ -105,13 +105,7 @@ fn check_fields(fields: &[&[u8]]) -> KevyResult<()> {
 }
 
 fn cond_keyword(cond: HExpireCond) -> Option<&'static [u8]> {
-    match cond {
-        HExpireCond::Always => None,
-        HExpireCond::Nx => Some(b"NX"),
-        HExpireCond::Xx => Some(b"XX"),
-        HExpireCond::Gt => Some(b"GT"),
-        HExpireCond::Lt => Some(b"LT"),
-    }
+    cond.keyword().map(str::as_bytes)
 }
 
 /// Build `verb key [arg] [cond] FIELDS n field…`, parse the per-field

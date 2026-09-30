@@ -97,17 +97,14 @@ fn expire<A: ArgvView + ?Sized>(
         encode_error(out, ERR_NOT_INT);
         return Effect::Unchanged;
     };
-    if store.exists(&[&args[1]]) == 0 {
-        encode_integer(out, 0);
-        return Effect::Unchanged;
-    }
-    if n <= 0 {
-        store.del(&[&args[1]]);
-        encode_integer(out, 1);
-        return Effect::Write;
-    }
-    let ms = n.saturating_mul(unit_ms) as u64;
-    let set = store.expire(&args[1], Duration::from_millis(ms));
+    // the probe that writes also decides existence: a separate check reads
+    // the cached clock while the write reads a fresh one, so a key lapsed
+    // between the two would be answered as present yet written as absent
+    let set = if n <= 0 {
+        store.del(&[&args[1]]) == 1
+    } else {
+        store.expire(&args[1], Duration::from_millis(n.saturating_mul(unit_ms) as u64))
+    };
     encode_integer(out, i64::from(set));
     changed(set)
 }
@@ -129,10 +126,6 @@ fn expireat<A: ArgvView + ?Sized>(
         encode_error(out, ERR_NOT_INT);
         return Effect::Unchanged;
     };
-    if store.exists(&[&args[1]]) == 0 {
-        encode_integer(out, 0);
-        return Effect::Unchanged;
-    }
     let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;
     let set = store.expire_at_unix_ms(&args[1], deadline_ms);
     encode_integer(out, i64::from(set));
@@ -167,7 +160,7 @@ fn mset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) ->
     }
     let mut i = 1;
     while i + 1 < args.len() {
-        store.set(&args[i], args[i + 1].to_vec(), None, false, false);
+        store.set(&args[i], args[i + 1].to_vec(), None, kevy_store::SetCondition::Always);
         i += 2;
     }
     encode_simple_string(out, "OK");
@@ -185,7 +178,9 @@ fn rename<A: ArgvView + ?Sized>(
         wrong_args(out, if nx { "renamenx" } else { "rename" });
         return Effect::Unchanged;
     }
-    match store.rename(&args[1], &args[2], nx) {
+    let outcome =
+        if nx { store.rename_nx(&args[1], &args[2]) } else { store.rename(&args[1], &args[2]) };
+    match outcome {
         RenameOutcome::Renamed if nx => encode_integer(out, 1),
         RenameOutcome::Renamed => encode_simple_string(out, "OK"),
         RenameOutcome::DstExists => {

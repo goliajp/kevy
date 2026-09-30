@@ -3,7 +3,7 @@
 //! house rule; behaviour unchanged.
 
 use std::fs::File;
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Copy `[from, EOF)` of `path` to `<path>.corrupt-quarantine.<unix_ts>`
@@ -26,16 +26,6 @@ pub(crate) fn quarantine_dropped_tail(path: &Path, from: u64) -> io::Result<Path
     Ok(qpath)
 }
 
-/// Write a fresh AOF base at `path`: just the magic header, fsynced. The
-/// COW background-save's log reset starts from this — the post-collect
-/// tee'd writes are appended by `finish_concurrent_rewrite` and the result
-/// swaps over the live AOF (the snapshot now carries the pre-collect state).
-pub fn write_aof_base(path: &Path) -> io::Result<()> {
-    let mut f = File::create(path)?;
-    f.write_all(crate::record::AOF2_MAGIC)?;
-    f.sync_all()
-}
-
 /// `<aof>.rewrite` — same-directory temp path so `rename(2)` stays atomic.
 pub(crate) fn rewrite_tmp_path(path: &Path) -> PathBuf {
     let mut p = path.to_path_buf();
@@ -49,6 +39,28 @@ pub(crate) fn rewrite_tmp_path(path: &Path) -> PathBuf {
     };
     p.set_file_name(new_name);
     p
+}
+
+/// Cut the file back to where a replay settled, when it dropped nothing
+/// (the rest is a mapped log's zero tail); otherwise repair the tail.
+pub(crate) fn settle_tail(
+    path: &Path,
+    file: &mut File,
+    size: &mut u64,
+    settled: Option<u64>,
+    resync: bool,
+) -> io::Result<Option<PathBuf>> {
+    match settled.filter(|&s| s <= *size) {
+        Some(s) => {
+            if s < *size {
+                file.set_len(s)?;
+                file.sync_data()?;
+                *size = s;
+            }
+            Ok(None)
+        }
+        None => repair_tail(path, file, size, resync),
+    }
 }
 
 /// The tail-repair half of [`crate::Aof::open_with_repair`]. A crash —
@@ -70,8 +82,15 @@ pub(crate) fn repair_tail(
     size: &mut u64,
     resync: bool,
 ) -> io::Result<Option<PathBuf>> {
-    let valid = crate::replay::valid_prefix_len_of_file(path, resync)?;
+    let (valid, zero_tail) = crate::replay::valid_prefix_len_of_file(path, resync)?;
     if valid >= *size {
+        return Ok(None);
+    }
+    if valid + zero_tail == *size {
+        // only a mapped log's unused preallocation: not data, nothing to keep
+        file.set_len(valid)?;
+        file.sync_data()?;
+        *size = valid;
         return Ok(None);
     }
     let q = crate::aof_util::quarantine_dropped_tail(path, valid)?;

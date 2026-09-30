@@ -8,7 +8,7 @@
 //! the merged order, and — exactly like the text surface — a `FACET`
 //! query APPENDS one trailing element to the rows array.
 
-use kevy_index::{FacetBucket, ScalarHit, fold_facets, merge_claused, sort_facets};
+use kevy_index::{FacetBucket, ScalarHit, SortOrder, fold_facets, merge_claused, sort_facets};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
 use super::chunk::{emit_row, read_hydration, read_kbytes, read_u32, value_repr};
@@ -26,8 +26,9 @@ pub(super) fn reduce_query_claused(q: &Query, chunks: &[Vec<u8>]) -> Vec<u8> {
         let pos = collect_hits(c, q, &mut all);
         collect_facets(c, pos, q.facets.len(), &mut facets);
     }
-    let sort_desc = q.sort.as_ref().map(|(_, desc)| *desc);
-    let all = merge_claused(all, sort_desc, q.distinct.is_some(), q.offset, q.limit);
+    let sort =
+        q.sort.as_ref().map(|(_, desc)| if *desc { SortOrder::Desc } else { SortOrder::Asc });
+    let all = merge_claused(all, sort, q.offset, q.limit);
     sort_facets(&mut facets);
     emit_reply(q, &all, &facets)
 }
@@ -57,7 +58,9 @@ fn collect_hits(c: &[u8], q: &Query, all: &mut Vec<HydratedHit>) -> usize {
         } else {
             None
         };
-        all.push((ScalarHit { key, value, okey, dkey }, fv));
+        let mut hit = ScalarHit::new(key, value);
+        (hit.okey, hit.dkey) = (okey, dkey);
+        all.push((hit, fv));
     }
     pos
 }

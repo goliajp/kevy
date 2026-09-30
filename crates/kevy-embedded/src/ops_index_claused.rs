@@ -9,54 +9,21 @@ use kevy_index::{
     fold_facets, merge_claused, sort_facets,
 };
 
+pub(crate) use super::opts::{ScalarQueryOpts, ValueFilter};
 use super::sync_segs;
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
 
-/// One `FILTER` predicate: which stored value field it reads, and the
-/// test on it — the wire's `RANGE` / `EQ` shapes, in-process.
-///
-/// The bounds are raw bytes and are coerced with the type the field was
-/// DECLARED as, so a numeric range compares numerically rather than
-/// lexicographically.
-#[derive(Debug, Clone, Copy)]
-pub enum ValueFilter<'a> {
-    /// `field` between `min` and `max`, both inclusive.
-    Range {
-        /// The declared value field to read.
-        field: &'a [u8],
-        /// Lower bound, inclusive.
-        min: &'a [u8],
-        /// Upper bound, inclusive.
-        max: &'a [u8],
-    },
-    /// `field` exactly `value`.
-    Eq {
-        /// The declared value field to read.
-        field: &'a [u8],
-        /// The value to match.
-        value: &'a [u8],
-    },
-}
-
-impl ValueFilter<'_> {
-    pub(crate) fn field(&self) -> &[u8] {
-        match self {
-            ValueFilter::Range { field, .. } | ValueFilter::Eq { field, .. } => field,
-        }
-    }
-}
-
 /// One `FILTER` predicate resolved against the spec: the stored-value
 /// position it reads, and the test built with that field's DECLARED type.
 pub(crate) fn value_test(spec: &IndexSpec, f: &ValueFilter<'_>) -> KevyResult<(usize, ValueTest)> {
-    let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
-        .values
+        .values()
         .iter()
         .position(|v| v.name == f.field())
         .ok_or_else(|| unknown_field("FILTER", f.field(), "store", &stored))?;
-    let ty = spec.values[pos].ty;
+    let ty = spec.values()[pos].ty;
     // FILTER bounds speak the `@` time expressions on i64 fields —
     // one grammar across both faces (and, through this shared
     // resolver, the embedded Rust API too).
@@ -80,7 +47,7 @@ pub(crate) fn value_test(spec: &IndexSpec, f: &ValueFilter<'_>) -> KevyResult<(u
 /// derivation for a refused [`resolve`]. Checked in the clause order
 /// [`resolve`] resolves in, so it names the same field the error does.
 fn unstored_field(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> Option<Vec<u8>> {
-    let stored = |f: &[u8]| spec.values.iter().any(|v| v.name == f);
+    let stored = |f: &[u8]| spec.values().iter().any(|v| v.name == f);
     for f in opts.filters {
         if !stored(f.field()) {
             return Some(f.field().to_vec());
@@ -113,46 +80,81 @@ pub(crate) fn unknown_field(clause: &str, bad: &[u8], verb: &str, offered: &[&[u
     ))
 }
 
-/// Everything a scalar RANGE/EQ query carries beyond its bounds and
-/// limit — the embedded twin of the wire's optional clauses.
-/// [`ScalarQueryOpts::default`] is the plain query.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ScalarQueryOpts<'a> {
-    /// `FILTER …`: non-scoring predicates over stored values, ANDed. A
-    /// row without the stored value fails — absent is not a value.
-    pub filters: &'a [ValueFilter<'a>],
-    /// `SORT <field> ASC|DESC`: order the page by a stored value; a row
-    /// with no usable value sorts last in both directions.
-    pub sort: Option<(&'a [u8], bool)>,
-    /// `DISTINCT <field>`: at most one row per coerced value; a row
-    /// with no value is its own group.
-    pub distinct: Option<&'a [u8]>,
-    /// `FACET <field…>`: count each field's values over the whole match
-    /// set (FILTER reduces the counts; DISTINCT does not).
-    pub facets: &'a [Vec<u8>],
-    /// `OFFSET n`: rows to skip before `limit` takes effect.
-    pub offset: usize,
-}
-
-impl ScalarQueryOpts<'_> {
-    /// Whether any clause reshapes the selection (the cursor-refusing
-    /// set — `FILTER` alone pages fine).
-    pub(crate) fn selects(&self) -> bool {
-        self.sort.is_some() || self.distinct.is_some() || !self.facets.is_empty() || self.offset > 0
-    }
-}
-
 /// A clause-carrying query's answer: the page, per requested `FACET`
 /// field its `(value, count)` buckets, and — on the FILTER-with-cursor
 /// path — the cursor to resume from.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_embedded::{Config, IndexValue, ScalarQueryOpts, Store};
+///
+/// let s = Store::open(Config::default())?;
+/// s.idx_create(b"by_age", b"u:", b"age", kevy_embedded::IndexValType::I64, kevy_embedded::IndexKind::Range)?;
+/// s.hset(b"u:1", &[(b"age", b"30")])?;
+/// let page = s.idx_query_claused(b"by_age", &IndexValue::I64(0), &IndexValue::I64(99), None, 10, ScalarQueryOpts::default())?;
+/// assert_eq!(page.rows.len(), 1);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScalarPage {
     /// The selected rows, in the page's order.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// // u:1..u:3 aged 30, 40, 50; two paid, one due
+    /// let paid = [ValueFilter::Eq { field: b"status", value: b"paid" }];
+    /// let opts = ScalarQueryOpts::default().with_filters(&paid);
+    /// let page = s.idx_query_claused(b"by_age", &lo, &hi, None, 10, opts)?;
+    /// assert_eq!(page.rows, [(b"u:1".to_vec(), IndexValue::I64(30)), (b"u:2".to_vec(), IndexValue::I64(40))]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub rows: Vec<(Vec<u8>, IndexValue)>,
     /// One entry per requested facet field, most frequent first.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// let fields = [b"status".to_vec()];
+    /// let opts = ScalarQueryOpts::default().with_facets(&fields);
+    /// let page = s.idx_query_claused(b"by_age", &lo, &hi, None, 1, opts)?;
+    /// // counted over every match, not just the one-row page
+    /// assert_eq!(page.facets, [vec![(b"paid".to_vec(), 2), (b"due".to_vec(), 1)]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub facets: Vec<Vec<(Vec<u8>, u64)>>,
     /// Resume cursor (`None` under any selection clause, which refuses
     /// cursors at the wire and pages nothing here either).
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # let st = [(&b"status"[..], IndexValType::Str)];
+    /// # s.idx_create_with_values(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range, &st)?;
+    /// # for (k, age, status) in [(&b"u:1"[..], &b"30"[..], &b"paid"[..]), (b"u:2", b"40", b"paid"), (b"u:3", b"50", b"due")] {
+    /// #     s.hset(k, &[(b"age", age), (b"status", status)])?;
+    /// # }
+    /// # let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+    /// let plain = ScalarQueryOpts::default();
+    /// let first = s.idx_query_claused(b"by_age", &lo, &hi, None, 2, plain)?;
+    /// let rest = s.idx_query_claused(b"by_age", &lo, &hi, first.cursor.as_ref(), 2, plain)?;
+    /// assert_eq!(rest.rows[0].0, b"u:3");
+    /// let sorted = plain.with_sort(b"status", SortOrder::Asc);
+    /// assert!(s.idx_query_claused(b"by_age", &lo, &hi, None, 2, sorted)?.cursor.is_none());
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub cursor: Option<Cursor>,
 }
 
@@ -164,29 +166,29 @@ type GatheredPages = (Vec<(ScalarHit, ())>, Vec<Vec<FacetBucket>>);
 /// What the spec-dependent clauses resolve to.
 struct Resolved {
     filters: Vec<(usize, ValueTest)>,
-    sort: Option<(usize, bool, ValType)>,
+    sort: Option<(usize, kevy_index::SortOrder, ValType)>,
     distinct: Option<(usize, ValType)>,
     facets: Vec<(usize, ValType)>,
 }
 
 /// A clause's named stored-value field position + declared type.
 fn value_field(spec: &IndexSpec, clause: &str, field: &[u8]) -> KevyResult<(usize, ValType)> {
-    let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+    let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
     let pos = spec
-        .values
+        .values()
         .iter()
         .position(|v| v.name == field)
         .ok_or_else(|| unknown_field(clause, field, "store", &stored))?;
-    Ok((pos, spec.values[pos].ty))
+    Ok((pos, spec.values()[pos].ty))
 }
 
 fn resolve(spec: &IndexSpec, opts: &ScalarQueryOpts<'_>) -> KevyResult<Resolved> {
     let filters =
         opts.filters.iter().map(|f| value_test(spec, f)).collect::<KevyResult<Vec<_>>>()?;
     let sort = match opts.sort {
-        Some((field, desc)) => {
+        Some((field, order)) => {
             let (pos, ty) = value_field(spec, "SORT", field)?;
-            Some((pos, desc, ty))
+            Some((pos, order, ty))
         }
         None => None,
     };
@@ -218,23 +220,11 @@ impl Store {
         if prefix.is_empty() {
             return Err(KevyError::InvalidInput("empty prefix".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: values
-                .iter()
-                .map(|(n, t)| kevy_index::ValueSpec { name: n.to_vec(), ty: *t })
-                .collect(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let values =
+            values.iter().map(|(n, t)| kevy_index::ValueSpec::new(*n).with_type(*t)).collect();
+        let spec = IndexSpec::builder(name, prefix, kind, ty).with_field(field).with_values(values);
+        let spec = crate::ops_index::built(spec)?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
     /// [`Store::idx_query`] with the stored-value clauses — the scalar
@@ -256,21 +246,14 @@ impl Store {
         let offset = opts.offset.min(10_000);
         let spec = self.claused_spec(name)?;
         let r = self.claused_resolve(name, &spec, &opts)?;
-        let clauses = ScalarClauses {
-            filters: &r.filters,
-            sort: r.sort,
-            distinct: r.distinct,
-            facets: &r.facets,
-            fetch: limit + offset,
-        };
+        let mut clauses = ScalarClauses::new(limit + offset).with_filters(&r.filters);
+        clauses = clauses.with_facets(&r.facets);
+        (clauses.sort, clauses.distinct) = (r.sort, r.distinct);
         let (all, mut facets) = self.gather_claused(name, min, max, cursor, &clauses)?;
-        let sort_desc = r.sort.map(|(_, desc, _)| desc);
-        let all = merge_claused(all, sort_desc, r.distinct.is_some(), offset, limit);
+        let all = merge_claused(all, r.sort.map(|(_, order, _)| order), offset, limit);
         sort_facets(&mut facets);
         let next = (!opts.selects() && all.len() == limit)
-            .then(|| {
-                all.last().map(|(h, ())| Cursor { value: h.value.clone(), key: h.key.clone() })
-            })
+            .then(|| all.last().map(|(h, ())| Cursor::new(h.value.clone(), h.key.clone())))
             .flatten();
         self.observe_hit(name);
         Ok(ScalarPage {
@@ -311,7 +294,7 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
                 total += w
-                    .cold_claused_count(spec.ty, min, max, &r.filters)
+                    .cold_claused_count(spec.ty(), min, max, &r.filters)
                     .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
             }
             #[cfg(target_arch = "wasm32")]
@@ -369,7 +352,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_spec, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(w) = inner.idx_segs.window_of(name) {
@@ -385,7 +368,7 @@ impl Store {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(w) = inner.idx_segs.window_of(name).filter(|w| w.has_cold()) {
                     let (chits, cfacets) = w
-                        .cold_claused(_spec.ty, min, max, cursor, clauses)
+                        .cold_claused(_spec.ty(), min, max, cursor, clauses)
                         .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
                     all.extend(chits.into_iter().map(|h| (h, ())));
                     fold_facets(&mut facets, cfacets);

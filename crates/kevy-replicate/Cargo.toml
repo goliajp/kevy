@@ -16,10 +16,18 @@ categories = ["database", "network-programming"]
 [lints]
 workspace = true
 
+[features]
+default = ["secure"]
+# Noise IK encrypted, mutually authenticated replica links
+# (`ReplicaSecurity`, `ConnectOptions::with_security`). Without it a
+# replica connects in plaintext only, and neither the handshake nor its
+# entropy source is linked.
+secure = ["dep:kevy-noise", "dep:kevy-sys"]
+
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
-kevy-noise = { path = "../kevy-noise", version = "6.4.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
+kevy-noise = { path = "../kevy-noise", version = "7.0.0", optional = true }
 
 # entropy for handshake keys; kevy-sys never links on wasm32
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
+kevy-sys = { path = "../kevy-sys", version = "7.0.0", optional = true }

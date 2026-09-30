@@ -222,8 +222,13 @@ class CDP:
 def await_result(cdp, timeout):
     deadline = time.time() + 30
     while time.time() < deadline:
-        if cdp.evaluate("!!window.__kevyResult"):
-            break
+        try:
+            if cdp.evaluate("!!window.__kevyResult"):
+                break
+        except RuntimeError as e:
+            # a tab that has just opened has no page to evaluate in yet
+            if "Cannot find default execution context" not in str(e):
+                raise
         time.sleep(0.1)
     else:
         raise TimeoutError("page never installed window.__kevyResult")

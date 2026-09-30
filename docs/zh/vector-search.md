@@ -22,7 +22,7 @@ kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title
 
 回复是升序的 `key, distance` 对（最近的在前）；`FIELDS` 在同一次调用里、在每个命中所属的 shard 上补上 hash 字段。生产环境里，向量值是你的客户端库写进去的二进制 blob（`dim × 4` 字节的小端 f32）；上面那个 `csv:` 形态是调试用的便利。
 
-配套 verb 和其他 kind 一样：`IDX.EXPLAIN embs KNN …`（只解析加出计划，不执行）、`IDX.VERIFY` / `IDX.LIST`（实时统计）、`IDX.DROP`。`IDX.REBUILD` 是 ANN 专有的——见“删除与重建”。
+配套 verb 和其他 kind 一样：`IDX.EXPLAIN embs KNN …`（只解析加出计划，不执行）、`IDX.VERIFY` / `IDX.LIST`（实时统计）、`IDX.DROP`。`IDX.REBUILD` 用在 ANN 索引上时压实图——见“删除与重建”。
 
 ## 快速上手（embedded）
 
@@ -34,11 +34,9 @@ use kevy_embedded::{AnnSpec, Config, Store};
 fn main() -> kevy_embedded::KevyResult<()> {
     let store = Store::open(Config::default())?;
 
-    // m / ef of 0 select the defaults (16 / 200);
+    // AnnSpec::new starts at M 16 / EF 200;
     // distance: 0 = cosine, 1 = l2, 2 = ip.
-    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec {
-        dim: 4, distance: 0, m: 0, ef: 0,
-    })?;
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
 
     let v1: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
         .iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -98,7 +96,7 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 
 ## 一致性
 
-与每一种索引 kind 同一个信封（[indexes.md](indexes.md)）：一次写入和它引发的图更新，在所属 shard 内是原子的；跨 shard 查询归并逐 shard 的 top-k，没有全局快照（SCAN 类）。目录持久化在数据目录的 sidecar 文件里；图的**内容**是派生状态，重启后重建。
+与每一种索引 kind 同一个信封（[indexes.md](indexes.md)）：一次写入和它引发的图更新，在所属 shard 内是原子的；跨 shard 查询归并逐 shard 的 top-k，没有全局快照（SCAN 类）。目录记录在日志和每份快照里，并随复制下发；图的**内容**是派生状态，重启后重建。
 
 ## 性能
 

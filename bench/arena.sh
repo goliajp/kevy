@@ -1,74 +1,77 @@
 #!/usr/bin/env bash
-# v3.3 baseline arena — BARE FACE: kevy vs valkey, the real gap
-# table (perfgate ratchets only prove "no regression vs ourselves";
-# this measures the competitor). Discipline per the perf-arc charter:
-#   - isolation (one server at a time, same cores), host loopback,
-#     pinned client — the loopback_c50.sh fair-fight protocol;
-#   - median-of-5 runs + sample stdev PER CELL; a gap smaller than
-#     the stdev is reported as NOISE, not a gap;
-#   - throughput is read from the SERVER's command counter over a wall
-#     window timed here, NOT from redis-benchmark's reported rate. Under
-#     `--threads` the benchmark's only exit is its own 250ms
-#     showThroughput timer (redis-benchmark.c:52, :1653; without --threads
-#     it stops in clientDone at :425), so totlatency is rounded UP to a
-#     multiple of 250ms and the reported rate is quantized to N/(k*250ms)
-#     and understated. This file used to describe that very effect —
-#     "2M-request cells finished in ~0.5s and QUANTIZED LOW (ledger v1
-#     recorded 3.99M/s; the ceiling ladder measured 5.3M/s truth)" — and
-#     blamed N: 2M/0.5s is exactly 4.0M, the bucket 0.377s rounds up into.
-#     Raising N shrinks the bucket relative to the run but never removes
-#     it; at 8M and ~1.25s it was still 20% wide. Counting server-side
-#     removes it outright. Both engines expose the same counter, so the
-#     comparison stays like-for-like. See
-#   - competitor version recorded in the output header.
+# arena — kevy against valkey, Redis and Dragonfly: the published table.
 #
-# Output: markdown table rows in the shape of PERFORMANCE.md's key-value table.
-# Usage (lx64): bash bench/arena.sh <kevy-binary>
+#   bash bench/arena.sh <kevy-binary> [ROUNDS]     # ROUNDS defaults to 3
+#
+# Each round runs every engine on the same cores, one at a time, through
+# the cells get set incr lpush sadd hset zadd. The table is the per-cell
+# median over every window of every round, each kevy / other ratio with a
+# 99% paired bootstrap interval over those windows, and the cost per op
+# (instructions user and kernel, cycles, syscalls, engine cpus) from the
+# same windows. It is run once per release, when the numbers are published;
+# if a round was disturbed (the fgn column, the notes), run it again.
+#
+#   - topology: the engine gets 4 cores on CPUs 0-3 (4 threads / io-threads /
+#     proactor threads), their SMT siblings 8-11 stay empty, the load gets both
+#     threads of cores 4-7 (8 threads);
+#   - throughput is read from the SERVER's command counter over a wall window
+#     timed here, NOT from redis-benchmark's rate: under `--threads` the
+#     benchmark exits on its own 250ms showThroughput timer
+#     (redis-benchmark.c:52, :1653; without --threads it stops in clientDone
+#     at :425), so its rate is quantized to N/(k*250ms) and understated. Every
+#     engine exposes the same counter, so the comparison stays like-for-like;
+#   - after a cell's windows, one more window with 16 load threads: if it
+#     beats the cell's best window by more than 2%, the load generator was the
+#     limit and the cell is CLIENT-BOUND, not a result;
+#   - competitor versions and image digests, and the box's own settings, are
+#     in the output header. The versions come from
+#     bench/COMPETITOR-ANCHORS.json; each image is asked what it actually is,
+#     and a mismatch stops the run.
+#
+# Knobs: CONC (50), PIPE (16), WINDOW seconds (3), RUNS windows per cell (5),
+# FOURWAY=0 for kevy against valkey only. CONC=1 PIPE=1 is the single
+# connection round trip.
+#
+# ROOT: arena runs as root. It needs docker for the competitors, docker on
+# the bench box is root-only, and rootless cannot substitute: `--cpuset-cpus`
+# needs the cpuset controller delegated to the user slice, and it is not, so
+# a rootless run would silently lose the core pinning. It never calls pkill:
+# it kills the pid it spawned and removes the containers it named, and none
+# of its `docker run` invocations mount a host path. Being root is also what
+# lets it attach perf to the containerised engines.
 set -u
-# ROOT: arena is the one documented exception to "bench scripts do not run
-# as root" (hard rule 4). It
-# needs docker to run the competitors, docker on the bench box is root-only,
-# and rootless cannot substitute: `--cpuset-cpus` requires the cpuset
-# controller to be delegated to the user slice, and it is not (user slices
-# get cpu/memory/pids only), so a rootless run would silently lose the core
-# pinning the whole fair-fight protocol rests on. An unpinned number is
-# worse than no number.
-#
-# The exception is bounded by construction, which is what the rule is
-# actually protecting: arena never calls pkill — it kills the PID it
-# spawned and removes the containers it named — and none of its `docker
-# run` invocations mount a host path. perfgate keeps its hard root refusal,
-# because perfgate does use `pkill -f`.
+. "$(dirname "$0")/bench-lock.sh"   # hold the machine's bench lock for the whole run
 
-KBIN=${1:?usage: arena.sh <kevy-binary>}
+KBIN=${1:?usage: arena.sh <kevy-binary> [ROUNDS]}
 KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
-cd "$(dirname "$0")"
+ROUNDS=${2:-3}
+cd "$(dirname "$0")" || exit 2
 
-SRV_CORES=${SRV_CORES:-0-7}
-CLI_CORES=${CLI_CORES:-8-15}
-CLI_THREADS=${CLI_THREADS:-6}
-# N is no longer the unit of measurement — the window below is. It only has
-# to keep the load generator busy for RAMP + WINDOW at the SLOWEST engine and
-# cell (valkey ZADD, ~1.6M ops/s): 60M requests is ~37s of headroom over a 4s
-# measurement. The generator is killed once the window closes.
-N=${N:-60000000}
-RAMP=${RAMP:-1.0}
-WINDOW=${WINDOW:-3.0}
+SRV_CORES=0-3
+SRV_THREADS=4
+CLI_CORES=4-7,12-15
+CLI_THREADS=8
+PROBE_THREADS=16
+# N only has to keep the load generator busy through the windows at the
+# slowest engine and cell; the generator is killed once they close
+N=${N:-2000000000}
+RAMP=${RAMP:-1}
+WINDOW=${WINDOW:-3}
 CONC=${CONC:-50}
 PIPE=${PIPE:-16}
 RUNS=${RUNS:-5}
 PORT=7201
 TESTS="get set incr lpush sadd hset zadd"
+SAMPLES=$(mktemp)
+trap 'rm -f "$SAMPLES"' EXIT
 
-# Which version of each competitor this table is against. The pins live in
-# bench/COMPETITOR-ANCHORS.json, each image is asked what it actually is,
-# and a mismatch stops the run — see anchor-lib.sh for why.
 . ./anchor-lib.sh   # cwd is this script's directory, set above
 
 VALKEY_PIN=$(anchor_pin valkey)
 VALKEY_VER=$(anchor_image_ver "valkey/valkey:$VALKEY_PIN" valkey-server --version)
 anchor_require valkey "$VALKEY_PIN" "$VALKEY_VER"
 ENGINES="valkey $VALKEY_VER"
+IMAGES="valkey/valkey:$VALKEY_PIN"
 if [ "${FOURWAY:-1}" = 1 ]; then
     REDIS_PIN=$(anchor_pin redis)
     REDIS_VER=$(anchor_image_ver "redis:$REDIS_PIN" redis-server --version)
@@ -77,125 +80,119 @@ if [ "${FOURWAY:-1}" = 1 ]; then
     DRAGONFLY_VER=$(anchor_image_ver "docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN" --version)
     anchor_require dragonfly "$DRAGONFLY_PIN" "$DRAGONFLY_VER"
     ENGINES="redis $REDIS_VER | valkey $VALKEY_VER | dragonfly $DRAGONFLY_VER"
+    IMAGES="$IMAGES redis:$REDIS_PIN docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN"
 fi
-echo "# arena bare face — $(date -u +%F) — $($KBIN --version | head -1)"
-echo "# engines: $ENGINES"
-echo "# protocol: -c $CONC -P $PIPE, server cores $SRV_CORES, client cores $CLI_CORES, median-of-$RUNS"
-echo "# measured: server-side total_commands_processed over a ${WINDOW}s window after a ${RAMP}s ramp (NOT redis-benchmark's rate — see the header)"
+
+# Settings that move every engine's number and are nobody's code: printed so a
+# table can be matched to the box it came from. Absent facts print as "—".
+box_facts() {
+    local img
+    echo "# kernel: $(uname -r)"
+    echo "# mitigations: $(grep -oE 'mitigations=[^ ]+' /proc/cmdline || echo 'kernel default')"
+    echo "# governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo —)"
+    echo "# no_turbo: $(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || echo —)"
+    echo "# audit: $(auditctl -s 2>/dev/null | awk '/^enabled/ {print "enabled " $2}' | grep . || echo —)"
+    echo "# nft ruleset sha256: $(nft list ruleset 2>/dev/null | sha256sum | cut -c1-16)"
+    echo "# perf: $(perf --version 2>&1 | head -1)"
+    echo "# redis-benchmark: $(redis-benchmark --version 2>&1 | head -1)"
+    for img in $IMAGES; do
+        echo "# image $img: $(docker image inspect --format '{{index .RepoDigests 0}}' "$img" 2>/dev/null || echo —)"
+    done
+}
 
 wait_ready() {
     for _ in $(seq 1 100); do
-        redis-benchmark -h 127.0.0.1 -p "$PORT" -t ping -n 1 -q >/dev/null 2>&1 && return 0
+        [ "$(redis-cli -h 127.0.0.1 -p "$PORT" PING 2>/dev/null)" = PONG ] && return 0
         sleep 0.1
     done
     echo "!! port $PORT never came up" >&2
     return 1
 }
 
-# The engine's own count of the work it did. kevy and valkey both publish
-# `total_commands_processed` in INFO stats, so this is one metric with one
-# meaning on both sides of the table.
-srv_cmds() {
-    redis-cli -h 127.0.0.1 -p "$PORT" INFO stats 2>/dev/null | tr -d '\r' \
-        | awk -F: '/^total_commands_processed:/ {print $2}'
+# One window. $1 engine, $2 verb, $3 round (0 = the headroom probe), $4
+# window, $5 pid:threads of the generator.
+arena_window() {
+    python3 perfgate_measure.py window --angle "$2" --side "$1" --obs "$3" --win "$4" \
+        --srv-pid "$EPID" --srv-cpus "$SRV_CORES" --port "$PORT" --secs "$WINDOW" --gens "$5"
 }
 
-# One cell: drive the load, let it settle, then count what the server did
-# across a window we time ourselves.
-bench_cell() { # $1 = test name -> ops/s
-    local bpid c0 t0 c1 t1
+start_load() { # $1 test, $2 threads
     taskset -c "$CLI_CORES" redis-benchmark -h 127.0.0.1 -p "$PORT" \
-        -t "$1" -n "$N" -c "$CONC" -P "$PIPE" --threads "$CLI_THREADS" -q \
-        >/dev/null 2>&1 &
-    bpid=$!
+        -t "$1" -n "$N" -c "$CONC" -P "$PIPE" --threads "$2" -q >/dev/null 2>&1 &
+    BPID=$!
     sleep "$RAMP"
-    c0=$(srv_cmds); t0=$(date +%s%N)
-    sleep "$WINDOW"
-    c1=$(srv_cmds); t1=$(date +%s%N)
-    kill "$bpid" 2>/dev/null
-    wait "$bpid" 2>/dev/null
-    if [ -z "$c0" ] || [ -z "$c1" ]; then
-        echo "!! $1: server counter unreadable on port $PORT" >&2
-        printf "0"
-        return
-    fi
-    awk -v c0="$c0" -v c1="$c1" -v t0="$t0" -v t1="$t1" \
-        'BEGIN {printf "%.0f", (c1 - c0) / ((t1 - t0) / 1e9)}'
 }
 
-# RUNS passes per cell against the live server; emit "TEST median stdev"
-measure() {
-    local t tmp
-    tmp=$(mktemp)
-    for t in $TESTS; do
-        for _ in $(seq 1 "$RUNS"); do
-            printf "%s %s\n" "$(echo "$t" | tr '[:lower:]' '[:upper:]')" "$(bench_cell "$t")" >> "$tmp"
-        done
+stop_load() { kill "$BPID" 2>/dev/null; wait "$BPID" 2>/dev/null; }
+
+# RUNS windows of one cell, then the headroom probe.
+bench_cell() { # $1 engine, $2 test, $3 round
+    local verb win out
+    verb=$(echo "$2" | tr '[:lower:]' '[:upper:]')
+    start_load "$2" "$CLI_THREADS"
+    for win in $(seq 1 "$RUNS"); do
+        out=$(arena_window "$1" "$verb" "$3" "$win" "$BPID:$CLI_THREADS") || { stop_load; return 2; }
+        echo "$out" >>"$SAMPLES"
     done
-    python3 - "$tmp" <<'PY'
-import sys, statistics
-from collections import defaultdict
-vals = defaultdict(list)
-for line in open(sys.argv[1]):
-    parts = line.split()
-    if len(parts) == 2:
-        vals[parts[0]].append(float(parts[1]))
-for t in sorted(vals):
-    v = sorted(vals[t])
-    med = v[len(v) // 2]
-    sd = statistics.stdev(v) if len(v) > 1 else 0.0
-    print(f"{t} {med:.0f} {sd:.0f}")
-PY
-    rm -f "$tmp"
+    stop_load
+    start_load "$2" "$PROBE_THREADS"
+    out=$(arena_window "$1" "$verb" 0 "$3" "$BPID:$PROBE_THREADS") || { stop_load; return 2; }
+    stop_load
+    echo "$out" >>"$SAMPLES"
 }
 
-run_server_and_measure() { # label, start-command...
-    local label=$1
-    shift
+engine_pid() { # $1 label, $2 pid we spawned
+    if [ "$1" = kevy ]; then echo "$2"
+    else docker inspect -f '{{.State.Pid}}' "arena-$1"; fi
+}
+
+run_engine() { # round, label, start-command...
+    local round=$1 label=$2 spid t rc=0
+    shift 2
     "$@" >/dev/null 2>&1 &
-    local SPID=$!
+    spid=$!
     sleep 1
     if ! wait_ready; then
-        # Never a silent gap: a missing engine is a hole in the table and
-        # must read as one.
-        echo "# !! $label never came up — its rows are ABSENT from this table" >&2
-        echo "# !! $label ABSENT (did not start)"
-        kill $SPID 2>/dev/null
+        # a missing engine is a hole in the table and must read as one
+        echo "# !! $label ABSENT in round $round (did not start)"
+        kill "$spid" 2>/dev/null
         docker rm -f "arena-$label" >/dev/null 2>&1 || true
-        return 1
+        return 0
     fi
-    measure | sed "s/^/$label /"
-    kill $SPID 2>/dev/null
-    wait $SPID 2>/dev/null
+    EPID=$(engine_pid "$label" "$spid")
+    for t in $TESTS; do
+        bench_cell "$label" "$t" "$round" || { rc=$?; break; }
+    done
+    kill "$spid" 2>/dev/null
+    wait "$spid" 2>/dev/null
     docker rm -f "arena-$label" >/dev/null 2>&1 || true
+    [ "$rc" -eq 0 ] || exit "$rc"
     sleep 1
 }
 
-echo "server test median stdev"
+echo "# arena — $(date -u +%F) — $($KBIN --version | head -1)"
+echo "# engines: $ENGINES"
+echo "# protocol: -c $CONC -P $PIPE, engine cpus $SRV_CORES ($SRV_THREADS threads), cpus 8-11 idle, load cpus $CLI_CORES ($CLI_THREADS threads), $ROUNDS rounds x $RUNS windows of ${WINDOW}s after a ${RAMP}s ramp"
+echo "# measured: server-side total_commands_processed and perf stat -p on the engine, same window (NOT redis-benchmark's rate)"
+box_facts
+echo "# note: the redis-benchmark -t cells use one fixed key per command type"
 
-run_server_and_measure kevy \
-    env KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads 8 --port $PORT --no-aof
+for round in $(seq 1 "$ROUNDS"); do
+    echo "arena: round $round/$ROUNDS" >&2
+    run_engine "$round" kevy \
+        taskset -c "$SRV_CORES" env KEVY_BIND=127.0.0.1 "$KBIN" --threads "$SRV_THREADS" --port $PORT --no-aof
+    run_engine "$round" valkey \
+        docker run --rm --name arena-valkey --network host --cpuset-cpus "$SRV_CORES" \
+        "valkey/valkey:$VALKEY_PIN" valkey-server --port $PORT --save '' --appendonly no --io-threads "$SRV_THREADS"
+    if [ "${FOURWAY:-1}" = 1 ]; then
+        run_engine "$round" redis8 \
+            docker run --rm --name arena-redis8 --network host --cpuset-cpus "$SRV_CORES" \
+            "redis:$REDIS_PIN" redis-server --port $PORT --save '' --appendonly no --io-threads "$SRV_THREADS"
+        run_engine "$round" dragonfly \
+            docker run --rm --name arena-dragonfly --network host --cpuset-cpus "$SRV_CORES" \
+            --ulimit memlock=-1 "docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN" \
+            --port $PORT --proactor_threads="$SRV_THREADS"
+    fi
+done
 
-run_server_and_measure valkey \
-    docker run --rm --name arena-valkey --network host --cpuset-cpus "$SRV_CORES" \
-    "valkey/valkey:$VALKEY_PIN" valkey-server --port $PORT --save '' --appendonly no --io-threads 8
-
-# The other two engines of the four-way position claim. They were measured
-# once, in the T9 decomposition, with the same quantized ruler this file just
-# stopped using — 8M/3,996,004 = 2.0020s for redis and 8M/1,776,199 = 4.5040s
-# for dragonfly, both exact multiples of 250ms. The headline ratios (1.60x
-# redis, 3.60x dragonfly) were therefore bucket arithmetic. Measuring all four
-# through one harness is the only way the position plot means anything.
-# Set FOURWAY=0 to run the bare kevy-vs-valkey table only.
-if [ "${FOURWAY:-1}" = 1 ]; then
-    run_server_and_measure redis8 \
-        docker run --rm --name arena-redis8 --network host --cpuset-cpus "$SRV_CORES" \
-        "redis:$REDIS_PIN" redis-server --port $PORT --save '' --appendonly no --io-threads 8
-
-    run_server_and_measure dragonfly \
-        docker run --rm --name arena-dragonfly --network host --cpuset-cpus "$SRV_CORES" \
-        --ulimit memlock=-1 "docker.dragonflydb.io/dragonflydb/dragonfly:v$DRAGONFLY_PIN" \
-        --port $PORT --proactor_threads=8
-fi
-
-echo "# gap rule: |kevy-other| <= max(stdev_kevy, stdev_other) => NOISE"
+python3 arena_table.py COMPETITOR-ANCHORS.json "$SAMPLES"

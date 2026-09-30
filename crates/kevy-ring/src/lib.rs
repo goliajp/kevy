@@ -455,6 +455,14 @@ impl<T> Consumer<T> {
     }
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send<T: Send>() {}
+    send::<Producer<u64>>();
+    send::<Consumer<u64>>();
+};
+
 #[cfg(test)]
 mod tests;
 

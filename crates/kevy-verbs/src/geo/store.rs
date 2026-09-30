@@ -13,13 +13,11 @@
 //! Query-only forms (no STORE) have one key, and the `_RO` variants never
 //! store (they refuse the option).
 
-use kevy_resp::{Argv, ArgvView, CmdError, encode_error};
-use kevy_store::Store;
-
-use crate::reply::store_err;
+use kevy_resp::{Argv, ArgvView, CmdError};
+use kevy_store::{Store, StoreError};
 
 use super::radius::{legacy_store_dst, plan_radius};
-use super::search::{Opts, SearchError, plan_geosearchstore, search_pairs};
+use super::search::{SearchError, plan_geosearchstore, search_pairs};
 
 /// `(source, destination)` of a geo command that writes a destination
 /// key; `None` for every other shape, including the query-only forms.
@@ -51,9 +49,97 @@ pub fn store_keys<A: ArgvView + ?Sized>(verb: &[u8], args: &A) -> Option<(Vec<u8
     }
 }
 
+/// Why a storing geo command's search refused; [`Self::as_wire`] is the
+/// error reply the command answers.
+///
+/// ```
+/// use kevy_verbs::geo::StoreSearchError;
+///
+/// let e = StoreSearchError::NoMember;
+/// assert_eq!(e.as_wire(), "ERR could not decode requested zset member");
+/// assert_eq!(e.to_string(), "could not decode requested zset member");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StoreSearchError {
+    /// The command's arguments are refused (syntax, arity, a bad value).
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// // a search with a centre but no BYRADIUS / BYBOX
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMLONLAT 13 38"));
+    /// assert!(matches!(r, Err(StoreSearchError::Refused(_))));
+    /// ```
+    Refused(CmdError),
+    /// A `FROMMEMBER` / `BYMEMBER` member the source key does not hold.
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// let add = kevy_resp::Argv::from(argv("GEOADD src 13.361389 38.115556 Palermo"));
+    /// kevy_verbs::exec(&mut store, b"GEOADD", &add, &mut Vec::new());
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMMEMBER Rome BYRADIUS 10 km"));
+    /// assert_eq!(r, Err(StoreSearchError::NoMember));
+    /// ```
+    NoMember,
+    /// The source key refused (wrong type, out of memory).
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// kevy_verbs::exec(&mut store, b"SET", &kevy_resp::Argv::from(argv("SET src v")), &mut Vec::new());
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMLONLAT 13 38 BYRADIUS 1 km"));
+    /// assert_eq!(r, Err(StoreSearchError::Store(kevy_store::StoreError::WrongType)));
+    /// ```
+    Store(StoreError),
+}
+
+impl StoreSearchError {
+    /// The error reply the command answers.
+    ///
+    /// ```
+    /// let e = kevy_verbs::geo::StoreSearchError::Store(kevy_store::StoreError::WrongType);
+    /// assert!(e.as_wire().starts_with("WRONGTYPE"));
+    /// ```
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Refused(e) => e.as_wire(),
+            Self::NoMember => "ERR could not decode requested zset member",
+            Self::Store(e) => e.as_wire(),
+        }
+    }
+}
+
+impl std::fmt::Display for StoreSearchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Store(e) => write!(f, "{e}"),
+            // the wire text without its error code
+            _ => {
+                let wire = self.as_wire();
+                f.write_str(wire.split_once(' ').map_or(wire, |(_, text)| text))
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoreSearchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Refused(e) => Some(e),
+            Self::Store(e) => Some(e),
+            Self::NoMember => None,
+        }
+    }
+}
+
 /// Run a storing geo command's search against its source key in `store`:
 /// the `(member, score)` pairs the destination is replaced with (none =
-/// the destination is deleted), or the error reply the command answers.
+/// the destination is deleted), or why the command refuses.
 /// Scores are final — geohashes, or `STOREDIST` distances in the unit
 /// the command asked for.
 ///
@@ -68,7 +154,10 @@ pub fn store_keys<A: ArgvView + ?Sized>(verb: &[u8], args: &A) -> Option<(Vec<u8
 /// );
 /// assert_eq!(hits.unwrap()[0].0, b"Palermo");
 /// ```
-pub fn store_search(store: &mut Store, argv: &[Vec<u8>]) -> Result<Vec<(Vec<u8>, f64)>, Vec<u8>> {
+pub fn store_search(
+    store: &mut Store,
+    argv: &[Vec<u8>],
+) -> Result<Vec<(Vec<u8>, f64)>, StoreSearchError> {
     let mut args = Argv::with_capacity(argv.len(), 0);
     for a in argv {
         args.push(a);
@@ -80,28 +169,14 @@ pub fn store_search(store: &mut Store, argv: &[Vec<u8>]) -> Result<Vec<(Vec<u8>,
         // only the three verbs above store
         _ => Err(CmdError::Wire("ERR unknown command")),
     };
-    match planned {
-        Ok((src, opts)) => run(store, &src, &opts),
-        Err(msg) => Err(encoded(|out| encode_error(out, msg.as_wire()))),
-    }
-}
-
-fn run(store: &mut Store, src: &[u8], opts: &Opts) -> Result<Vec<(Vec<u8>, f64)>, Vec<u8>> {
-    search_pairs(store, src, opts).map_err(|e| match e {
-        SearchError::NoMember => {
-            encoded(|out| encode_error(out, "ERR could not decode requested zset member"))
-        }
-        SearchError::Store(e) => encoded(|out| store_err(out, e)),
+    let (src, opts) = planned.map_err(StoreSearchError::Refused)?;
+    search_pairs(store, &src, &opts).map_err(|e| match e {
+        SearchError::NoMember => StoreSearchError::NoMember,
+        SearchError::Store(e) => StoreSearchError::Store(e),
     })
 }
 
 /// Uppercased verb of an owned argv, for the ≤16-byte geo verbs.
 fn verb_of(argv: &[Vec<u8>]) -> Vec<u8> {
     argv.first().map(|v| v.to_ascii_uppercase()).unwrap_or_default()
-}
-
-fn encoded(f: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
-    let mut out = Vec::new();
-    f(&mut out);
-    out
 }

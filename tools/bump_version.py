@@ -30,7 +30,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 # Reuse the gate's own exclusions rather than restating them: a door the
 # gate ignores must not be bumped either.
-from check_version_alignment import skip  # noqa: E402
+from check_version_alignment import PODSPEC_RE, skip  # noqa: E402
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -74,6 +74,11 @@ HISTORICAL = (
     "CHANGELOG.md",
     "bench/FINDING-",
     "bench/PERF-",
+    # an upgrade guide is the record of one hop: its `go get …/v6@v6.4.0`
+    # names the release it upgrades to, and stays right after the next major
+    "docs/upgrading-",
+    "docs/zh/upgrading-",
+    "docs/ja/upgrading-",
 )
 
 
@@ -181,6 +186,14 @@ def bump_patterned(new: str, changes: list) -> None:
     for f, txt in pending.items():
         if txt != f.read_text(encoding="utf-8"):
             changes.append((f, txt))
+
+    for f in sorted(ROOT.glob("bindings/**/*.podspec")):
+        if skip(f):
+            continue
+        txt = f.read_text(encoding="utf-8")
+        edited = PODSPEC_RE.sub(lambda m: m.group(1) + new + m.group(3), txt)
+        if edited != txt:
+            changes.append((f, edited))
 
     for f in sorted(ROOT.glob("bindings/**/pom.xml")):
         if skip(f):

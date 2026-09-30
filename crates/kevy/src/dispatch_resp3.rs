@@ -42,7 +42,7 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         b"HRANDFIELD" if args.len() == 4 && args[3].eq_ignore_ascii_case(b"WITHVALUES") => {
             // RESP3 nests each field with its value; RESP2 flattens them.
             match arg_i64(&args[2]) {
-                Some(count) => match store.hrandfield(&args[1], count, true) {
+                Some(count) => match store.hrandfield_with_values(&args[1], count) {
                     Ok(items) => {
                         kevy_resp::encode_array_len(out, items.len() as i64);
                         for (f, v) in &items {
@@ -185,6 +185,11 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         }
         b"CLIENT" => {
             crate::ops::client::cmd_client(args, out, RespVersion::V3);
+            true
+        }
+        // every XINFO reply that lists named fields is a map under RESP3
+        b"XINFO" => {
+            kevy_verbs::cmd::xinfo(store, args, out, RespVersion::V3);
             true
         }
         _ => false,

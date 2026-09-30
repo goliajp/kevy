@@ -38,13 +38,13 @@ embedded 侧则是 `Config::default().with_feed(0)`。
 
 ```rust
 let store = kevy_embedded::Store::open(Config::default().with_feed(0))?;
-let (gen, off) = store.changes_tail()?;             // start cursor
-let batch = store.changes_since(gen, off, 256, &[b"user:"])?;
+let from = store.changes_tail()?;                   // start cursor
+let batch = store.changes_since(from, 256, &[b"user:"])?;
 for change in &batch.changes { /* change.offset, change.argv */ }
-let (gen, off) = batch.next;                        // resume here
+let from = batch.next;                              // resume here
 ```
 
-`feed_shards()` 恒为 1——embedded 的写路径把所有 shard 串成一条流，所以同一份消费者循环对两个接口面都成立。`FeedError::Resync { generation, tail }` 对应 `-FEEDRESYNC`。
+`feed_shards()` 恒为 1——embedded 的写路径把所有 shard 串成一条流，所以同一份消费者循环对两个接口面都成立。`FeedError::Resync { tail }` 对应 `-FEEDRESYNC`。
 
 ## 投递语义
 

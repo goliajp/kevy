@@ -1,6 +1,6 @@
 # WebAssembly上のkevy
 
-kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、`wasm32-unknown-unknown`向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）による永続化と、タブをまたぐpub/subを備えます。同じクレート群は`wasm32-wasip1`向けにもビルドできるので、Rust APIは`wasmtime`／`wasmer`やエッジランタイムでも動きます。
+kevyはブラウザの中で、コンパイルが通るだけの珍品ではなく本物のストアとして動きます。npmパッケージ[`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、`wasm32-unknown-unknown`向けにコンパイルしたエンジン（KV＋TTL＋カウンタ＋スキャン＋pub/sub、セカンダリ索引、コンシューマグループ付きのストリーム、geo）を手書きのESモジュールローダーの後ろに載せて出荷し、OPFS（IndexedDBフォールバック付き）による永続化と、タブをまたぐpub/subを備えます。同じクレート群は`wasm32-wasip1`向けにもビルドできるので、Rust APIは`wasmtime`／`wasmer`やエッジランタイムでも動きます。
 
 ライブで試せます。[kevy.golia.jpのデモ](https://kevy.golia.jp/demo/)は、まさにこのモジュールの上のブラウザREPLです——コマンド、リロードを生き延びるOPFS永続化、タブ間pub/subを、バックエンドなしで。
 
@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // durability barrier
 ```
 
-書き込みはkevyの追記専用ログとしてストレージへストリームされ、同じ`persist.name`での次回`open()`時にリプレイされます。4.0以降、ログはチェックサム付きv2レコードフォーマット（`KEVYAOF2`——[persistence.md](persistence.md)参照）を話します：保存バイトのビット反転はリプレイ時に拒否され、黙って適用されることはありません。4.0以前のタブが保存したログはそのままリプレイされ（v1、永久に読める）、最初のcompactionでv2へ昇格します。ブラウザのタブから汲み出したログはネイティブのkevyで変わらずリプレイでき、逆も同様です。パッケージは6ファイル（パック後496 KB、回線上はgzipで481 KB）です。wasmモジュール、ローダー、OPFSワーカー、手書きのTypeScript型定義、そしていつものREADMEとマニフェスト。境界のどちら側も依存ゼロです。
+書き込みはkevyの追記専用ログとしてストレージへストリームされ、同じ`persist.name`での次回`open()`時にリプレイされます。4.0以降、ログはチェックサム付きv2レコードフォーマット（`KEVYAOF2`——[persistence.md](persistence.md)参照）を話します：保存バイトのビット反転はリプレイ時に拒否され、黙って適用されることはありません。4.0以前のタブが保存したログはそのままリプレイされ（v1、永久に読める）、最初のcompactionでv2へ昇格します。ブラウザのタブから汲み出したログはネイティブのkevyで変わらずリプレイでき、逆も同様です。パッケージは7ファイル（パック後633 KB、回線上はgzipで619 KB）です。wasmモジュール、ローダー、OPFSワーカー、手書きのTypeScript型定義、そしていつものREADME、変更履歴、マニフェスト。境界のどちら側も依存ゼロです。
 
 ## ローダーAPI
 
@@ -39,7 +39,7 @@ await db.flush();                  // durability barrier
 | オプション | デフォルト | 意味 |
 |---|---|---|
 | `wasm` | ローダーの隣の`kevy.wasm` | モジュールのソース。URL、`ArrayBuffer`、`Uint8Array`、`Response`、またはコンパイル済み`WebAssembly.Module` |
-| `persist` | `false`（インメモリ） | `{ name, backend }`。`name`ごとに1つのログ。`backend`は`"auto"`（OPFS、IndexedDBフォールバック）、`"opfs"`、`"idb"` |
+| `persist` | `false`（インメモリ）| `{ name, backend }`。`name`ごとに1つのログ。`backend`は`"auto"`（OPFS、IndexedDBフォールバック）、`"opfs"`、`"idb"` |
 | `broadcast` | `true` | `BroadcastChannel`によるタブ間pub/subブリッジ |
 | `name` | `persist.name`または`"kevy"` | インスタンス名。ストレージファイルとブロードキャストチャネルの両方をスコープする |
 | `tickMs` | `100` | TTL掃除＋イベントポーリングの周期。`0`でタイマー無効——自分で`tick()`を呼ぶ |
@@ -51,7 +51,7 @@ await db.flush();                  // durability barrier
 | `set(key, value, { ttlMs? })` | SET。オプションで期限付き |
 | `get(key)` / `getText(key)` | GETを`Uint8Array`で／UTF-8テキストで。不在または期限切れなら`undefined` |
 | `del(key)` / `exists(key)` | DEL / EXISTS |
-| `expire(key, ttlMs)` / `persist(key)` / `pttl(key)` | PEXPIRE / PERSIST / PTTL（`-1`はTTLなし、`-2`はキーなし） |
+| `expire(key, ttlMs)` / `persist(key)` / `pttl(key)` | PEXPIRE / PERSIST / PTTL（`-1`はTTLなし、`-2`はキーなし）|
 | `incrby(key, delta?)` | INCRBY。新しい値を返す |
 | `dbsize()` / `flushall()` | DBSIZE / FLUSHALL |
 | `keys(pattern?, limit?)` | Redisグロブ付きKEYS。上限も指定可 |
@@ -81,6 +81,10 @@ kevyの依存ゼロの掟はツールチェーンにも及びます。境界の�
 
 ブラウザにファイルシステムはないので、永続性はホスト仲介です。永続化が有効なら、すべての書き込みは、kevyのAOFがディスクに保存するのと同じRESPマルチバルクフレーム（`kevy-persist`フォーマット——[persistence.md](persistence.md)）としてもエンコードされます。ローダーは保留中のフレームをマイクロタスクごとに1回ストレージへポンプするので、同期的な書き込みバーストのコストはストレージ追記1回です。`await db.flush()`が永続性バリアで、`flush()`の解決はバックエンドがディスクへフラッシュしたことを意味します。
 
+`cmd`経由の書き込みも同じです。エンジンがポンプに渡すのは、そのコマンドについてネイティブのAOFが保存するフレームで、argvそのものではありません。`XADD *`は選んだIDで、グループ読み取りは行った配送で、相対的な期限は絶対的な期限で記録されます。リロード後も、ストリームとそのコンシューマグループはエントリ、ペンディングリスト、最後に配送したIDまで同じ状態で戻ります。6.x以前は`cmd`経由の書き込みはログに届かず、途中でコンパクションが走らない限り次の`open()`で失われていました。
+
+宣言した索引・ビュー・テーブルも戻ります。`IDX.CREATE`、`VIEW.CREATE`、`TABLE.DECLARE`、削除のたびにカタログ全体が1フレームとして記録され、コンパクション済みイメージは最新のフレームを持ちます。次の`open()`でカタログが入り、索引はリプレイされたキーから作り直されるので、リロード後のクエリはリロード前と同じ答えを返します。7.0より前は、リロードのたびに失われていました。
+
 **ブラウザのタブが書いたログは、そのままネイティブのkevyでリプレイできます**——同じマジックヘッダ、同じフレームです。`.aof`をOPFSからコピーしてネイティブの組み込みストア（またはサーバー）に向ければ、キー空間が戻ってきます。逆も成り立ちます。入りのポンプはネイティブが書いたログを受け付けます。壊れた末尾はネイティブのリプレイ契約に従います——無傷のプレフィックスが適用され、末尾は捨てられ、次のコンパクションがライブ状態からストレージを書き直します。
 
 バックエンドは2つあり、`backend: "auto"`では自動選択されます。
@@ -91,6 +95,21 @@ kevyの依存ゼロの掟はツールチェーンにも及びます。境界の�
 コンパクションは自動です。追記されたログが`max(512 KB, 前回イメージの4倍)`を超えると、ローダーはストレージを生きているキー空間のコンパクション済みイメージとして書き直します（AOFリライトのブラウザ側等価物）。`compact()`はスナップショットやエクスポートの前に1回を強制します。
 
 **localStorageは意図的にバックエンドにしていません**。約5 MBのクォータ、書き込みのたびにメインスレッドをブロックする同期API、UTF-16文字列限定のストレージ——書き込みログとしては失格です。
+
+## ストリーム、geo、ブロッキング読み取り
+
+`cmd`はストリームのコマンド（`XADD`、`XRANGE`、`XREAD`、`XGROUP`、`XREADGROUP`、`XACK`、`XPENDING`、`XCLAIM`、`XAUTOCLAIM`、`XINFO`など）とgeoのコマンド（`GEOADD`、`GEOSEARCH`、`GEODIST`など）に届きます。実装はサーバーが動かしているものと同じです。
+
+ブラウザでは何も待ちません。モジュールはページかワーカーのただひとつのスレッドで動くので、それを止める呼び出しはタブを凍らせ、起こしてくれるはずの書き込みも永遠に来ません。そのため`XREAD … BLOCK`と`XREADGROUP … BLOCK`はエラー（`ERR the embedded engine cannot block; call without BLOCK`）を返します。どの組み込みストアでも同じ答えです。ブロッキングのリストポップ（`BLPOP`、`BRPOP`など）はそもそも組み込みのコマンド面にありません。`BLOCK`なしでタイマーから読むか、`XADD`のたびにチャネルへpublishし、メッセージが届いたときに読んでください。
+
+```js
+db.subscribe("orders:new", () => {
+  const got = db.cmd("XREADGROUP", "GROUP", "workers", "tab-1", "COUNT", "10", "STREAMS", "orders", ">");
+  // … 処理してから XACK
+});
+db.cmd("XADD", "orders", "*", "sku", "A-1");
+db.publish("orders:new", "");
+```
 
 ## タブ間pub/sub
 
@@ -107,14 +126,14 @@ kevyの依存ゼロの掟はツールチェーンにも及びます。境界の�
 
 方法論・環境・生の数字の全体は[bench/WASM-BENCH.md](../../bench/WASM-BENCH.md)（ヘッドレスChromeハーネス、3回実行の中央値、16バイト値、1kおよび100kキー）にあります。Webアプリが実際に持っているストレージとの比較：
 
-| 軸（n=100k） | kevy-wasm | vs IndexedDB | vs localStorage |
+| 軸（n=100k）| kevy-wasm | vs IndexedDB | vs localStorage |
 |---|---:|---:|---:|
-| ポイント読み取り（ops/s） | 1.67 M | **77×** | 0.48× |
-| ポイント書き込み（ops/s） | 1.79 M | **189×** | 4.9× |
-| バッチロード（ms） | 60.8 | **36×速い** | 4.5×速い |
-| スキャン、約10%一致（ms） | 5.6 | **46×速い** | 5.7×速い |
-| 永続書き込み（ops/s） | 785 k（OPFS） | **12.6–17.4×** | 約2× |
-| 再起動から利用可能まで（ms） | 129 | **2.7×速い** | 遅い（下記参照） |
+| ポイント読み取り（ops/s）| 1.67 M | **77×** | 0.48× |
+| ポイント書き込み（ops/s）| 1.79 M | **189×** | 4.9× |
+| バッチロード（ms）| 60.8 | **36×速い** | 4.5×速い |
+| スキャン、約10%一致（ms）| 5.6 | **46×速い** | 5.7×速い |
+| 永続書き込み（ops/s）| 785 k（OPFS）| **12.6–17.4×** | 約2× |
+| 再起動から利用可能まで（ms）| 129 | **2.7×速い** | 遅い（下記参照）|
 
 ヘッドラインと、正直な但し書き：
 
@@ -129,9 +148,9 @@ kevyの依存ゼロの掟はツールチェーンにも及びます。境界の�
 
 | ターゲット | コマンド | 備考 |
 |---|---|---|
-| `wasm32-unknown-unknown` | `cargo build -p kevy-wasm --target wasm32-unknown-unknown --release` | ブラウザ成果物（`kevy_wasm.wasm`）。npmローダーがこれをインスタンス化する。独自ホストならC ABIを直接叩く。 |
-| `wasm32-unknown-unknown`（Rust API） | `cargo build -p kevy-embedded --target wasm32-unknown-unknown` | スレッドなし・OSクロックなし。`Config::with_ttl_reaper_manual()`で開き、`set_clock_ns`／`set_wall_clock_ms`を供給し、ホストのループから`Store::tick()`を呼ぶ。 |
-| `wasm32-wasip1` | `cargo build -p kevy-embedded --target wasm32-wasip1` | `Instant`／`SystemTime`が動く——クロック供給は不要。`std::fs`はpreopenしたディレクトリに対して動くので、`Config::with_persist("/data")`＋`wasmtime --dir=/data`で本物のAOF永続性が得られる。スレッドは依然ないので手動リーパーのまま。 |
+| `wasm32-unknown-unknown` | `cargo build -p kevy-wasm --target wasm32-unknown-unknown --release` | ブラウザ成果物（`kevy_wasm.wasm`）。npmローダーがこれをインスタンス化する。独自ホストならC ABIを直接叩く。|
+| `wasm32-unknown-unknown`（Rust API）| `cargo build -p kevy-embedded --target wasm32-unknown-unknown` | スレッドなし・OSクロックなし。`Config::with_ttl_reaper_manual()`で開き、`set_clock_ns`／`set_wall_clock_ms`を供給し、ホストのループから`Store::tick()`を呼ぶ。|
+| `wasm32-wasip1` | `cargo build -p kevy-embedded --target wasm32-wasip1` | `Instant`／`SystemTime`が動く——クロック供給は不要。`std::fs`はpreopenしたディレクトリに対して動くので、`Config::with_persist("/data")`＋`wasmtime --dir=/data`で本物のAOF永続性が得られる。スレッドは依然ないので手動リーパーのまま。|
 
 `wasm32-unknown-unknown`でのRust直接組み込み：
 
@@ -157,15 +176,15 @@ Cloudflare Workersなどのエッジアイソレートはブラウザのレシ�
 
 ## Tauri アプリの中で
 
-デスクトップ／モバイルのアプリで kevy を走らせるなら？ Tauri のバックエンドは Rust なので、kevy は webview に wasm として置くのではなく、バックエンドに**ネイティブに**組み込めます（共有のストアがひとつ、永続、ウィンドウをまたぐ）。バックエンドのストアと wasm のどちらを選ぶかは [docs/tauri.md](../tauri.md) を参照してください。
+デスクトップ／モバイルのアプリで kevy を走らせるなら？Tauri のバックエンドは Rust なので、kevy は webview に wasm として置くのではなく、バックエンドに**ネイティブに**組み込めます（共有のストアがひとつ、永続、ウィンドウをまたぐ）。バックエンドのストアと wasm のどちらを選ぶかは [docs/tauri.md](../tauri.md) を参照してください。
 
 ## FAQ
 
-**ブラウザでフルのコマンド面は動きますか？** ほぼ動きます。モジュールはブラウザが持てるすべてのフィーチャー——`core`・`persist`・`index`・`text`・`vector`——で構築されているので、`cmd` は KV・TTL・カウンタ・スキャン・pub/sub に加えて `IDX.*`（セカンダリ索引・全文・ベクトル検索）、`VIEW.*`、`TABLE.*` にも届きます。2026-08 までは小さい切り出しで、そのためプロジェクト自身のトップページが、索引を含まないビルドの上でセカンダリ索引を実演していました。
+**ブラウザでフルのコマンド面は動きますか？** ほぼ動きます。モジュールはブラウザが持てるすべてのフィーチャー——`core`・`persist`・`index`・`text`・`vector`・`streams-geo`——で構築されているので、`cmd` は KV・TTL・カウンタ・スキャン・pub/sub に加えて `IDX.*`（セカンダリ索引・全文・ベクトル検索）、`VIEW.*`、`TABLE.*`、そしてストリームとgeoのコマンド（7.0以降）にも届きます。2026-08 までは小さい切り出しで、そのためプロジェクト自身のトップページが、索引を含まないビルドの上でセカンダリ索引を実演していました。
 
-**どの公開版が持つか：** npm の 5.1.0 以前は小さい切り出しです——そこでは `IDX.*`・`VIEW.*`・`TABLE.*` は `unknown command` を返します。広いビルドは main ブランチと kevy.golia.jp にあり、次の公開版で npm に届きます。先に欲しければチェックアウトからビルドしてください(`cargo build -p kevy-wasm --target wasm32-unknown-unknown --release`)。
+**どの公開版が持つか：** npm の 5.1.0 以前は小さい切り出しです——そこでは `IDX.*`・`VIEW.*`・`TABLE.*` は `unknown command` を返します。ストリームとgeoは7.0.0からパッケージに入っています。それ以前の版では`unknown command`を返します。
 
-外してあるものに足りないのはバイト数ではなく、ブラウザが提供できないものです——`replicate` はネットワーク相手、`listener` は TCP ソケット、`tier` はディスクのディレクトリを要します。ストリーム・トランザクション・geo・スクリプティングは、どのプラットフォームでも組み込みエンジンの動詞面の外です。境界は ESTORE_OPS マニフェストであって、このビルドではありません。
+外してあるものに足りないのはバイト数ではなく、ブラウザが提供できないものです——`replicate` はネットワーク相手、`listener` は TCP ソケット、`tier` はディスクのディレクトリを要します。トランザクションとスクリプティングは、どのプラットフォームでも組み込みエンジンの動詞面の外です。ブロッキング読み取りは拒否されます（上記参照）。
 
 wasmターゲット上のRust APIは、コンパイル時に有効化した`kevy-embedded`フィーチャーの全面を公開します。
 

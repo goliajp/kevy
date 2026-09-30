@@ -360,7 +360,8 @@ what the ports SHOULD offer typed helpers for over time — from
   `| COMPOSE AND|OR nameA RANGE/EQ … nameB RANGE/EQ … [LIMIT n] [CURSOR c] [FIELDS …]`
 - `IDX.COUNT name RANGE min max | EQ value`
 - `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args …]`
-- `IDX.REBUILD name` (ANN tombstone compaction)
+- `IDX.REBUILD name` (range / unique: pack the leaves; ann: compact the
+  tombstones; global: sample the split points again; text / agg: refused)
 - `IDX.VERIFY name` (re-read every held entry; reports
   entries/bytes/coerce_failures/duplicates/drift/checked)
 
@@ -663,6 +664,13 @@ FeedBatch {
 }
 ```
 
+The Rust reference spells these with kevy-embedded's own types, so both
+backends return one type: `FeedFrame` is `Change { offset, argv }`,
+`FeedBatch` is `ChangeBatch { changes, next }`, and the cursor —
+`feed_tail`'s return, `feed_read`'s argument, `next` — is
+`FeedPosition { generation, offset }`. The fields carry the same values;
+ports keep the names above.
+
 ### 4.8 `PubsubEvent` (non-exhaustive — ports must tolerate future kinds)
 
 ```
@@ -726,8 +734,8 @@ Each language also ships a **kevy-embedded** — the in-process store the
 `mem://` / `file://` client URLs use. The canonical minimal shape is the
 already-shipped **C ABI** in `crates/kevy-ffi` (every non-Rust door binds to
 it). The ABI is deliberately tiny: **there is no per-verb C function** — one
-`kevy_cmd` takes argv and returns the RESP-encoded reply, so all ~184 verbs
-are reachable through one symbol and a new verb needs zero ABI change. Each
+`kevy_cmd` takes argv and returns the RESP-encoded reply, so every verb the
+engine answers is reachable through one symbol and a new verb needs zero ABI change. Each
 binding pairs it with a small RESP parser.
 
 ### 5.1 C ABI surface (canonical; `KEVY_ABI = 1`)

@@ -5,15 +5,14 @@
 //! lives here.
 
 use kevy_rt::{
-    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyClass, ResolvedCmd, RespVersion, Route,
+    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyKind, ResolvedCmd, RespVersion, Route,
     TxnKind,
 };
 use kevy_store::Store;
 
 use crate::cmd::{self, upper_verb};
 use crate::{
-    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
-    map_appendfsync, map_eviction_policy, ops,
+    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch, ops,
 };
 
 impl Commands for KevyCommands {
@@ -41,6 +40,18 @@ impl Commands for KevyCommands {
         dispatch::dispatch_into_resp3(&self.ctx(), store, args, out);
     }
 
+    fn dispatch_verb_into<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        verb: kevy_rt::VerbId,
+        proto: kevy_rt::RespVersion,
+        out: &mut Vec<u8>,
+    ) {
+        let v3 = proto == kevy_rt::RespVersion::V3;
+        dispatch::dispatch_verb_into(&self.ctx(), store, args, verb, v3, out);
+    }
+
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
@@ -58,10 +69,8 @@ impl Commands for KevyCommands {
         // 205 MB steady state; the first soak's "6 GB" cap was
         // effectively 48 GB).
         let n = self.state().nshards().max(1) as u64;
-        store.set_max_memory(
-            cfg.memory.maxmemory / n,
-            map_eviction_policy(cfg.memory.maxmemory_policy),
-        );
+        store.set_max_memory(cfg.memory.maxmemory / n, cfg.memory.maxmemory_policy);
+        crate::defrag_tick::install(store);
     }
 
     fn on_shard_start(&self, shard: usize) {
@@ -70,6 +79,19 @@ impl Commands for KevyCommands {
         // bumps, see `ops::stats`) land in this clone's ShardCtx.
         self.shard_ctx().set_shard_id(shard);
         self.shard_ctx().set_stats_slot(self.state().obs.slot(shard));
+    }
+
+    fn on_restored(&self, record: &mut dyn FnMut(&kevy_rt::Argv) -> bool) {
+        crate::catalog_record::shard_restored(self.state(), record);
+    }
+
+    fn snapshot_aux(&self) -> Option<kevy_rt::Argv> {
+        Some(crate::catalog_record::snapshot_aux(self.state()))
+    }
+
+    fn load_snapshot_aux(&self, frame: Option<&kevy_rt::Argv>, full_sync: bool) {
+        crate::catalog_record::load_snapshot_aux(self.state(), frame, full_sync);
+        crate::table_runtime::on_snapshot_loaded(&self.ctx());
     }
 
     fn on_data_dir(&self, dir: &std::path::Path) {
@@ -157,14 +179,30 @@ impl Commands for KevyCommands {
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             // Views probe the segments the line above just refreshed.
-            crate::view_runtime::on_write(&self.ctx(), store, key);
+            crate::view_runtime::on_write(&self.ctx());
         }
     }
 
-    fn on_flush(&self, store: &mut Store) {
+    fn take_ext_out(&self) -> Vec<(usize, Vec<u8>)> {
+        if self.gate_bits() & crate::state::IDX_NONEMPTY == 0 {
+            return Vec::new();
+        }
+        crate::index_runtime::take_ext_out(&self.ctx())
+    }
+
+    fn apply_ext(&self, _store: &mut Store, payload: &[u8]) {
+        crate::index_runtime::apply_ext(&self.ctx(), payload);
+    }
+
+    fn extension_targets(&self, argv: &[Vec<u8>]) -> Option<Vec<usize>> {
+        let state = self.state();
+        crate::cmd_index_query::global_targets(&state.catalogs, state.nshards(), argv)
+    }
+
+    fn on_flush(&self, _store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {
-            crate::index_runtime::on_flush(&self.ctx(), store);
+            crate::index_runtime::on_flush(&self.ctx());
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             crate::view_runtime::on_flush(&self.ctx());
@@ -175,17 +213,12 @@ impl Commands for KevyCommands {
         crate::geo_store::geo_search(store, argv)
     }
 
+    fn xreadgroup_refusal(&self, store: &mut Store, argv: &kevy_resp::Argv) -> Option<Vec<u8>> {
+        kevy_verbs::cmd::xreadgroup_refusal(store, argv)
+    }
+
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            return crate::cmd_digest::extension_op(store, argv);
-        }
-        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_op(&self.ctx(), store, argv);
-        }
-        if argv.first().is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE.")) {
-            return crate::cmd_table::extension_op(&self.ctx(), store, argv);
-        }
-        crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
+        crate::commands_ext::op(&self.ctx(), store, argv)
     }
 
     fn extension_reduce(
@@ -194,26 +227,7 @@ impl Commands for KevyCommands {
         chunks: Vec<Vec<u8>>,
         proto: kevy_resp::RespVersion,
     ) -> ExtensionReduced {
-        let catalogs = &self.state().catalogs;
-        let reduced = if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            ExtensionReduced::Reply(crate::cmd_digest::extension_reduce(chunks))
-        } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
-        {
-            crate::cmd_view::extension_reduce(catalogs, argv, chunks)
-        } else if argv
-            .first()
-            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case(b"TABLE."))
-        {
-            crate::cmd_table::extension_reduce(catalogs, argv, chunks)
-        } else {
-            crate::cmd_index_reduce::extension_reduce(self.state(), argv, chunks)
-        };
-        match reduced {
-            ExtensionReduced::Reply(reply) if proto == kevy_resp::RespVersion::V3 => {
-                ExtensionReduced::Reply(crate::cmd_index_reduce::resp3_upgrade(argv, reply))
-            }
-            other => other,
-        }
+        crate::commands_ext::reduce(&self.ctx(), argv, chunks, proto)
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
@@ -264,7 +278,7 @@ impl Commands for KevyCommands {
             crate::index_runtime::on_tick(&self.ctx(), store);
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
-            crate::view_runtime::on_tick(&self.ctx(), store);
+            crate::view_runtime::on_tick(&self.ctx());
         }
         if bits & crate::state::TABLE_NONEMPTY != 0 {
             crate::table_runtime::on_tick(&self.ctx(), store);
@@ -293,6 +307,7 @@ impl Commands for KevyCommands {
         tier_tick(self, store, bits, &cfg);
         store.demote_step();
         store.tier_compact_tick(); // vlog compaction + page return, off the query tail
+        crate::defrag_tick::tick(store);
         alloc_reclaim_tick();
 
         maxmemory_tick(self, store, &cfg);
@@ -331,34 +346,35 @@ impl Commands for KevyCommands {
             // The promotion counter still flows — it doesn't
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
-            return kevy_rt::LiveRuntimeConfig {
-                promotion_epoch: self.state().replication.promotion_epoch(),
-                ..kevy_rt::LiveRuntimeConfig::default()
-            };
+            let mut live = kevy_rt::LiveRuntimeConfig::default();
+            live.promotion_epoch = self.state().replication.promotion_epoch();
+            return live;
         }
         let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         let tick_ms =
             if hz == 0 { Some(0) } else { Some((1000u64 / u64::from(hz)).clamp(1, 10_000)) };
-        kevy_rt::LiveRuntimeConfig {
-            appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
-            auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
-            auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
-            auto_aof_rewrite_bytes: Some(cfg.persistence.auto_aof_rewrite_bytes),
-            auto_aof_rewrite_interval_secs: Some(cfg.persistence.auto_aof_rewrite_interval_secs),
-            tick_interval_ms: tick_ms,
-            // A flag string with an unknown char can't be installed —
-            // config admission validates it — so the fallback default
-            // (notifications OFF) is unreachable in practice and safe
-            // if a foreign path ever slips one through.
-            notify_flags: Some(
-                kevy_config::parse_notification_flags(&cfg.notification.notify_keyspace_events)
-                    .unwrap_or_default(),
-            ),
-            slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
-            slowlog_max_len: Some(cfg.slowlog.max_len),
-            promotion_epoch: self.state().replication.promotion_epoch(),
-        }
+        let mut live = kevy_rt::LiveRuntimeConfig::default();
+        live.appendfsync = Some(cfg.persistence.appendfsync);
+        live.auto_aof_rewrite_pct = Some(cfg.persistence.auto_aof_rewrite_percentage);
+        live.auto_aof_rewrite_min_size = Some(cfg.persistence.auto_aof_rewrite_min_size);
+        live.auto_aof_rewrite_bytes = Some(cfg.persistence.auto_aof_rewrite_bytes);
+        live.auto_aof_rewrite_interval_secs = Some(cfg.persistence.auto_aof_rewrite_interval_secs);
+        live.tick_interval_ms = tick_ms;
+        // A flag string with an unknown char can't be installed —
+        // config admission validates it — so the fallback default
+        // (notifications OFF) is unreachable in practice and safe
+        // if a foreign path ever slips one through.
+        live.notify_flags = Some(
+            cfg.notification
+                .notify_keyspace_events
+                .parse::<kevy_config::NotificationFlags>()
+                .unwrap_or_default(),
+        );
+        live.slowlog_slower_than_micros = Some(cfg.slowlog.slower_than_micros);
+        live.slowlog_max_len = Some(cfg.slowlog.max_len);
+        live.promotion_epoch = self.state().replication.promotion_epoch();
+        live
     }
 
     fn hello_reply<A: ArgvView + ?Sized>(
@@ -377,7 +393,7 @@ impl Commands for KevyCommands {
         cmd::is_write_verb(upper_verb(name, &mut buf))
     }
 
-    fn notify_class<A: ArgvView + ?Sized>(&self, args: &A) -> Option<NotifyClass> {
+    fn notify_class<A: ArgvView + ?Sized>(&self, args: &A) -> Option<NotifyKind> {
         let name = args.first()?;
         let mut buf = [0u8; 32];
         cmd::notify_class_for_verb(upper_verb(name, &mut buf))

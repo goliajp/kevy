@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use crate::apply::{schema_err, value_as_list, value_as_string};
+use crate::error::ValueError;
 use crate::parse::Item;
 use crate::schema::{Config, ConfigError};
 
@@ -15,7 +16,8 @@ use crate::schema::{Config, ConfigError};
 /// let cfg = kevy_config::Config::from_toml_str("[secure]\nprivate_key_file = \"/etc/kevy/node.key\"\n", None).unwrap();
 /// assert_eq!(cfg.secure.private_key_file.unwrap().to_str(), Some("/etc/kevy/node.key"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct SecureSection {
     /// A file holding the private key as 64 hex characters, written by
     /// `kevy keygen`. `None` (default): no key, so no link may be secure.
@@ -69,14 +71,15 @@ pub struct SecureSection {
 /// assert_eq!(k, [0xab; 32]);
 /// assert!(kevy_config::key_from_hex("abc").is_err());
 /// ```
-pub fn key_from_hex(s: &str) -> Result<[u8; 32], String> {
+pub fn key_from_hex(s: &str) -> Result<[u8; 32], ValueError> {
     let s = s.trim();
     if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("a key is 64 hex characters, got {:?}", s));
+        return Err(ValueError::new(format!("a key is 64 hex characters, got {s:?}")));
     }
     let mut k = [0u8; 32];
     for (i, b) in k.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+        // every byte was checked to be a hex digit above
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).expect("two hex digits");
     }
     Ok(k)
 }
@@ -91,7 +94,7 @@ pub fn key_to_hex(k: &[u8; 32]) -> String {
 }
 
 pub(crate) fn key_item(item: &Item) -> Result<[u8; 32], ConfigError> {
-    key_from_hex(&value_as_string(item)?).map_err(|e| schema_err(item, e))
+    key_from_hex(&value_as_string(item)?).map_err(|e| schema_err(item, e.to_string()))
 }
 
 /// `["n1=<hex>", "n2=<hex>"]` (or one comma-separated string) as
@@ -103,7 +106,7 @@ pub(crate) fn peer_keys_item(item: &Item) -> Result<Vec<(String, [u8; 32])>, Con
             let (id, key) = t
                 .split_once('=')
                 .ok_or_else(|| schema_err(item, format!("{t:?} is not id=key")))?;
-            let key = key_from_hex(key).map_err(|e| schema_err(item, e))?;
+            let key = key_from_hex(key).map_err(|e| schema_err(item, e.to_string()))?;
             Ok((id.trim().to_string(), key))
         })
         .collect()
@@ -111,7 +114,10 @@ pub(crate) fn peer_keys_item(item: &Item) -> Result<Vec<(String, [u8; 32])>, Con
 
 /// A list of bare hex keys.
 pub(crate) fn keys_item(item: &Item) -> Result<Vec<[u8; 32]>, ConfigError> {
-    value_as_list(item)?.iter().map(|k| key_from_hex(k).map_err(|e| schema_err(item, e))).collect()
+    value_as_list(item)?
+        .iter()
+        .map(|k| key_from_hex(k).map_err(|e| schema_err(item, e.to_string())))
+        .collect()
 }
 
 impl Config {

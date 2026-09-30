@@ -1,18 +1,17 @@
 //! kevy — a single-machine, Redis-compatible key–value server.
 //!
 //! This crate is the server: it supplies the command *semantics* — routing
-//! ([`KevyCommands`]) and execution ([`dispatch`]) — and wires them to the
+//! and execution, both in [`KevyCommands`] — and wires them to the
 //! [kevy-rt] shared-nothing thread-per-core runtime via [`serve`]. The command
-//! logic is also reachable directly (one keyspace, no I/O) through [`dispatch`],
-//! which is handy for embedding or testing. Built from a small stack of
-//! zero-dependency crates: [kevy-sys], [kevy-resp], [kevy-store], [kevy-net],
-//! [kevy-rt], [kevy-persist].
+//! logic is also reachable directly (one keyspace, no I/O) through
+//! [`KevyCommands::dispatch`], which is handy for embedding or testing. Built
+//! from a small stack of zero-dependency crates: [kevy-sys], [kevy-resp],
+//! [kevy-store], [kevy-rt], [kevy-persist].
 //!
 //! [kevy-rt]: https://crates.io/crates/kevy-rt
 //! [kevy-sys]: https://crates.io/crates/kevy-sys
 //! [kevy-resp]: https://crates.io/crates/kevy-resp
 //! [kevy-store]: https://crates.io/crates/kevy-store
-//! [kevy-net]: https://crates.io/crates/kevy-net
 //! [kevy-persist]: https://crates.io/crates/kevy-persist
 //!
 //! # Example
@@ -42,6 +41,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+mod catalog_record;
 mod cmd;
 mod cmd_block;
 mod cmd_block_serve;
@@ -49,26 +49,34 @@ mod cmd_class;
 mod cmd_command;
 mod cmd_describe;
 mod cmd_digest;
+mod defrag_tick;
+pub use defrag_tick::kevy_alloc_is_global;
 mod cmd_failover;
+mod cmd_global_sample;
 mod cmd_hello;
 mod cmd_index;
 mod cmd_index_advise;
+mod cmd_index_install;
 mod cmd_index_query;
 mod cmd_index_reduce;
 mod cmd_lua;
 mod cmd_repl;
 mod cmd_resolve;
 mod cmd_table;
+mod cmd_table_global;
 mod cmd_table_verify;
 mod cmd_view;
 mod cmd_view_reduce;
 mod commands;
+mod commands_ext;
 mod dispatch;
 mod dispatch_replay;
 mod dispatch_resp3;
 mod elect_persist;
 mod geo_store;
 mod index_runtime;
+mod key_walk;
+mod mem_guard;
 mod metrics_http;
 mod ops;
 mod replica_runner;
@@ -81,41 +89,56 @@ mod secure_front;
 mod state;
 mod table_runtime;
 mod tier_read;
+mod tiering_boot;
 pub mod verb_meta;
 mod view_runtime;
 
 pub use kevy_rt::Argv;
+pub use kevy_scope::OwnershipError;
 pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+pub(crate) use tiering_boot::{resolve_tier_budget, wire_tiering};
+
 /// What to do with a connection after draining its buffered commands.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+/// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+/// let mut input = b"*1\r\n$4\r\nPING\r\n".to_vec();
+/// let after = drain_commands(&kevy, &mut store, &mut input, &mut out);
+/// assert_eq!((after, &out[..]), (AfterDrain::KeepOpen, &b"+PONG\r\n"[..]));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AfterDrain {
     /// Keep serving this connection — the ordinary outcome.
+    ///
+    /// ```
+    /// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+    /// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+    /// // half a frame: nothing to answer yet, wait for the rest
+    /// let mut input = b"*1\r\n$4\r\nPI".to_vec();
+    /// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::KeepOpen);
+    /// assert!(out.is_empty());
+    /// ```
     KeepOpen,
     /// Close it: the client sent QUIT, or the connection is being shut
     /// down for a reason the drain already replied about. The reply is
     /// written before the close, so this is not an abort.
+    ///
+    /// ```
+    /// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+    /// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+    /// let mut input = b"*1\r\n$4\r\nQUIT\r\n".to_vec();
+    /// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::Close);
+    /// assert_eq!(out, b"+OK\r\n", "the reply goes out before the close");
+    /// ```
     Close,
-}
-
-/// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into
-/// the `kevy_store::EvictionPolicy` mirror. The mapping is one-to-one — the
-/// two enums exist as a dependency-direction trick (kevy-store stays a leaf
-/// crate; kevy-config depends on nothing kevy-store does).
-pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store::EvictionPolicy {
-    use kevy_config::EvictionPolicy as C;
-    use kevy_store::EvictionPolicy as S;
-    match p {
-        C::NoEviction => S::NoEviction,
-        C::AllKeysLru => S::AllKeysLru,
-        C::AllKeysLfu => S::AllKeysLfu,
-        C::AllKeysRandom => S::AllKeysRandom,
-        C::VolatileLru => S::VolatileLru,
-        C::VolatileLfu => S::VolatileLfu,
-        C::VolatileRandom => S::VolatileRandom,
-        C::VolatileTtl => S::VolatileTtl,
-    }
 }
 
 /// Signal flag flipped by the SIGTERM / SIGINT handler.
@@ -191,6 +214,16 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
 /// `cfg.persistence.aof`. `threads = 0` (the auto sentinel) runs one
 /// shard; the CLI resolves auto to `available_parallelism()` before
 /// calling in.
+///
+/// This one is compiled but not run: `serve` never returns, it serves until
+/// SIGTERM / SIGINT / SHUTDOWN and then exits the process.
+///
+/// ```no_run
+/// let mut cfg = kevy_config::Config::default();
+/// cfg.server.port = 6004;
+/// cfg.server.threads = 2;
+/// kevy::serve(std::sync::Arc::new(cfg));
+/// ```
 pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     // a secure link without its keys refuses to start, never falls back to plaintext
     let link_key = secure::link_keypair(&cfg).unwrap_or_else(|e| {
@@ -220,6 +253,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     state.register_stop_flag(Arc::clone(&stop));
     // Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&state);
+    mem_guard::spawn_if_tiered(&state);
     // Replica runners (if any) live in `state.replication` — they
     // are started by `replication::apply` for the startup
     // `role = "replica"` path and by `REPLICAOF` at runtime.
@@ -240,8 +274,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
 /// Build the [`RuntimeState`] for one server boot: create the data
 /// dir (a precondition of AOF, index catalogs, elect.meta and
 /// replication state — fail here with a named error, not later with
-/// a bare ENOENT), validate `[cluster] scopes`, and load the index /
-/// view sidecars.
+/// a bare ENOENT) and validate `[cluster] scopes`.
 fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
     let data_dir = cfg.server.data_dir.clone();
     let nshards = cfg.server.threads.max(1);
@@ -249,17 +282,13 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
         eprintln!("kevy: cannot create data dir {}: {e}", data_dir.display());
         std::process::exit(1);
     }
-    let state = match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
+    match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
         Ok(s) => Arc::new(s),
-        Err(msg) => {
-            eprintln!("kevy: bad [cluster] scopes config: {msg}");
+        Err(e) => {
+            eprintln!("kevy: bad [cluster] scopes config: {e}");
             std::process::exit(1);
         }
-    };
-    cmd_index::boot(&state);
-    cmd_view::boot(&state);
-    cmd_table::boot(&state);
-    state
+    }
 }
 
 /// Assemble the configured [`Runtime`]: the builder chain plus the
@@ -267,7 +296,7 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
 fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<KevyCommands> {
     let state = Arc::clone(commands.state());
     let nshards = state.nshards();
-    let fsync = map_appendfsync(cfg.persistence.appendfsync);
+    let fsync = cfg.persistence.appendfsync;
     let mut runtime = Runtime::builder(commands)
         .bind(cfg.server.bind, cfg.server.port)
         .shards(nshards)
@@ -284,13 +313,15 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
         .with_auto_rewrite_interval_secs(cfg.persistence.auto_aof_rewrite_interval_secs)
         // Boot-time only: replay happens before the first tick, so the
         // live-config push (which lands at that tick) is too late for it.
-        .with_replay_resync(cfg.persistence.replay_resync)
+        .with_replay_mode(replay_mode(cfg))
         .with_advanced(
             cfg.advanced.spin_limit,
             cfg.advanced.park_timeout_ms,
             cfg.advanced.tick_check_every,
             cfg.advanced.ring_capacity,
         )
+        // the config admits only powers of two up to 32768, all within u16
+        .with_recv_buffers(cfg.advanced.recv_buffers as u16)
         .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
     if cfg.cluster.enabled {
         runtime = runtime
@@ -298,7 +329,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
             .with_cluster_announce(cfg.cluster.announce_ip, announce_port_base(cfg));
     }
     if cfg.feed.enabled {
-        runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
+        runtime = runtime.with_feed(true).with_feed_buffer_size(cfg.feed.feed_buffer_size);
     }
     runtime = wire_tiering(runtime, cfg);
     // UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
@@ -310,45 +341,6 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
         runtime = runtime.with_unix_socket(PathBuf::from(path));
     }
     replication::apply(runtime, cfg, &state)
-}
-
-/// Tiering: resolve the `[tiering]` budget to bytes — auto/percent
-/// probe the OS bound via kevy-sys — and hand the runtime the
-/// process-level number (it splits per shard). A spec that cannot
-/// resolve is a named boot refusal, never a silent off.
-fn wire_tiering(
-    runtime: Runtime<KevyCommands>,
-    cfg: &kevy_config::Config,
-) -> Runtime<KevyCommands> {
-    match resolve_tier_budget(cfg) {
-        Ok(budget) => {
-            runtime.with_tier_budget(budget).with_tier_spill_dir(cfg.tiering.spill_dir.clone())
-        }
-        Err(msg) => {
-            eprintln!("kevy: {msg}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Resolve the configured `[tiering] budget` to bytes. `Ok(None)` =
-/// tiering off; `Err` = an auto/percent form with no detectable memory
-/// bound (named refusal at boot; on the tick the caller keeps the last
-/// resolved value instead).
-pub(crate) fn resolve_tier_budget(cfg: &kevy_config::Config) -> Result<Option<u64>, String> {
-    match cfg.tiering.budget {
-        None => Ok(None),
-        Some(spec) => {
-            spec.resolve_with(kevy_sys::detected_memory_bound()).map(Some).ok_or_else(|| {
-                format!(
-                    "[tiering] budget = \"{}\": no memory bound detected on this host \
-                     (cgroup v2 memory.max / /proc/meminfo MemAvailable / hw.memsize all \
-                     unavailable) — use an absolute budget (\"4gb\")",
-                    spec.as_config_string()
-                )
-            })
-        }
-    }
 }
 
 /// `[cluster].announce_port_base`, or `None` when left at `0` so the
@@ -368,22 +360,19 @@ pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
     }
 }
 
-/// Translate a `kevy_config::AppendFsync` (TOML enum) into the
-/// `kevy_persist::Fsync` mirror. Same dependency-direction story as
-/// [`map_eviction_policy`].
-pub(crate) fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsync {
-    use kevy_config::AppendFsync as C;
-    use kevy_persist::Fsync as P;
-    match p {
-        C::Always => P::Always,
-        C::EverySec => P::EverySec,
-        C::No => P::No,
-    }
-}
-
 /// Parse and dispatch every complete command in `input`, appending replies to
 /// `output`. Consumes parsed bytes; leaves a trailing partial frame. Returns
 /// `Close` after a `QUIT` or a protocol error (whose reply is already appended).
+///
+/// ```
+/// use kevy::{AfterDrain, KevyCommands, KeyspaceStore, drain_commands};
+/// let (kevy, mut store, mut out) = (KevyCommands::new(), KeyspaceStore::new(), Vec::new());
+/// // two whole commands and the start of a third
+/// let mut input = b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n*2\r\n$3\r\nGET\r\n$1\r\nk\r\n*1\r\n".to_vec();
+/// assert_eq!(drain_commands(&kevy, &mut store, &mut input, &mut out), AfterDrain::KeepOpen);
+/// assert_eq!(out, b"+OK\r\n$1\r\nv\r\n");
+/// assert_eq!(input, b"*1\r\n", "the partial frame stays for the next read");
+/// ```
 pub fn drain_commands(
     kevy: &KevyCommands,
     store: &mut Store,
@@ -416,6 +405,25 @@ pub fn drain_commands(
 
 /// Blocking single-connection handler. Shares command logic with the reactor;
 /// retained for tests and simple uses.
+///
+/// ```
+/// use std::io::{Read, Write};
+/// let listener = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 1)?;
+/// let port = listener.local_port()?;
+/// let client = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+///     let mut c = std::net::TcpStream::connect(("127.0.0.1", port))?;
+///     c.write_all(b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nQUIT\r\n")?;
+///     let mut replies = Vec::new();
+///     c.read_to_end(&mut replies)?;
+///     Ok(replies)
+/// });
+/// let conn = listener.accept()?;
+/// kevy::handle_conn(&kevy::KevyCommands::new(), &conn, &mut kevy::KeyspaceStore::new())?;
+/// drop(conn);
+/// let replies = client.join().map_err(|_| "client thread panicked")??;
+/// assert_eq!(replies, b"+PONG\r\n+OK\r\n");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn handle_conn(kevy: &KevyCommands, conn: &Socket, store: &mut Store) -> io::Result<()> {
     let mut input: Vec<u8> = Vec::with_capacity(4096);
     let mut output: Vec<u8> = Vec::new();
@@ -438,10 +446,25 @@ pub fn handle_conn(kevy: &KevyCommands, conn: &Socket, store: &mut Store) -> io:
     }
 }
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller. KevyCommands is
+// Send and deliberately not Sync: each shard thread owns its own clone,
+// with per-shard state in cells.
+const _: () = {
+    const fn send<T: Send>() {}
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<AfterDrain>();
+    send::<KevyCommands>();
+    send_sync::<RuntimeState>();
+    send_sync::<verb_meta::VerbMeta>();
+};
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_op_table;
+#[cfg(test)]
+mod tests_verb_id;
 #[cfg(test)]
 mod tests_verb_meta;
 
@@ -449,4 +472,13 @@ mod tests_verb_meta;
 pub(crate) fn kevy_rt_push_tick_frame(seg_file: &str) {
     let argv = kevy_persist::segmented_argv(seg_file.as_bytes());
     kevy_rt::propagation::push_tick_frame(argv.iter().map(|a| a.to_vec()).collect());
+}
+
+/// `[persistence] replay_resync` as the runtime's replay mode.
+fn replay_mode(cfg: &kevy_config::Config) -> kevy_persist::ReplayMode {
+    if cfg.persistence.replay_resync {
+        kevy_persist::ReplayMode::Resync
+    } else {
+        kevy_persist::ReplayMode::Strict
+    }
 }

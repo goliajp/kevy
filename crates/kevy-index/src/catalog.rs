@@ -1,19 +1,57 @@
 //! [`Catalog`] — the index registry: declarations, states, and the
 //! compiled prefix matcher the write-path hook consults.
 
-use crate::value::IndexValue;
+use crate::error::{CatalogError, Declared};
+use crate::spec::IndexSpec;
 
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::ValType;
+/// assert_eq!(ValType::parse(b"F64"), Some(ValType::F64));
+/// assert_eq!(ValType::parse(ValType::Str.tag().as_bytes()), Some(ValType::Str));
+/// assert_eq!(ValType::parse(b"u8"), None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ValType {
     /// f32 LE vector blob (ANN kinds parse the field
     /// themselves — never coerced through IndexValue).
+    ///
+    /// ```
+    /// use kevy_index::{AnnSpec, IndexKind, IndexSpec, IndexValue, ValType};
+    /// let knn = IndexSpec::builder("emb", "doc:", IndexKind::Ann, ValType::Vector)
+    ///     .with_field("emb")
+    ///     .with_ann(AnnSpec::new(3))
+    ///     .build()?;
+    /// assert_eq!(knn.ty(), ValType::Vector);
+    /// assert_eq!(IndexValue::coerce(ValType::Vector, b"\0\0\0\0"), None, "never a scalar");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Vector,
     /// Signed 64-bit integer.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// assert_eq!(IndexValue::coerce(ValType::I64, b"-7"), Some(IndexValue::I64(-7)));
+    /// assert_eq!(IndexValue::coerce(ValType::I64, b"7.5"), None);
+    /// ```
     I64,
     /// Finite 64-bit float (NaN coerce-fails).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// assert_eq!(IndexValue::coerce(ValType::F64, b"7.5"), Some(IndexValue::F64(7.5)));
+    /// assert_eq!(IndexValue::coerce(ValType::F64, b"nan"), None);
+    /// ```
     F64,
     /// Raw bytes, memcmp order.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, ValType};
+    /// let (a, b) = (IndexValue::coerce(ValType::Str, b"B"), IndexValue::coerce(ValType::Str, b"a"));
+    /// assert!(a < b, "bytewise: 'B' (0x42) sorts before 'a' (0x61)");
+    /// ```
     Str,
 }
 
@@ -45,21 +83,75 @@ impl ValType {
 }
 
 /// Index kind (`KIND range|unique`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::IndexKind;
+/// assert_eq!(IndexKind::parse(b"UNIQUE"), Some(IndexKind::Unique));
+/// assert_eq!(IndexKind::parse(IndexKind::Agg.tag().as_bytes()), Some(IndexKind::Agg));
+/// assert_eq!(IndexKind::parse(b"hash"), None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IndexKind {
     /// Ordered scan over `(value, key)` pairs.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut seg = Segment::new();
+    /// seg.apply(b"u:1", None, Some(IndexValue::I64(30)));
+    /// seg.apply(b"u:2", None, Some(IndexValue::I64(20)));
+    /// let (hits, _) = seg.range(&IndexValue::I64(0), &IndexValue::I64(99), None, 10);
+    /// assert_eq!(hits[0].0, b"u:2", "value order, not key order");
+    /// ```
     Range,
     /// Point lookup by value; duplicates recorded (declarative fence:
     /// uniqueness is verified, not write-enforced).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut seg = Segment::new();
+    /// seg.apply(b"u:1", None, Some(IndexValue::Str(b"a@x".to_vec())));
+    /// seg.apply(b"u:2", None, Some(IndexValue::Str(b"a@x".to_vec())));
+    /// // the second write is not refused; the lookup shows the duplicate
+    /// assert_eq!(seg.eq(&IndexValue::Str(b"a@x".to_vec()), 10).len(), 2);
+    /// ```
     Unique,
     /// Full-text: the field tokenizes into an inverted segment
     /// (kevy-text); queried with `MATCH`, BM25-ranked.
+    ///
+    /// ```
+    /// use kevy_index::{FieldSpec, IndexKind, IndexSpec, ValType};
+    /// let fields = vec![FieldSpec::new("title").with_weight(2.0), FieldSpec::new("body")];
+    /// let text = IndexSpec::builder("posts", "post:", IndexKind::Text, ValType::Str)
+    ///     .with_fields(fields)
+    ///     .build()?;
+    /// assert_eq!(text.fields().len(), 2, "only text serves several fields");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Text,
     /// ANN: the field holds an f32 LE vector indexed in an HNSW
     /// graph (kevy-vector); queried with `KNN`, distance-ranked.
+    ///
+    /// ```
+    /// use kevy_index::{AnnSpec, IndexKind, IndexSpec, ValType};
+    /// let b = IndexSpec::builder("emb", "doc:", IndexKind::Ann, ValType::Vector).with_field("v");
+    /// assert!(b.clone().build().is_err(), "an ANN index needs its parameters");
+    /// assert_eq!(b.with_ann(AnnSpec::new(128)).build()?.ann(), Some(AnnSpec::new(128)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Ann,
     /// Aggregate: per-group count/sum/min/max of the field,
     /// grouped by `IndexSpec::group_by`; queried with `GROUP`/`GROUPS`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, ValType};
+    /// let spend = IndexSpec::builder("spend", "o:", IndexKind::Agg, ValType::F64)
+    ///     .with_field("total")
+    ///     .with_group_by("region")
+    ///     .build()?;
+    /// assert_eq!(spend.group_by(), Some(&b"region"[..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Agg,
 }
 
@@ -94,120 +186,54 @@ impl IndexKind {
 }
 
 /// Lifecycle state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+/// let mut c = Catalog::new();
+/// c.create(IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?)?;
+/// assert_eq!(c.get(b"age").map(|(_, st)| st), Some(IndexState::Building));
+/// assert!(c.set_state(b"age", IndexState::Ready));
+/// assert_eq!(c.get(b"age").map(|(_, st)| st), Some(IndexState::Ready));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IndexState {
     /// Backfill in progress; queries answer `-INDEXBUILDING`.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+    /// let mut c = Catalog::new();
+    /// c.create(IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?)?;
+    /// assert_eq!(c.iter().next().map(|(_, st)| st), Some(IndexState::Building), "every index starts here");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Building,
     /// Serving.
+    ///
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+    /// let mut c = Catalog::new();
+    /// c.create(IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age").build()?)?;
+    /// c.set_state(b"age", IndexState::Ready); // backfill finished
+    /// let serving = c.matching(b"u:1").filter(|(_, st)| *st == IndexState::Ready).count();
+    /// assert_eq!(serving, 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Ready,
     /// Build aborted over budget; queries answer an error.
-    FailedOverBudget,
-}
-
-/// One indexed attribute of a document.
-///
-/// `weight` scales this field's contribution to the BM25 score, so a hit
-/// in a title can outrank one in a body. Weighting per field is exactly
-/// what a per-field index cannot express: BM25 normalises by document
-/// length, so separate indexes normalise over separate corpora and their
-/// scores are not comparable. That is why multi-attribute is a struct
-/// change rather than something a caller can assemble from several
-/// single-field indexes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FieldSpec {
-    /// Hash field name.
-    pub name: Vec<u8>,
-    /// BM25 weight; 1.0 is neutral.
-    pub weight: f32,
-}
-
-impl FieldSpec {
-    /// A neutrally-weighted field.
-    pub fn new(name: impl Into<Vec<u8>>) -> FieldSpec {
-        FieldSpec { name: name.into(), weight: 1.0 }
-    }
-}
-
-/// One stored value field: which hash field it reads, and how its bytes
-/// compare.
-///
-/// The type is declared, not guessed per query. A numeric range compared
-/// lexicographically is silently wrong — `"9"` sorts above `"10"` — and
-/// deciding it by whether both sides happen to parse as a number would
-/// make the answer depend on the data. Declaring it also means `SORT` and
-/// `FACET` inherit an order and an identity rather than re-deciding one.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ValueSpec {
-    /// Hash field name.
-    pub name: Vec<u8>,
-    /// How the stored bytes compare.
-    pub ty: ValType,
-}
-
-impl ValueSpec {
-    /// A value field compared as text — the default when no type is
-    /// declared for it.
-    pub fn new(name: impl Into<Vec<u8>>) -> ValueSpec {
-        ValueSpec { name: name.into(), ty: ValType::Str }
-    }
-}
-
-// `ValueTest` (the stored-value comparison) lives in `value.rs` with
-// the rest of the coercion/order logic; re-exported unchanged.
-
-/// One declared index.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexSpec {
-    /// Unique catalog name.
-    pub name: Vec<u8>,
-    /// Key-prefix domain (`ON PREFIX user:`).
-    pub prefix: Vec<u8>,
-    /// Hash fields the value comes from, in declaration order.
     ///
-    /// No single-field twin is kept alongside this: two sources of truth
-    /// for "which field" is the shape that drifts. Single-field indexes
-    /// are the one-element case, read through [`IndexSpec::field`].
-    pub fields: Vec<FieldSpec>,
-    /// Declared scalar type.
-    pub ty: ValType,
-    /// Range or unique.
-    pub kind: IndexKind,
-    /// Optional per-index byte budget (`MAXMEM`); 0 = unlimited.
-    pub max_bytes: u64,
-    /// ANN parameters (`Some` iff kind == Ann).
-    pub ann: Option<AnnSpec>,
-    /// Grouping field (`Some` iff kind == Agg).
-    pub group_by: Option<Vec<u8>>,
-    /// Record token positions (`WITH POSITIONS`, kind == Text only), so
-    /// phrase / proximity / highlight queries can verify adjacency. Off
-    /// by default: a corpus that never runs a phrase query does not pay
-    /// the positional side-channel's memory.
-    pub with_positions: bool,
-    /// Hash fields stored per document (`VALUES`, kind == Text only), so
-    /// the clauses that read a document's own value — `FILTER` and, in
-    /// time, `SORT` / `DISTINCT` / `FACET` — have something to read.
-    /// Empty by default: an index that never filters does not pay for
-    /// the stored column.
-    pub values: Vec<ValueSpec>,
-    /// Composite columns (`Some` = an ORDERPATH-compiled index): the
-    /// index value is the order-preserving concatenation of these
-    /// columns' encodings (see [`crate::composite`]). Legal ONLY on
-    /// `KIND range` with `TYPE str`; `None` = every existing index,
-    /// byte-identical in memory and on the sidecar (A5).
-    pub composite: Option<Vec<crate::composite::CompositeCol>>,
-}
-
-/// HNSW declaration (immutable once created).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AnnSpec {
-    /// Vector dimensionality (field bytes must be dim×4 f32 LE).
-    pub dim: u32,
-    /// 0=cosine 1=l2 2=ip (kevy-vector's Distance tags).
-    pub distance: u8,
-    /// Max links per node per layer.
-    pub m: u16,
-    /// Construction beam width.
-    pub ef: u16,
+    /// ```
+    /// use kevy_index::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+    /// let mut c = Catalog::new();
+    /// let spec = IndexSpec::builder("age", "u:", IndexKind::Range, ValType::I64).with_field("age");
+    /// c.create(spec.with_max_bytes(4096).build()?)?;
+    /// // the runtime's backfill passed max_bytes and gave up
+    /// c.set_state(b"age", IndexState::FailedOverBudget);
+    /// assert_eq!(c.get(b"age").map(|(_, st)| st), Some(IndexState::FailedOverBudget));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    FailedOverBudget,
 }
 
 /// Hard cap on declared indexes.
@@ -215,65 +241,35 @@ pub const MAX_INDEXES: usize = 64;
 
 /// The registry. The runtime holds one per process behind an RCU-style
 /// swap; shards read their clone lock-free.
+///
+/// ```
+/// use kevy_index::{Catalog, CatalogError, IndexKind, IndexSpec, ValType};
+/// let spec = |name: &str, prefix: &str| {
+///     IndexSpec::builder(name, prefix, IndexKind::Range, ValType::I64).with_field("n").build()
+/// };
+/// let mut c = Catalog::new();
+/// assert!(c.is_empty());
+/// c.create(spec("age", "user:")?)?;
+/// c.create(spec("ttl", "sess:")?)?;
+/// assert!(matches!(c.create(spec("age", "x:")?), Err(CatalogError::Exists(_))));
+/// assert_eq!(c.len(), 2);
+/// let hit: Vec<_> = c.matching(b"user:7").map(|(s, _)| s.name().to_vec()).collect();
+/// assert_eq!(hit, [b"age".to_vec()]);
+/// assert_eq!(c.get(b"ttl").map(|(s, _)| s.prefix()), Some(&b"sess:"[..]));
+/// assert!(c.drop_index(b"ttl") && !c.drop_index(b"ttl"));
+/// assert_eq!(c.iter().count(), 1);
+///
+/// // the sidecar text restores the declarations, every one as Building
+/// let back = Catalog::from_sidecar(&c.to_sidecar()).ok_or("sidecar did not parse")?;
+/// assert_eq!(back.get(b"age").map(|(s, _)| s.name()), Some(&b"age"[..]));
+/// assert!(Catalog::from_sidecar("not a sidecar").is_none());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub(crate) specs: Vec<(IndexSpec, IndexState)>,
-}
-
-/// What one row looks like to an index: each declared field's raw bytes
-/// with its BM25 weight, and each declared `VALUES` field's raw bytes
-/// (`None` where the row has none).
-pub type RowInputs = (Vec<(Vec<u8>, f32)>, Vec<Option<Vec<u8>>>);
-
-impl IndexSpec {
-    /// The primary field — the first declared one. Every kind except
-    /// text indexes exactly one attribute; text is the kind that reads
-    /// What this index reads out of one row: each declared field's raw
-    /// bytes with its BM25 weight, and each declared `VALUES` field's raw
-    /// bytes (`None` where the row has none).
-    ///
-    /// `get` fetches a hash field, so this stays free of any storage
-    /// dependency while keeping the answer in one place — the server and
-    /// the embedded store index the same row the same way by
-    /// construction, rather than by two copies of the same loop agreeing.
-    pub fn read_row(&self, mut get: impl FnMut(&[u8]) -> Option<Vec<u8>>) -> RowInputs {
-        let mut fields = Vec::with_capacity(self.fields.len());
-        for f in &self.fields {
-            if let Some(raw) = get(&f.name) {
-                fields.push((raw, f.weight));
-            }
-        }
-        let values = self.values.iter().map(|v| get(&v.name)).collect();
-        (fields, values)
-    }
-
-    /// [`IndexSpec::fields`] in full.
-    pub fn field(&self) -> &[u8] {
-        self.fields.first().map_or(&[][..], |f| f.name.as_slice())
-    }
-
-    /// Declare a single-field index — the shape every kind but text uses.
-    pub fn single_field(
-        name: Vec<u8>,
-        prefix: Vec<u8>,
-        field: Vec<u8>,
-        ty: ValType,
-        kind: IndexKind,
-    ) -> IndexSpec {
-        IndexSpec {
-            name,
-            prefix,
-            fields: vec![FieldSpec::new(field)],
-            ty,
-            kind,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        }
-    }
+    /// The global indexes' partitionings, by name; any other is local.
+    pub(crate) parts: Vec<(Vec<u8>, crate::Partitioning)>,
 }
 
 impl Catalog {
@@ -282,44 +278,15 @@ impl Catalog {
         Self::default()
     }
 
-    /// Register a new index. Errors on duplicate name / cap.
-    pub fn create(&mut self, spec: IndexSpec) -> Result<(), &'static str> {
+    /// Register a new index. Errors on duplicate name / cap; the spec
+    /// itself is consistent by construction.
+    pub fn create(&mut self, spec: IndexSpec) -> Result<(), CatalogError> {
         if self.specs.len() >= MAX_INDEXES {
-            return Err("ERR index limit reached (64)");
+            return Err(CatalogError::Full(Declared::Index));
         }
         if self.specs.iter().any(|(s, _)| s.name == spec.name) {
-            return Err("ERR index already exists");
+            return Err(CatalogError::Exists(Declared::Index));
         }
-        if spec.fields.is_empty() {
-            return Err("ERR index needs at least one field");
-        }
-        // Multi-field is served by the text engine only. Every other
-        // kind reads one scalar, so a second field on a range or unique
-        // index would be declared and never consulted -- the
-        // accept-and-ignore shape this arc keeps refusing.
-        if spec.fields.len() > 1 && spec.kind != IndexKind::Text {
-            return Err("ERR only KIND text indexes several fields");
-        }
-        // Positions are a text-only capability: phrase / proximity /
-        // highlight all read the positional side-channel, which no other
-        // kind maintains, so accepting the flag elsewhere would be the
-        // accept-and-ignore shape this arc keeps refusing.
-        if spec.with_positions && spec.kind != IndexKind::Text {
-            return Err("ERR WITH POSITIONS requires KIND text");
-        }
-        // VALUES rides the kinds that carry a stored-value column: the
-        // text segment and the scalar segments (range / unique — the
-        // capacity arc's G1 generalization). Ann and agg carry none, so
-        // accepting the declaration there would store nothing and
-        // filter on nothing.
-        if !spec.values.is_empty()
-            && !matches!(spec.kind, IndexKind::Text | IndexKind::Range | IndexKind::Unique)
-        {
-            return Err("ERR VALUES requires KIND text|range|unique");
-        }
-        // Composite (ORDERPATH-compiled) combos: named refusals, body
-        // in `composite.rs` beside the encoding it protects.
-        crate::composite::composite_guard(&spec)?;
         self.specs.push((spec, IndexState::Building));
         Ok(())
     }
@@ -328,6 +295,7 @@ impl Catalog {
     pub fn drop_index(&mut self, name: &[u8]) -> bool {
         let before = self.specs.len();
         self.specs.retain(|(s, _)| s.name != name);
+        self.parts.retain(|(n, _)| n != name);
         self.specs.len() != before
     }
 
@@ -372,31 +340,19 @@ impl Catalog {
     ) -> impl Iterator<Item = (&'a IndexSpec, IndexState)> {
         self.specs.iter().filter(move |(s, _)| key.starts_with(&s.prefix)).map(|(s, st)| (s, *st))
     }
-
-    /// Coerce a raw field value for `spec` (convenience passthrough).
-    pub fn coerce(spec: &IndexSpec, raw: &[u8]) -> Option<IndexValue> {
-        IndexValue::coerce(spec.ty, raw)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FieldSpec;
 
     fn spec(name: &str, prefix: &str) -> IndexSpec {
-        IndexSpec {
-            name: name.into(),
-            prefix: prefix.into(),
-            fields: vec![FieldSpec::new(b"age".to_vec())],
-            ty: ValType::I64,
-            kind: IndexKind::Range,
-            ann: None,
-            max_bytes: 0,
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        }
+        builder(name, prefix).build().unwrap()
+    }
+
+    fn builder(name: &str, prefix: &str) -> crate::IndexSpecBuilder {
+        IndexSpec::builder(name, prefix, IndexKind::Range, ValType::I64).with_field("age")
     }
 
     #[test]
@@ -418,10 +374,10 @@ mod tests {
     #[test]
     fn sidecar_roundtrip_with_escapes() {
         let mut c = Catalog::new();
-        let mut s = spec("weird", "pre\tfix:");
-        s.fields = vec![FieldSpec::new(b"f%\n".to_vec())];
-        s.max_bytes = 1024;
-        c.create(s).unwrap();
+        let s = IndexSpec::builder("weird", "pre\tfix:", IndexKind::Range, ValType::I64)
+            .with_field(b"f%\n".to_vec())
+            .with_max_bytes(1024);
+        c.create(s.build().unwrap()).unwrap();
         let text = c.to_sidecar();
         let c2 = Catalog::from_sidecar(&text).unwrap();
         let (got, st) = c2.get(b"weird").unwrap();
@@ -438,21 +394,18 @@ mod tests {
     #[test]
     fn only_text_indexes_accept_several_fields() {
         let two = || vec![FieldSpec::new(b"title".to_vec()), FieldSpec::new(b"body".to_vec())];
-        let mut range = spec("multi-range", "p:");
-        range.fields = two();
-        assert!(Catalog::new().create(range).is_err(), "range must refuse two fields");
+        let range = builder("multi-range", "p:").with_fields(two());
+        assert!(range.build().is_err(), "range must refuse two fields");
 
-        let mut text = spec("multi-text", "p:");
-        text.kind = IndexKind::Text;
-        text.fields = two();
-        assert!(Catalog::new().create(text).is_ok(), "text must accept them");
+        let text = IndexSpec::builder("multi-text", "p:", IndexKind::Text, ValType::Str);
+        let text = text.with_fields(two()).build().expect("text must accept them");
+        assert!(Catalog::new().create(text).is_ok());
     }
 
     #[test]
     fn an_index_needs_at_least_one_field() {
-        let mut s = spec("nofields", "p:");
-        s.fields.clear();
-        assert!(Catalog::new().create(s).is_err());
+        let s = builder("nofields", "p:").with_fields(Vec::new());
+        assert!(s.build().is_err());
     }
 
     #[test]

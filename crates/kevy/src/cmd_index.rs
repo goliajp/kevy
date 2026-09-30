@@ -1,8 +1,8 @@
 //! IDX.* command surface.
 //!
 //! Catalog mutations (`IDX.CREATE` / `IDX.DROP`) are Local dispatch
-//! handlers (the catalog is process-global; any shard serves them and
-//! persists the sidecar). Reads (`IDX.QUERY` / `IDX.COUNT` /
+//! handlers (the catalog is process-global; any shard serves them, and
+//! [`crate::catalog_record`] records the change). Reads (`IDX.QUERY` / `IDX.COUNT` /
 //! `IDX.VERIFY` / `IDX.LIST`) ride the generic extension fan-out:
 //! [`extension_op`] computes one shard's chunk (a small private binary
 //! encoding), [`extension_reduce`] merges the chunks into RESP at the
@@ -13,45 +13,9 @@
 //! resumes exclusively past it. `"0"` = start / exhausted (SCAN
 //! convention).
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
-)]
-
-use std::path::Path;
-
-use crate::state::{Ctx, RuntimeState};
-use kevy_index::{Catalog, IndexKind, IndexSpec, ValType};
+use crate::state::{CatalogChange, Ctx};
+use kevy_index::{IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
-
-const SIDECAR: &str = "index-catalog.meta";
-
-/// Load a persisted catalog at boot; `serve` calls this once before
-/// the reactor starts. A state without a sidecar dir (embedded /
-/// test) boots empty.
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = Catalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        state.install_index_catalog(cat);
-    }
-}
-
-pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("index-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-    }
-}
 
 // ---------- catalog mutations (Local dispatch) ----------
 
@@ -59,7 +23,7 @@ pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
 /// TYPE <t> KIND <k> [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
 /// `FIELDS` and `WITH POSITIONS` are text-only; every other kind takes
 /// one `FIELD` and no positions.
-const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e] [PARTITION local|global] [SPLIT v]…";
 
 /// Parse the field clause and return the fields plus the argv index of
 /// the `TYPE` keyword that follows it.
@@ -98,7 +62,7 @@ fn parse_fields<A: ArgvView + ?Sized>(
     let fields = names
         .into_iter()
         .zip(weights)
-        .map(|(name, weight)| kevy_index::FieldSpec { name, weight })
+        .map(|(name, weight)| kevy_index::FieldSpec::new(name).with_weight(weight))
         .collect();
     Ok((fields, i))
 }
@@ -135,19 +99,32 @@ fn parse_weights<A: ArgvView + ?Sized>(
 
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    store: &mut kevy_store::Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    crate::cmd_index_install::create(
+        ctx,
+        &mut crate::cmd_index_install::Sampler::Shard(store),
+        args,
+        out,
+    );
+}
+
+/// The spec and partitioning an `IDX.CREATE` argv declares; `None` with
+/// the error in `out`.
+pub(crate) fn parse_create<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(IndexSpec, crate::cmd_index_install::PartitionOpt)> {
     if args.len() < 11
         || !args[2].eq_ignore_ascii_case(b"ON")
         || !args[3].eq_ignore_ascii_case(b"PREFIX")
     {
-        return encode_error(out, CREATE_USAGE);
+        encode_error(out, CREATE_USAGE);
+        return None;
     }
-    let Ok((fields, type_pos)) = parse_fields(args, out) else {
-        return;
-    };
+    let (fields, type_pos) = parse_fields(args, out).ok()?;
     // After the field clause: TYPE t KIND k [opts…]. `type_pos` names
     // the TYPE keyword; opts start four past it and come in pairs.
     if args.len() < type_pos + 4
@@ -155,20 +132,19 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         || !args[type_pos + 2].eq_ignore_ascii_case(b"KIND")
         || !(args.len() - (type_pos + 4)).is_multiple_of(2)
     {
-        return encode_error(out, CREATE_USAGE);
+        encode_error(out, CREATE_USAGE);
+        return None;
     }
-    let Ok(opts) = parse_create_opts(args, type_pos + 4, out) else {
-        return;
-    };
-    let Ok((ty, kind)) = parse_type_kind(args, type_pos, out) else {
-        return;
-    };
-    let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
-        return;
-    };
-    let spec = build_spec(args, fields, ty, kind, ann, opts);
-    if !tier_floor_refused(store, out) {
-        install_new_index(ctx, spec, out);
+    let mut opts = parse_create_opts(args, type_pos + 4, out).ok()?;
+    let (ty, kind) = parse_type_kind(args, type_pos, out).ok()?;
+    let ann = validate_kind_combo(kind, ty, &opts, out).ok()?;
+    let part = std::mem::take(&mut opts.partition);
+    match build_spec(args, fields, ty, kind, ann, opts) {
+        Ok(spec) => Some((spec, part)),
+        Err(e) => {
+            encode_error(out, e.as_wire());
+            None
+        }
     }
 }
 
@@ -182,48 +158,27 @@ fn build_spec<A: ArgvView + ?Sized>(
     kind: IndexKind,
     ann: Option<kevy_index::AnnSpec>,
     opts: CreateOpts,
-) -> IndexSpec {
-    IndexSpec {
-        name: args[1].to_vec(),
-        prefix: args[4].to_vec(),
-        fields,
-        ty,
-        kind,
-        max_bytes: opts.max_bytes,
-        ann,
-        group_by: opts.group_by,
-        with_positions: opts.with_positions,
-        values: opts.values,
-        composite: None,
+) -> Result<IndexSpec, kevy_index::SpecError> {
+    let mut b = IndexSpec::builder(args[1].to_vec(), args[4].to_vec(), kind, ty)
+        .with_fields(fields)
+        .with_max_bytes(opts.max_bytes)
+        .with_positions(opts.with_positions)
+        .with_values(opts.values);
+    if let Some(a) = ann {
+        b = b.with_ann(a);
     }
+    if let Some(g) = opts.group_by {
+        b = b.with_group_by(g);
+    }
+    b.build()
 }
 
-/// Tiering floor refusal: indexes are the premium
-/// fixed layer demotion can never reclaim — when the existing floor
-/// already exhausts the tier's demotable headroom, a new index is
-/// refused by name (the FailedOverBudget discipline, moved up to
-/// declaration time). Answered from this shard's per-tick gauges; a
-/// no-tier store never refuses. `true` = refused (error written).
-pub(crate) fn tier_floor_refused(store: &kevy_store::Store, out: &mut Vec<u8>) -> bool {
-    if store.tier_index_floor_blocked(0) {
-        encode_error(out, "ERR index memory floor exceeds the tiering budget");
-        return true;
-    }
-    false
-}
-
-/// Clone the catalog, add `spec`, and on success persist + install it.
-fn install_new_index(ctx: &Ctx<'_>, spec: IndexSpec, out: &mut Vec<u8>) {
-    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    match cat.create(spec) {
-        Ok(()) => {
-            persist_sidecar(ctx.state.sidecar_dir(), &cat);
-            ctx.state.install_index_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
-        }
-        Err(e) => encode_error(out, e),
-    }
-}
+/// Tiering floor refusal: indexes are the premium fixed layer demotion
+/// can never reclaim — when the existing floor already exhausts the
+/// tier's demotable headroom, a new index is refused by name (the
+/// FailedOverBudget discipline, moved up to declaration time). Answered
+/// from the shards' per-tick gauges; a no-tier store never refuses.
+pub(crate) const TIER_FLOOR_REFUSAL: &str = "ERR index memory floor exceeds the tiering budget";
 
 /// TYPE / KIND / PREFIX validation for IDX.CREATE; an error reply is
 /// already written on `Err`.
@@ -259,6 +214,7 @@ struct CreateOpts {
     group_by: Option<Vec<u8>>,
     with_positions: bool,
     values: Vec<kevy_index::ValueSpec>,
+    partition: crate::cmd_index_install::PartitionOpt,
 }
 
 /// The option keywords the CREATE tail understands — the boundary the
@@ -279,7 +235,7 @@ fn is_create_opt(a: &[u8]) -> bool {
             return true;
         }
     }
-    false
+    crate::cmd_index_install::is_partition_opt(a)
 }
 
 /// `VALUES f…`: stored field names up to the next option keyword.
@@ -361,6 +317,7 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         group_by: None,
         with_positions: false,
         values: Vec::new(),
+        partition: Default::default(),
     };
     let mut i = start;
     while i < args.len() {
@@ -377,7 +334,11 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         if i + 1 >= args.len() {
             break;
         }
-        apply_create_opt(&args[i], &args[i + 1], &mut o, out)?;
+        let (opt, val) = (&args[i], &args[i + 1]);
+        match crate::cmd_index_install::apply_partition_opt(opt, val, &mut o.partition, out) {
+            Some(r) => r?,
+            None => apply_create_opt(opt, val, &mut o, out)?,
+        }
         i += 2;
     }
     Ok(o)
@@ -443,12 +404,12 @@ fn validate_kind_combo(
     out: &mut Vec<u8>,
 ) -> Result<Option<kevy_index::AnnSpec>, ()> {
     let ann = match (kind, ty) {
-        (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => Some(kevy_index::AnnSpec {
-            dim: opts.dim,
-            distance: opts.distance,
-            m: opts.m,
-            ef: opts.ef,
-        }),
+        (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => Some(
+            kevy_index::AnnSpec::new(opts.dim)
+                .with_distance(opts.distance)
+                .with_m(opts.m)
+                .with_ef(opts.ef),
+        ),
         (IndexKind::Ann, _) => {
             {
                 encode_error(out, "ERR KIND ann requires TYPE vector and DIM");
@@ -485,11 +446,16 @@ pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &
     if args.len() != 2 {
         return encode_error(out, "ERR usage: IDX.DROP name");
     }
-    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    let hit = cat.drop_index(&args[1]);
-    if hit {
-        persist_sidecar(ctx.state.sidecar_dir(), &cat);
-        ctx.state.install_index_catalog(cat);
-    }
+    let hit = loop {
+        let base = ctx.state.catalog_base();
+        let mut cat = base.index_owned();
+        if !cat.drop_index(&args[1]) {
+            break false;
+        }
+        let change = CatalogChange { index: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            break true;
+        }
+    };
     encode_integer(out, i64::from(hit));
 }

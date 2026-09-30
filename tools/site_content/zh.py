@@ -186,7 +186,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 481 KB, persists to OPFS
+# a browser tab — 619 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -482,7 +482,7 @@ PAGES["choose"] = {
                 ["数据只属于一个程序", "嵌入",
                  "没有 socket，没有第二个进程，也没有东西要序列化。是一次函数调用，不是一次网络往返。"],
                 ["数据属于用户的设备", "浏览器",
-                 "481 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"],
+                 "619 KB 的 WebAssembly。真的 TTL、发布订阅和 stream，落在浏览器自己的文件系统上。离线也能用。"],
                 ["代码在边缘按请求执行", "边缘",
                  "没有要预热的东西，也不用建连接。存储和你的代码待在同一个 isolate 里。"],
                 ["一台没有操作系统、没有堆的设备", "裸机",
@@ -508,7 +508,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "机器挂了会怎么样？",
-                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。在默认的 <code>everysec</code> fsync 策略下，被硬杀最多丢一个 tick（约 100 ms）的写，断电约丢一秒；把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
+                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。被硬杀时，嵌入式存储已返回的写一条不丢，服务器最多丢最后一轮 reactor 迭代的写；在默认的 <code>everysec</code> fsync 策略下，断电约丢一秒。把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
                 },
                 {
                     "q": "机器故障能扛过去吗？",
@@ -516,7 +516,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "有认证吗？",
-                    "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
+                    "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。从 7.0 起，kevy 可以给自己的链路加密，不配置就不开启：节点之间的链路，两端都用密钥证明身份；以及给 Rust 客户端用的第二个客户端端口，可以只接受你列出的客户端密钥。<a href=\"~/docs/encrypted-links/\">加密链路指南</a>写了它覆盖什么、代价多少。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
                 },
                 {
                     "q": "如果我用得太大了，或者只是改主意了呢？",
@@ -1252,7 +1252,7 @@ PAGES["use/embedded"] = {
             "h1": "把存储<br>放进东西本身",
             "lede": (
                 "没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，"
-                "可以是一个 481 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
+                "可以是一个 619 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
                 "no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b>"
             ),
         },
@@ -1305,7 +1305,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "在一个浏览器标签页里",
-            "goal": "gzip 之后 481 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
+            "goal": "gzip 之后 619 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
             "cost_t": "成本与限制",
             "items": [
                 {
@@ -1323,6 +1323,13 @@ db.pttl("cart:u881");       // the engine expires it, not your code""",
                 {
                     "do": "听见别的标签页",
                     "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+                {
+                    "do": "留一个刷新后还在的发件箱",
+                    "code": """db.cmd("XGROUP", "CREATE", "outbox", "sync", "$", "MKSTREAM");  // once
+db.cmd("XADD", "outbox", "*", "op", "save", "cart", "u881");
+db.cmd("XREADGROUP", "GROUP", "sync", "tab-1", "STREAMS", "outbox", ">");
+// no BLOCK in a tab: read on a timer, XACK once it is sent""",
                 },
             ],
             "cost": (
@@ -1433,8 +1440,8 @@ PAGES["benchmarks"] = {
             "intro": "你真正会发到标签页里的东西。",
             "head": ["", "体积", ""],
             "rows": [
-                ["kevy.wasm", "1442 KB", "引擎本体，未压缩"],
-                ["gzip 之后", "481 KB", "真正过网络的量"],
+                ["kevy.wasm", "1811 KB", "引擎本体，未压缩"],
+                ["gzip 之后", "619 KB", "真正过网络的量"],
                 ["冷启动", "&lt; 20 ms", "编译加实例化，缓存已热"],
             ],
             "note": (
@@ -1448,7 +1455,7 @@ PAGES["benchmarks"] = {
             "t": "code",
             "h2": "自己复现",
             "caption": "两个脚本。这一页上的所有东西都是它们跑出来的。",
-            "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh",
+            "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD",
         },
     ],
 }

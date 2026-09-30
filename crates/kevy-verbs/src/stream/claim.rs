@@ -1,10 +1,12 @@
-//! `XCLAIM` / `XAUTOCLAIM` dispatchers — split from `group.rs` so
-//! both files stay under the project's ≤500-LOC rule.
+//! `XCLAIM` / `XAUTOCLAIM` dispatchers.
+//!
+//! `XCLAIM` looks its key and group up before it reads any argument;
+//! `XAUTOCLAIM` reads every argument first. `XCLAIM` takes IDs until the
+//! first argument that is not one, and reads options from there.
 
-use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 use kevy_store::{
-    EntryBatch, Store, StreamId, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_start,
+    ClaimMode, EntryBatch, Store, StreamId, XClaimOpts, now_unix_ms, parse_explicit_id,
 };
 
 use crate::Effect;
@@ -12,6 +14,11 @@ use crate::reply::{store_err, wrong_args};
 
 use super::claim_record::{Before, claim_effect};
 use super::emit_entries;
+use super::group::no_key_or_group;
+use super::opts::{BAD_ID, interval_start, strict_i64};
+
+/// The largest `COUNT` `XAUTOCLAIM` takes: 2^43.
+const AUTOCLAIM_MAX_COUNT: i64 = 1 << 43;
 
 pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
     store: &mut Store,
@@ -22,26 +29,30 @@ pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
         wrong_args(out, "xclaim");
         return Effect::Write;
     }
-    let Some(min_idle) = arg_min_idle(args, out) else { return Effect::Write };
-    let (ids, opts, justid) = match parse_xclaim_tail(args, 5, min_idle) {
+    let (key, group) = (&args[1], &args[2]);
+    if !group_found(store, key, group, out) {
+        return Effect::Write;
+    }
+    let Some(min_idle) = min_idle(&args[4], "XCLAIM", out) else { return Effect::Write };
+    let (ids, opts) = match parse_xclaim_tail(args, min_idle) {
         Ok(p) => p,
-        Err(msg) => {
-            encode_error(out, msg.as_wire());
+        Err(e) => {
+            encode_error(out, &e);
             return Effect::Write;
         }
     };
     let before = Before::read(store, args, &ids);
-    let claimed = match store.xclaim(&args[1], &args[2], &args[3], &ids, &opts, now_unix_ms()) {
+    let claimed = match store.xclaim(key, group, &args[3], &ids, &opts, now_unix_ms()) {
         Ok(c) => c,
         Err(e) => {
             store_err(out, e);
             return Effect::Write;
         }
     };
-    emit_claim_reply(out, &claimed, justid);
+    emit_claim_reply(out, &claimed, opts.mode);
     let taken: Vec<StreamId> = claimed.iter().map(|(id, _)| *id).collect();
-    let dropped = before.dropped(store, &args[1], &args[2], &taken);
-    claim_effect(&before, taken, dropped)
+    let dropped = before.dropped(store, key, group, &taken);
+    claim_effect(&before, store, args, taken, dropped)
 }
 
 pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
@@ -53,22 +64,28 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
         wrong_args(out, "xautoclaim");
         return Effect::Write;
     }
-    let Some(min_idle) = arg_min_idle(args, out) else { return Effect::Write };
-    let Ok(start) = parse_range_start(&args[5]) else {
-        encode_error(out, "ERR Invalid stream ID specified as stream command argument");
-        return Effect::Write;
-    };
-    let (count, justid) = match parse_autoclaim_tail(args, 6) {
-        Ok(p) => p,
-        Err(msg) => {
-            encode_error(out, msg.as_wire());
+    let Some(min_idle) = min_idle(&args[4], "XAUTOCLAIM", out) else { return Effect::Write };
+    let start = match interval_start(&args[5]) {
+        Ok(id) => id,
+        Err(e) => {
+            encode_error(out, e.as_wire());
             return Effect::Write;
         }
     };
+    let (count, mode) = match parse_autoclaim_tail(args) {
+        Ok(p) => p,
+        Err(msg) => {
+            encode_error(out, msg);
+            return Effect::Write;
+        }
+    };
+    let (key, group) = (&args[1], &args[2]);
+    if !group_found(store, key, group, out) {
+        return Effect::Write;
+    }
     let before = Before::read(store, args, &[]);
     let now = now_unix_ms();
-    let claimed =
-        store.xautoclaim(&args[1], &args[2], &args[3], min_idle, start, count, justid, now);
+    let claimed = store.xautoclaim(key, group, &args[3], min_idle, start, count, mode, now);
     let (cursor, payloads, deleted) = match claimed {
         Ok(p) => p,
         Err(e) => {
@@ -76,127 +93,129 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
             return Effect::Write;
         }
     };
-    emit_autoclaim_reply(out, cursor, &payloads, &deleted, justid);
+    emit_autoclaim_reply(out, cursor, &payloads, &deleted, mode);
     let taken: Vec<StreamId> = payloads.iter().map(|(id, _)| *id).collect();
-    claim_effect(&before, taken, deleted)
+    claim_effect(&before, store, args, taken, deleted)
 }
 
-/// `min-idle-time` at argv[4], or the refusal written to `out`.
-fn arg_min_idle<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) -> Option<u64> {
-    let n = std::str::from_utf8(&args[4]).ok().and_then(|s| s.parse().ok());
-    if n.is_none() {
-        encode_error(out, "ERR value is not an integer or out of range");
+/// Whether `key` holds a stream with `group`; the refusal written to
+/// `out` when not.
+fn group_found(store: &mut Store, key: &[u8], group: &[u8], out: &mut Vec<u8>) -> bool {
+    match store.stream_view(key) {
+        Ok(Some(s)) if s.group(group).is_some() => true,
+        Ok(_) => {
+            no_key_or_group(out, key, group);
+            false
+        }
+        Err(e) => {
+            store_err(out, e);
+            false
+        }
     }
-    n
 }
 
+/// `min-idle-time`, a negative one taken as 0, or the refusal written to
+/// `out`.
+fn min_idle(arg: &[u8], verb: &str, out: &mut Vec<u8>) -> Option<u64> {
+    let Some(n) = strict_i64(arg) else {
+        encode_error(out, &format!("ERR Invalid min-idle-time argument for {verb}"));
+        return None;
+    };
+    Some(u64::try_from(n).unwrap_or(0))
+}
+
+/// The IDs from `args[5]` up to the first argument that is not one, then
+/// the options.
 fn parse_xclaim_tail<A: ArgvView + ?Sized>(
     args: &A,
-    start: usize,
     min_idle: u64,
-) -> Result<(Vec<StreamId>, XClaimOpts, bool), CmdError> {
-    let (ids, opt_start) = parse_xclaim_ids(args, start)?;
-    let opts = parse_xclaim_opts(args, opt_start, min_idle)?;
-    let justid = opts.justid;
-    Ok((ids, opts, justid))
-}
-
-fn parse_xclaim_ids<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-) -> Result<(Vec<StreamId>, usize), CmdError> {
+) -> Result<(Vec<StreamId>, XClaimOpts), String> {
     let mut ids = Vec::new();
-    let mut i = start;
-    while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        if matches!(tok.as_slice(), b"IDLE" | b"TIME" | b"RETRYCOUNT" | b"FORCE" | b"JUSTID") {
-            break;
-        }
-        let id = parse_explicit_id(&args[i], /*end=*/ false)
-            .map_err(|_| "ERR Invalid stream ID specified as stream command argument")?;
+    let mut i = 5;
+    while let Some(id) = args.get(i).and_then(|a| parse_explicit_id(a).ok()) {
         ids.push(id);
         i += 1;
     }
-    Ok((ids, i))
-}
-
-fn parse_xclaim_opts<A: ArgvView + ?Sized>(
-    args: &A,
-    start: usize,
-    min_idle: u64,
-) -> Result<XClaimOpts, CmdError> {
-    let mut opts = XClaimOpts {
-        min_idle_ms: min_idle,
-        idle_override_ms: None,
-        time_override_ms: None,
-        retrycount_override: None,
-        force: false,
-        justid: false,
-    };
-    let mut i = start;
+    let mut opts = XClaimOpts::default().with_min_idle_ms(min_idle);
     while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        match tok.as_slice() {
-            b"IDLE" => {
-                opts.idle_override_ms = Some(parse_u64(args.get(i + 1))?);
-                i += 2;
-            }
-            b"TIME" => {
-                opts.time_override_ms = Some(parse_u64(args.get(i + 1))?);
-                i += 2;
-            }
-            b"RETRYCOUNT" => {
-                opts.retrycount_override = Some(parse_u64(args.get(i + 1))? as u32);
-                i += 2;
-            }
-            b"FORCE" => {
-                opts.force = true;
-                i += 1;
-            }
-            b"JUSTID" => {
-                opts.justid = true;
-                i += 1;
-            }
-            _ => return Err(CmdError::Wire("ERR syntax error")),
-        }
+        i += xclaim_option(args, i, &mut opts)?;
     }
-    Ok(opts)
+    Ok((ids, opts))
 }
 
+/// One option at `args[i]` into `opts`: how many arguments it took, or
+/// the refusal.
+fn xclaim_option<A: ArgvView + ?Sized>(
+    args: &A,
+    i: usize,
+    opts: &mut XClaimOpts,
+) -> Result<usize, String> {
+    let tok = &args[i];
+    let unknown = || format!("ERR Unrecognized XCLAIM option '{}'", String::from_utf8_lossy(tok));
+    let upper = tok.to_ascii_uppercase();
+    if upper == b"FORCE" {
+        opts.force = true;
+        return Ok(1);
+    }
+    if upper == b"JUSTID" {
+        opts.mode = ClaimMode::JustId;
+        return Ok(1);
+    }
+    if !matches!(upper.as_slice(), b"IDLE" | b"TIME" | b"RETRYCOUNT" | b"LASTID") {
+        return Err(unknown());
+    }
+    let v = args.get(i + 1).ok_or_else(unknown)?;
+    if upper == b"LASTID" {
+        opts.last_id = Some(parse_explicit_id(v).map_err(|_| BAD_ID.to_owned())?);
+        return Ok(2);
+    }
+    let name = String::from_utf8_lossy(&upper).into_owned();
+    let n =
+        strict_i64(v).ok_or_else(|| format!("ERR Invalid {name} option argument for XCLAIM"))?;
+    match upper.as_slice() {
+        // the later of IDLE and TIME wins; a negative one is the claim's time
+        b"IDLE" => {
+            opts.time_override_ms = None;
+            opts.idle_override_ms = Some(u64::try_from(n).unwrap_or(0));
+        }
+        b"TIME" => {
+            opts.idle_override_ms = None;
+            opts.time_override_ms = Some(u64::try_from(n).unwrap_or(u64::MAX));
+        }
+        // a negative count leaves the count to the claim
+        _ => opts.retrycount_override = u64::try_from(n).ok(),
+    }
+    Ok(2)
+}
+
+/// `[COUNT n] [JUSTID]` from `args[6]`.
 fn parse_autoclaim_tail<A: ArgvView + ?Sized>(
     args: &A,
-    start: usize,
-) -> Result<(usize, bool), CmdError> {
+) -> Result<(usize, ClaimMode), &'static str> {
     let mut count: usize = 100;
-    let mut justid = false;
-    let mut i = start;
+    let mut mode = ClaimMode::Deliver;
+    let mut i = 6;
     while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        match tok.as_slice() {
-            b"COUNT" => {
-                count = parse_u64(args.get(i + 1))? as usize;
-                i += 2;
-            }
-            b"JUSTID" => {
-                justid = true;
-                i += 1;
-            }
-            _ => return Err(CmdError::Wire("ERR syntax error")),
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"COUNT") {
+            let v = args.get(i + 1).ok_or("ERR syntax error")?;
+            count = strict_i64(v)
+                .filter(|n| (1..=AUTOCLAIM_MAX_COUNT).contains(n))
+                .map(|n| n as usize)
+                .ok_or("ERR COUNT must be > 0")?;
+            i += 2;
+        } else if tok.eq_ignore_ascii_case(b"JUSTID") {
+            mode = ClaimMode::JustId;
+            i += 1;
+        } else {
+            return Err("ERR syntax error");
         }
     }
-    Ok((count, justid))
+    Ok((count, mode))
 }
 
-pub(super) fn parse_u64(arg: Option<&[u8]>) -> Result<u64, CmdError> {
-    let v = arg.ok_or("ERR syntax error")?;
-    std::str::from_utf8(v)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .ok_or(CmdError::Wire("ERR value is not an integer or out of range"))
-}
-
-fn emit_claim_reply(out: &mut Vec<u8>, claimed: &EntryBatch, justid: bool) {
-    if justid {
+fn emit_claim_reply(out: &mut Vec<u8>, claimed: &EntryBatch, mode: ClaimMode) {
+    if mode == ClaimMode::JustId {
         encode_array_len(out, claimed.len() as i64);
         for (id, _) in claimed {
             encode_bulk(out, &id.encode());
@@ -211,11 +230,11 @@ fn emit_autoclaim_reply(
     cursor: StreamId,
     payloads: &EntryBatch,
     deleted: &[StreamId],
-    justid: bool,
+    mode: ClaimMode,
 ) {
     encode_array_len(out, 3);
     encode_bulk(out, &cursor.encode());
-    if justid {
+    if mode == ClaimMode::JustId {
         encode_array_len(out, payloads.len() as i64);
         for (id, _) in payloads {
             encode_bulk(out, &id.encode());

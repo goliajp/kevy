@@ -109,7 +109,7 @@ fn segged_ops_match_model_semantics() {
 
     // LINSERT before a pivot in the first segment.
     let pivot = alloc::format!("elem-1-{:010}", 123);
-    let r = st.linsert(b"l", true, pivot.as_bytes(), b"inserted").unwrap();
+    let r = st.linsert(b"l", crate::InsertPosition::Before, pivot.as_bytes(), b"inserted").unwrap();
     assert_eq!(r, (n + 1) as i64);
     model.insert(123, b"inserted".to_vec());
 
@@ -143,10 +143,13 @@ fn segged_ops_match_model_semantics() {
 #[test]
 fn accounting_round_trips_through_segged_ops() {
     let mut st = Store::new();
+    // the keyspace table is charged as a whole: allocate it first, so what
+    // comes and goes below is the key alone
+    st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
     let baseline = st.used_memory();
     rpush_n(&mut st, b"l", SEG_PROMOTE + 200, 2);
     st.lset(b"l", 17, b"x").unwrap();
-    st.linsert(b"l", false, b"x", b"y").unwrap();
+    st.linsert(b"l", crate::InsertPosition::After, b"x", b"y").unwrap();
     st.lrem(b"l", 0, b"y").unwrap();
     st.ltrim(b"l", 100, (SEG_PROMOTE - 50) as i64).unwrap();
     st.lpop(b"l", 25).unwrap();

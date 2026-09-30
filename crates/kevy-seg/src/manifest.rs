@@ -18,51 +18,33 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::SegError;
-
-/// One live segment as the manifest knows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// # Examples
-///
-/// ```
-/// use kevy_seg::{Manifest, ManifestEntry};
-/// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
-/// # std::fs::create_dir_all(&dir).unwrap();
-/// let mut m = Manifest::open(&dir).unwrap();
-/// let e = ManifestEntry {
-///     file: "s1.seg".into(),
-///     meta: Vec::new(),
-///     min_key: b"a".to_vec(),
-///     max_key: b"z".to_vec(),
-///     records: 1,
-/// };
-/// m.add(e).unwrap();
-/// // min/max are mirrored from the footer so a reader can skip a
-/// // segment without opening it.
-/// let first = m.live().next().unwrap();
-/// assert_eq!(first.file, "s1.seg");
-/// assert_eq!(first.max_key, b"z".to_vec());
-/// # std::fs::remove_dir_all(&dir).ok();
-/// ```
-pub struct ManifestEntry {
-    /// Segment file name (relative to the manifest's directory).
-    pub file: String,
-    /// Caller-opaque metadata (table id, bucket, …).
-    pub meta: Vec<u8>,
-    /// Smallest key in the segment, mirrored from its footer so a
-    /// directory can be served without opening the file.
-    pub min_key: Vec<u8>,
-    /// Largest key in the segment. With `min_key` this is the range a
-    /// reader tests before deciding the segment is worth opening.
-    pub max_key: Vec<u8>,
-    /// Record count, mirrored from the footer. Includes tombstones, so
-    /// it bounds a scan rather than predicting what it yields.
-    pub records: u64,
-}
+use crate::{ManifestEntry, SegError};
 
 /// The append-only ledger. One per segment directory.
+///
+/// A segment becomes live when the ledger records it, and stops being
+/// live when the ledger records its retirement; both survive a reopen.
+///
+/// ```
+/// use kevy_seg::{Manifest, ManifestEntry, SegBuilder};
+/// # let dir = kevy_tmpdir::TmpDir::new("manifest");
+/// # let dir = dir.path();
+/// for name in ["s1.seg", "s2.seg"] {
+///     let mut b = SegBuilder::create(&dir.join(name))?;
+///     b.push(name.as_bytes(), b"v")?;
+///     Manifest::open(dir)?.add(ManifestEntry::new(name, b.finish()?))?;
+/// }
+/// let mut m = Manifest::open(dir)?;
+/// m.drop_seg("s1.seg")?;
+/// std::fs::remove_file(dir.join("s1.seg"))?;
+///
+/// let live: Vec<String> = Manifest::open(dir)?.live().map(|e| e.file.clone()).collect();
+/// assert_eq!(live, ["s2.seg"]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct Manifest {
+    dir: PathBuf,
     path: PathBuf,
     f: File,
     /// Live entries by file name (a DROP removes; ADD of a name
@@ -92,7 +74,7 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
     /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
     /// # std::fs::create_dir_all(&dir).unwrap();
     /// // A directory with no manifest opens empty rather than failing.
@@ -100,7 +82,8 @@ impl Manifest {
     /// assert_eq!(m.live().count(), 0);
     /// # std::fs::remove_dir_all(&dir).ok();
     /// ```
-    pub fn open(dir: &Path) -> Result<Self, SegError> {
+    pub fn open(dir: impl AsRef<Path>) -> Result<Self, SegError> {
+        let dir = dir.as_ref().to_path_buf();
         let path = dir.join(MANIFEST);
         let mut live = BTreeMap::new();
         let good = if path.exists() { replay(&std::fs::read(&path)?, &mut live)? } else { 0 };
@@ -109,7 +92,7 @@ impl Manifest {
             // Drop the torn tail so the next append starts clean.
             f.set_len(good)?;
         }
-        Ok(Self { path, f, live })
+        Ok(Self { dir, path, f, live })
     }
 
     /// Record a sealed segment. Fsyncs before returning — this IS the
@@ -117,17 +100,11 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
     /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
     /// # std::fs::create_dir_all(&dir).unwrap();
     /// let mut m = Manifest::open(&dir).unwrap();
-    /// let e = ManifestEntry {
-    ///     file: "s1.seg".into(),
-    ///     meta: Vec::new(),
-    ///     min_key: b"a".to_vec(),
-    ///     max_key: b"z".to_vec(),
-    ///     records: 1,
-    /// };
+    /// let e = ManifestEntry::new("s1.seg", SegMeta::default());
     /// m.add(e).unwrap();
     /// // Durable at once: a fresh open sees it.
     /// assert_eq!(Manifest::open(&dir).unwrap().live().count(), 1);
@@ -148,17 +125,11 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
     /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
     /// # std::fs::create_dir_all(&dir).unwrap();
     /// let mut m = Manifest::open(&dir).unwrap();
-    /// let e = ManifestEntry {
-    ///     file: "s1.seg".into(),
-    ///     meta: Vec::new(),
-    ///     min_key: b"a".to_vec(),
-    ///     max_key: b"z".to_vec(),
-    ///     records: 1,
-    /// };
+    /// let e = ManifestEntry::new("s1.seg", SegMeta::default());
     /// m.add(e).unwrap();
     /// m.drop_seg("s1.seg").unwrap();
     /// // Gone from the live set — the FILE is removed later, by `sweep`.
@@ -178,17 +149,11 @@ impl Manifest {
     /// # Examples
     ///
     /// ```
-    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
     /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
     /// # std::fs::create_dir_all(&dir).unwrap();
     /// let mut m = Manifest::open(&dir).unwrap();
-    /// let e = ManifestEntry {
-    ///     file: "s1.seg".into(),
-    ///     meta: Vec::new(),
-    ///     min_key: b"a".to_vec(),
-    ///     max_key: b"z".to_vec(),
-    ///     records: 1,
-    /// };
+    /// let e = ManifestEntry::new("s1.seg", SegMeta::default());
     /// m.add(e).unwrap();
     /// assert_eq!(m.live().map(|e| e.file.as_str()).collect::<Vec<_>>(), vec!["s1.seg"]);
     /// # std::fs::remove_dir_all(&dir).ok();
@@ -199,6 +164,27 @@ impl Manifest {
 
     /// Rewrite the ledger as its live set (temp + rename + fsync).
     /// Call when the dead-record fraction is worth the IO.
+    ///
+    /// ```
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
+    /// # let dir = kevy_tmpdir::TmpDir::new("manifest-compact");
+    /// let ledger = dir.path().join("segs.manifest");
+    /// let mut m = Manifest::open(dir.path())?;
+    /// for i in 0..20 {
+    ///     let name = format!("s{i}.seg");
+    ///     m.add(ManifestEntry::new(name.clone(), SegMeta::default()))?;
+    ///     if i > 0 {
+    ///         m.drop_seg(&name)?;
+    ///     }
+    /// }
+    /// let before = std::fs::metadata(&ledger)?.len();
+    /// m.compact()?;
+    /// // the dropped history is gone; the live set is unchanged
+    /// assert!(std::fs::metadata(&ledger)?.len() < before);
+    /// let live: Vec<String> = Manifest::open(dir.path())?.live().map(|e| e.file.clone()).collect();
+    /// assert_eq!(live, ["s0.seg"]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn compact(&mut self) -> Result<(), SegError> {
         let tmp = self.path.with_extension("manifest.rewrite");
         let mut w = File::create(&tmp)?;
@@ -211,36 +197,30 @@ impl Manifest {
         Ok(())
     }
 
-    /// Delete every `.seg` file in `dir` the ledger does not hold —
-    /// the startup sweep that turns crash-mid-build leftovers back
-    /// into free disk. Returns the swept names.
+    /// Delete every `.seg` file in the ledger's directory that the ledger
+    /// does not hold — the startup sweep that turns crash-mid-build
+    /// leftovers back into free disk. Returns the swept names.
     /// # Examples
     ///
     /// ```
-    /// use kevy_seg::{Manifest, ManifestEntry};
+    /// use kevy_seg::{Manifest, ManifestEntry, SegMeta};
     /// # let dir = std::env::temp_dir().join(format!("kevy-man-doc-{}-{}", std::process::id(), line!()));
     /// # std::fs::create_dir_all(&dir).unwrap();
     /// let mut m = Manifest::open(&dir).unwrap();
-    /// let e = ManifestEntry {
-    ///     file: "s1.seg".into(),
-    ///     meta: Vec::new(),
-    ///     min_key: b"a".to_vec(),
-    ///     max_key: b"z".to_vec(),
-    ///     records: 1,
-    /// };
+    /// let e = ManifestEntry::new("s1.seg", SegMeta::default());
     /// m.add(e).unwrap();
     /// std::fs::write(dir.join("s1.seg"), b"x").unwrap();
     /// std::fs::write(dir.join("orphan.seg"), b"x").unwrap();
     ///
     /// // Only files the manifest does not claim are swept.
-    /// let gone = m.sweep(&dir).unwrap();
+    /// let gone = m.sweep().unwrap();
     /// assert_eq!(gone, vec!["orphan.seg".to_string()]);
     /// assert!(dir.join("s1.seg").exists());
     /// # std::fs::remove_dir_all(&dir).ok();
     /// ```
-    pub fn sweep(&self, dir: &Path) -> Result<Vec<String>, SegError> {
+    pub fn sweep(&self) -> Result<Vec<String>, SegError> {
         let mut swept = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
+        for entry in std::fs::read_dir(&self.dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if name.ends_with(".seg") && !self.live.contains_key(&name) {

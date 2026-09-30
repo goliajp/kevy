@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
 KEVY_IO_URING=0 kevy --port 6004   # force epoll
 ```
 
+**Receive buffers (io_uring).** Each shard receives into a ring of 16 KiB buffers that the kernel fills as data arrives. The ring holds `recv_buffers` × 16 KiB per shard, and all of it becomes resident once traffic has cycled through it: 16 MiB a shard at the default of 1024, which kept throughput unchanged from the previous fixed 4096 (64 MiB a shard) on the benchmark sweep. A ring that runs dry is not an error — the receive that found it empty is re-armed and the data waits in the socket — so the setting trades memory against re-arming under bursts. Raise it when thousands of connections per shard send at once; lower it when the memory matters more. It is read at startup, must be a power of two from 1 to 32768, and does nothing on the epoll or kqueue reactors.
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # 32 MiB per shard
+```
+
 ### Persistence
 
 AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The three values match Redis semantics:
@@ -79,7 +89,7 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 **Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
 
-**The opt-in allocator.** A build with `--features kevy-alloc` swaps glibc malloc for kevy's own span allocator: ~10 % smaller steady-state RSS under churn, at a throughput cost only on saturated collection-write shards. When memory capacity is the binding constraint, it is worth the build; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measured trade.
+**The allocator.** The server runs on kevy's own span allocator, `kevy-alloc`, by default: one heap per shard, free 4 KiB pages handed back to the OS, and a compaction pass on the shard tick that packs the holes demotion and deletes leave, which is what holds a tiered server's RSS at its budget × 1.05. Against glibc it costs as many instructions per write command or fewer, and `LPUSH` and `ZADD` run about 11 % faster. `INFO modules` shows `module:name=alloc,impl=kevy-alloc`. Build with `--no-default-features` for the system allocator — for tools that hook malloc, or on a system whose pages are larger than 4 KiB, where it cannot return pages; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measurements.
 
 ### Network
 

@@ -26,6 +26,17 @@
 /// `CONFIG GET`, `XINFO STREAM`. The map header is a single byte plus the
 /// count digits; vs RESP2's `*2N` it saves zero header bytes but the
 /// payload typically saves 4 B per pair by allowing simple-string keys.
+///
+/// ```
+/// use kevy_resp::{encode_bulk, encode_map_header};
+///
+/// // HGETALL of a one-field hash: one pair, two sub-replies
+/// let mut out = Vec::new();
+/// encode_map_header(&mut out, 1);
+/// encode_bulk(&mut out, b"f");
+/// encode_bulk(&mut out, b"v");
+/// assert_eq!(out, b"%1\r\n$1\r\nf\r\n$1\r\nv\r\n");
+/// ```
 pub fn encode_map_header(out: &mut Vec<u8>, count: i64) {
     out.push(b'%');
     push_int(out, count);
@@ -37,6 +48,18 @@ pub fn encode_map_header(out: &mut Vec<u8>, count: i64) {
 /// doesn't require it).
 ///
 /// Used for `SMEMBERS` / `SINTER` / `SUNION` / `SDIFF` / `SRANDMEMBER COUNT`.
+///
+/// ```
+/// use kevy_resp::{Reply, encode_bulk, encode_set_header, parse_reply};
+///
+/// let mut out = Vec::new();
+/// encode_set_header(&mut out, 2);
+/// encode_bulk(&mut out, b"a");
+/// encode_bulk(&mut out, b"b");
+/// let (reply, _) = parse_reply(&out)?.expect("complete frame");
+/// assert_eq!(reply, Reply::Set(vec![Reply::Bulk(b"a".to_vec()), Reply::Bulk(b"b".to_vec())]));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn encode_set_header(out: &mut Vec<u8>, count: i64) {
     out.push(b'~');
     push_int(out, count);
@@ -47,6 +70,18 @@ pub fn encode_set_header(out: &mut Vec<u8>, count: i64) {
 /// `count` sub-replies. The RESP3 client demultiplexes push frames from
 /// regular replies, so this is what `PUBLISH` / pattern-subscribe
 /// delivery uses when the consumer speaks RESP3.
+///
+/// ```
+/// use kevy_resp::{encode_bulk, encode_push_header};
+///
+/// // a pub/sub message frame: kind, channel, payload
+/// let mut out = Vec::new();
+/// encode_push_header(&mut out, 3);
+/// for part in [b"message".as_slice(), b"news", b"hi"] {
+///     encode_bulk(&mut out, part);
+/// }
+/// assert!(out.starts_with(b">3\r\n$7\r\nmessage\r\n"));
+/// ```
 pub fn encode_push_header(out: &mut Vec<u8>, count: i64) {
     out.push(b'>');
     push_int(out, count);
@@ -61,6 +96,16 @@ pub fn encode_push_header(out: &mut Vec<u8>, count: i64) {
 /// (no length prefix, no trailing CRLF after the digits — the digits
 /// ARE the CRLF-terminated line). Worth it on `ZSCORE` flood or
 /// `ZRANGE WITHSCORES`.
+///
+/// ```
+/// use kevy_resp::encode_double;
+///
+/// let mut out = Vec::new();
+/// encode_double(&mut out, 1.5);
+/// encode_double(&mut out, 3.0);
+/// encode_double(&mut out, f64::NEG_INFINITY);
+/// assert_eq!(out, b",1.5\r\n,3\r\n,-inf\r\n");
+/// ```
 pub fn encode_double(out: &mut Vec<u8>, v: f64) {
     out.push(b',');
     if v.is_nan() {
@@ -89,12 +134,28 @@ pub fn encode_double(out: &mut Vec<u8>, v: f64) {
 }
 
 /// `#t\r\n` / `#f\r\n` — boolean.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_boolean(&mut out, false);
+/// assert_eq!(out, b"#f\r\n");
+/// ```
 pub fn encode_boolean(out: &mut Vec<u8>, v: bool) {
     out.extend_from_slice(if v { b"#t\r\n" } else { b"#f\r\n" });
 }
 
 /// `_\r\n` — RESP3 true null. RESP2 fallback is the existing
 /// [`crate::encode_null_bulk`] (`$-1\r\n`).
+///
+/// ```
+/// use kevy_resp::{Reply, encode_null, parse_reply};
+///
+/// let mut out = Vec::new();
+/// encode_null(&mut out);
+/// assert_eq!(out, b"_\r\n");
+/// assert_eq!(parse_reply(&out)?, Some((Reply::Null, 3)));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn encode_null(out: &mut Vec<u8>) {
     out.extend_from_slice(b"_\r\n");
 }
@@ -102,6 +163,12 @@ pub fn encode_null(out: &mut Vec<u8>) {
 /// `(<digits>\r\n` — arbitrary-precision integer carried as its string
 /// representation. We don't ship a bignum type (charter: zero deps), so
 /// the caller hands in pre-formatted digit bytes.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_big_number(&mut out, b"3492890328409238509324850943850943825024385");
+/// assert_eq!(out, b"(3492890328409238509324850943850943825024385\r\n");
+/// ```
 pub fn encode_big_number(out: &mut Vec<u8>, digits: &[u8]) {
     out.reserve(digits.len() + 4);
     out.push(b'(');
@@ -117,6 +184,13 @@ pub fn encode_big_number(out: &mut Vec<u8>, digits: &[u8]) {
 /// Used for `CLIENT INFO` / `DEBUG OBJECT` style replies where a RESP3
 /// client wants to know "this is markdown, render it as markdown" but
 /// a RESP2 client still gets the raw bytes.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_verbatim(&mut out, *b"txt", b"hello");
+/// // len 9 = "txt" + ':' + "hello"
+/// assert_eq!(out, b"=9\r\ntxt:hello\r\n");
+/// ```
 pub fn encode_verbatim(out: &mut Vec<u8>, fmt: [u8; 3], data: &[u8]) {
     let total_len = 4 + data.len();
     out.reserve(total_len + 16);
@@ -131,6 +205,12 @@ pub fn encode_verbatim(out: &mut Vec<u8>, fmt: [u8; 3], data: &[u8]) {
 
 /// `!<len>\r\n<error>\r\n` — length-prefixed error. Use when the error
 /// payload contains CRLF (the simple `-...` shape can't encode it).
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_blob_error(&mut out, b"ERR line1\r\nline2");
+/// assert_eq!(out, b"!16\r\nERR line1\r\nline2\r\n");
+/// ```
 pub fn encode_blob_error(out: &mut Vec<u8>, msg: &[u8]) {
     out.reserve(msg.len() + 16);
     out.push(b'!');

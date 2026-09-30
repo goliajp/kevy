@@ -13,7 +13,7 @@ fn s() -> Store {
 #[test]
 fn scan_walks_full_keyspace_paged() {
     let s = s();
-    for i in 0..10 {
+    for i in 0..200 {
         s.set(format!("k{i}").as_bytes(), b"v").unwrap();
     }
     let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -27,10 +27,12 @@ fn scan_walks_full_keyspace_paged() {
         }
         cursor = next;
         iterations += 1;
-        assert!(iterations < 100, "scan didn't terminate");
+        assert!(iterations < 1000, "scan didn't terminate");
     }
+    assert!(iterations > 1, "a small COUNT walks the keyspace in several pages");
     seen.sort();
-    let mut expected: Vec<Vec<u8>> = (0..10).map(|i| format!("k{i}").into_bytes()).collect();
+    seen.dedup();
+    let mut expected: Vec<Vec<u8>> = (0..200).map(|i| format!("k{i}").into_bytes()).collect();
     expected.sort();
     assert_eq!(seen, expected);
 }
@@ -65,6 +67,31 @@ fn keys_iter_yields_all() {
     let mut got: Vec<Vec<u8>> = s.keys_iter(None).collect();
     got.sort();
     assert_eq!(got, vec![b"a".to_vec(), b"b".to_vec()]);
+}
+
+#[test]
+fn scan_and_keys_iter_cross_every_shard() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_shards(4)).unwrap();
+    let want: std::collections::BTreeSet<Vec<u8>> =
+        (0..1000).map(|i| format!("k{i}").into_bytes()).collect();
+    for k in &want {
+        s.set(k, b"v").unwrap();
+    }
+    let (mut cursor, mut seen, mut shards_seen) = (0u64, std::collections::BTreeSet::new(), 0u64);
+    loop {
+        let (next, batch) = s.scan(cursor, None, 7);
+        assert!(!batch.is_empty() || next == 0, "a page that walks nothing ends the walk");
+        seen.extend(batch);
+        if next == 0 {
+            break;
+        }
+        shards_seen = shards_seen.max(next >> 54);
+        cursor = next;
+    }
+    assert_eq!(seen, want);
+    assert!(shards_seen > 0, "the cursor moved past the first shard");
+    let iterated: std::collections::BTreeSet<Vec<u8>> = s.keys_iter(Some(b"k1*")).collect();
+    assert_eq!(iterated, want.iter().filter(|k| k.starts_with(b"k1")).cloned().collect());
 }
 
 // ---- hscan ---------------------------------------------------------------

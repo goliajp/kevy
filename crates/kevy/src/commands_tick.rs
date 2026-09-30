@@ -16,7 +16,9 @@ use kevy_rt::Commands as _;
 #[inline]
 pub(super) fn alloc_reclaim_tick() {
     #[cfg(feature = "kevy-alloc")]
-    kevy_alloc::thread_reclaim();
+    if crate::defrag_tick::active() {
+        kevy_alloc::thread_reclaim();
+    }
 }
 
 /// Re-apply maxmemory + eviction policy in case `CONFIG SET` has
@@ -29,10 +31,7 @@ pub(super) fn alloc_reclaim_tick() {
 /// the init-time division was overwritten within one tick.
 pub(super) fn maxmemory_tick(c: &KevyCommands, store: &mut Store, cfg: &kevy_config::Config) {
     let n = c.state().nshards().max(1) as u64;
-    store.set_max_memory(
-        cfg.memory.maxmemory / n,
-        crate::map_eviction_policy(cfg.memory.maxmemory_policy),
-    );
+    store.set_max_memory(cfg.memory.maxmemory / n, cfg.memory.maxmemory_policy);
 }
 
 /// The shard tick's tiering upkeep: re-resolve the
@@ -44,18 +43,25 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
     if !store.tier_enabled() {
         return;
     }
+    let n = c.state().nshards().max(1) as u64;
     if let Ok(Some(total)) = crate::resolve_tier_budget(cfg) {
-        let n = c.state().nshards().max(1) as u64;
         store.set_tier_budget((total / n).max(1));
     }
     let mut reserved = 0u64;
     if bits & crate::state::IDX_NONEMPTY != 0 {
-        reserved += crate::index_runtime::reserved_bytes(&c.ctx(), store);
+        reserved += crate::index_runtime::reserved_bytes(&c.ctx());
     }
     if bits & crate::state::VIEW_NONEMPTY != 0 {
         reserved += crate::view_runtime::reserved_bytes(&c.ctx());
     }
     store.set_tier_reserved(reserved);
+    store.tier_reserve_growth();
+    let mem = &c.state().mem;
+    store.set_tier_overhead(mem.overhead_bytes.load(std::sync::atomic::Ordering::Relaxed) / n);
+    let refusing = mem.refusing.load(std::sync::atomic::Ordering::Relaxed);
+    if store.memory_refused() != refusing {
+        store.set_memory_refusal(refusing);
+    }
 }
 
 /// Sweep due hash-field TTLs, and announce what the sweep removed.
@@ -73,5 +79,27 @@ pub(super) fn tier_tick(c: &KevyCommands, store: &mut Store, bits: u32, cfg: &ke
 pub(super) fn sweep_hash_field_ttls(cmds: &KevyCommands, store: &mut Store) {
     for (key, _fields) in store.tick_hash_ttl(64) {
         cmds.on_write(store, &key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    #[test]
+    fn the_tier_tick_hands_the_guards_refusal_to_the_store_and_takes_it_back() {
+        let d = kevy_tmpdir::TmpDir::new("tier-tick-refusal");
+        let c = KevyCommands::new();
+        let cfg = kevy_config::Config::default();
+        let mut s = Store::new();
+        s.enable_tiering(d.path(), 1 << 30).unwrap();
+        c.state().mem.refusing.store(true, Relaxed);
+        tier_tick(&c, &mut s, crate::state::VIEW_NONEMPTY, &cfg);
+        assert!(s.memory_refused(), "the guard refuses, so the shard does");
+        assert_eq!(s.tier_stats().reserved_bytes, 0, "no view holds a floor");
+        c.state().mem.refusing.store(false, Relaxed);
+        tier_tick(&c, &mut s, 0, &cfg);
+        assert!(!s.memory_refused(), "and lifts it once the guard does");
     }
 }

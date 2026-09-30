@@ -17,7 +17,7 @@ use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
-use kevy_sys::{Poller, Waker, tcp_listen_reuseport, waker};
+use kevy_sys::{Poller, Socket, Waker};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -39,6 +39,7 @@ struct Shared {
     /// channel-only PUBLISH path skips the walk when so).
     pubsub: PubSubReg,
     pubsub_patterns: PubSubPatternReg,
+    restore_gate: Arc<crate::restore_gate::RestoreGate>,
 }
 
 impl Shared {
@@ -63,7 +64,7 @@ impl Shared {
         }
         let mut wakers: Vec<Arc<Waker>> = Vec::with_capacity(n);
         for _ in 0..n {
-            wakers.push(Arc::new(waker()?));
+            wakers.push(Arc::new(Waker::new()?));
         }
         let parked: Vec<Arc<CachePadded<ParkFlag>>> =
             (0..n).map(|_| Arc::new(CachePadded::new(park_fence::new_flag()))).collect();
@@ -87,6 +88,7 @@ impl Shared {
             inbound_dirty,
             pubsub: Arc::new(RwLock::new(HashMap::new())),
             pubsub_patterns: Arc::new(RwLock::new(Vec::new())),
+            restore_gate: Arc::new(crate::restore_gate::RestoreGate::new(n)),
         })
     }
 }
@@ -114,26 +116,32 @@ impl<C: Commands> Runtime<C> {
         let mut unix_listener: Option<kevy_sys::Socket> = None;
         if let Some(p) = self.unix_socket_path.as_ref() {
             let path_bytes = p.to_string_lossy();
-            unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
+            unix_listener = Some(kevy_sys::Socket::unix_listen(path_bytes.as_bytes(), 1024)?);
         }
         // Build every shard up front so a bind/open failure aborts before
         // we spawn.
         let shards = self.build_shards(n, &mut shared, &bio_send, unix_listener)?;
-        let (use_uring, uring_forced) = reactor_choice();
+        let (use_uring, uring_forced) = crate::runtime_thread::reactor_choice(self.recv_buffers);
         let mut handles = Vec::with_capacity(n);
         for shard in shards {
             let stop = stop.clone();
             handles.push(std::thread::spawn(move || {
-                run_shard_thread(shard, stop, use_uring, uring_forced);
+                crate::runtime_thread::run_shard_thread(shard, stop, use_uring, uring_forced)
             }));
         }
+        // the first shard error, which stopped every shard
+        let mut first: io::Result<()> = Ok(());
         for h in handles {
-            let _ = h.join();
+            if let Ok(Err(e)) = h.join()
+                && first.is_ok()
+            {
+                first = Err(e);
+            }
         }
         // Bio shutdown: see the bio-spawn comment above.
         drop(bio_send);
         let _ = bio_handle.join();
-        Ok(())
+        first
     }
 
     /// Reject a cluster / replication port range that overflows u16 up
@@ -246,14 +254,14 @@ impl<C: Commands> Runtime<C> {
             // Off-accept-set shards skip the SO_REUSEPORT bind so
             // the kernel routes new conns only to the armed subset.
             let listener = if arms_accept {
-                Some(tcp_listen_reuseport(self.ip, self.port, 1024)?)
+                Some(Socket::tcp_listen_reuseport(self.ip, self.port, 1024)?)
             } else {
                 None
             };
             // Cluster mode: a second, deterministic per-shard listener at
             // port_base + id (plain bind — exactly one owner per port).
             let cluster_listener = match self.cluster_port_base {
-                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                Some(base) => Some(kevy_sys::Socket::tcp_listen(self.ip, base + id as u16, 1024)?),
                 None => None,
             };
             // Replication listener (per Issue Ledger I2): per-shard
@@ -261,14 +269,14 @@ impl<C: Commands> Runtime<C> {
             // pattern as cluster. A replica's shard-aware client will
             // connect to every `base + id` to mirror the full keyspace.
             let replication_listener = match self.replication_port_base {
-                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                Some(base) => Some(kevy_sys::Socket::tcp_listen(self.ip, base + id as u16, 1024)?),
                 None => None,
             };
             let aof = if self.enable_aof {
                 Some(Aof::open_with_repair(
                     &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
-                    self.replay_resync,
+                    self.replay_mode,
                 )?)
             } else {
                 None
@@ -306,6 +314,7 @@ impl<C: Commands> Runtime<C> {
                 rewrite_rate_mark: None,
                 rewrite_calm_ticks: 0,
                 xshard_inflight: 0,
+                ext_waits: Default::default(),
                 id,
                 nshards: n,
                 cluster: topo.clone(),
@@ -322,6 +331,7 @@ impl<C: Commands> Runtime<C> {
                 backlog: (0..n).map(|_| VecDeque::new()).collect(),
                 wakers: shared.wakers.clone(),
                 conns: KevyMap::new(),
+                conn_slot_hint: 0,
                 arm_pending: Vec::new(),
                 closing_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
@@ -338,6 +348,7 @@ impl<C: Commands> Runtime<C> {
                 request_batch_nonempty: 0,
                 publish_batch_nonempty: 0,
                 parked: shared.parked.clone(),
+                restore_gate: Arc::clone(&shared.restore_gate),
                 inbound_dirty: shared.inbound_dirty.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
@@ -347,11 +358,11 @@ impl<C: Commands> Runtime<C> {
                     } else {
                         self.replication_buffer_size
                     };
-                    let boot = kevy_persist::feed_meta::load_feed_boot(&self.data_dir, id)?;
+                    let boot = kevy_persist::feed_meta::boot_position(&self.data_dir, id)?;
                     let mut src = kevy_replicate::source::ReplicationSource::new(
                         usize::try_from(budget).unwrap_or(usize::MAX),
                     );
-                    src.set_next_offset(boot.next_offset);
+                    src.set_next_offset(boot.offset);
                     Some(kevy_replicate::feed::FeedSource::new(boot.generation, src))
                 } else {
                     None
@@ -372,7 +383,7 @@ impl<C: Commands> Runtime<C> {
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
                 auto_aof_rewrite_bytes: self.auto_aof_rewrite_bytes,
                 auto_aof_rewrite_interval_secs: self.auto_aof_rewrite_interval_secs,
-                replay_resync: self.replay_resync,
+                replay_resync: self.replay_mode == kevy_persist::ReplayMode::Resync,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: shared.pubsub.clone(),
@@ -380,7 +391,7 @@ impl<C: Commands> Runtime<C> {
                 psub_local: HashMap::new(),
                 subs_by_channel: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
-                request_batch: (0..n).map(|_| Vec::new()).collect(),
+                request_batch: (0..n).map(|_| Default::default()).collect(),
                 // Seed from the live config at construction, not default():
                 // these flags were otherwise blind until the first 100 ms
                 // shard tick, so a write landing before that never fired
@@ -399,9 +410,8 @@ impl<C: Commands> Runtime<C> {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(crate::CLIENT_INPUT_HARD_LIMIT),
-                // `Poller::wait` takes the timeout as `i32` (POSIX
-                // poll/epoll convention). The config knob is `u32` —
-                // we clamp to i32::MAX, far above any sane park-timeout.
+                // `Poller::wait` takes an `i32` (POSIX); the knob is a `u32`
+                recv_buffers: self.recv_buffers,
                 park_timeout_ms: self.park_timeout_ms.min(i32::MAX as u32) as i32,
                 tick_check_every: self.tick_check_every,
                 slowlog: crate::exec_slowlog::SlowlogState::new(
@@ -417,83 +427,5 @@ impl<C: Commands> Runtime<C> {
             });
         }
         Ok(shards)
-    }
-}
-
-/// Reactor selection on Linux:
-///   KEVY_IO_URING unset → auto: try io_uring, fall back to epoll if the
-///     host can't build the ring (probe below) — startup never fails.
-///   KEVY_IO_URING=0/off/no/false → force the epoll readiness reactor.
-///   KEVY_IO_URING=<anything else> → force io_uring (no fallback; a
-///     setup failure then surfaces loudly — for benchmarks / tests).
-/// The probe creates+drops a real ring with the run_uring parameters, so
-/// it catches a seccomp-blocked io_uring_setup (Docker's default profile)
-/// and pre-5.19 kernels before any shard loads data. (macOS = kqueue.)
-#[cfg(target_os = "linux")]
-fn reactor_choice() -> (bool, bool) {
-    match std::env::var("KEVY_IO_URING").ok().as_deref() {
-        Some("0") | Some("off") | Some("no") | Some("false") => (false, true),
-        Some(_) => (true, true),
-        None => {
-            let avail = crate::uring_reactor::io_uring_available();
-            eprintln!(
-                "kevy: reactor = {} (io_uring {})",
-                if avail { "io_uring" } else { "epoll" },
-                if avail {
-                    "available"
-                } else {
-                    "unavailable — kernel <5.19 or seccomp; using epoll"
-                },
-            );
-            (avail, false)
-        }
-    }
-}
-
-/// Non-Linux: always the readiness reactor (kqueue on macOS).
-#[cfg(not(target_os = "linux"))]
-fn reactor_choice() -> (bool, bool) {
-    (false, false)
-}
-
-/// One shard thread's body: pick the reactor and run it to completion.
-///
-/// Per-shard ring setup is attempted BEFORE committing to the
-/// io_uring path. The global probe proves one ring builds; N shards
-/// need N rings, and a late failure (ENOMEM under pressure) used to
-/// kill the shard thread and leave a half-dead server (found via
-/// GH-runner CI: blocking_cross_shard hangs). Auto mode now degrades
-/// that shard to epoll, loudly. A forced KEVY_IO_URING=1 keeps the
-/// old fail-loud contract.
-fn run_shard_thread<C: Commands>(
-    shard: Shard<C>,
-    stop: Arc<AtomicBool>,
-    use_uring: bool,
-    uring_forced: bool,
-) {
-    let id = shard.id;
-    #[cfg(target_os = "linux")]
-    let res = if use_uring {
-        match crate::uring_reactor::build_uring() {
-            Ok(pair) => shard.run_uring(pair, stop),
-            Err(e) if !uring_forced => {
-                eprintln!(
-                    "kevy: shard {id}: io_uring setup failed ({e}); \
-                     falling back to the epoll reactor for this shard"
-                );
-                shard.run(stop)
-            }
-            Err(e) => Err(e),
-        }
-    } else {
-        shard.run(stop)
-    };
-    #[cfg(not(target_os = "linux"))]
-    let res = {
-        let _ = (use_uring, uring_forced);
-        shard.run(stop)
-    };
-    if let Err(e) = res {
-        eprintln!("kevy: shard {id} exited with error: {e}");
     }
 }

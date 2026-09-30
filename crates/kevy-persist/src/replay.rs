@@ -6,8 +6,11 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
-use crate::replay_walk::{ReplayStop, walk_v2};
+use crate::modes::{ReplayMode, ReplaySummary};
+use crate::replay_walk::{ReplayStop, Sink, walk_v2};
 use kevy_resp::Argv;
+
+pub use crate::replay_report::ReplayReport;
 
 /// Replay the command log at `path`, calling `apply` for each complete command.
 ///
@@ -42,13 +45,78 @@ use kevy_resp::Argv;
 /// will parse as a valid (if nonsense) command. The summary line is the
 /// signal — an unexpected count of replayed commands at boot is the
 /// operator's cue to inspect the AOF byte-by-byte.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync, replay_aof};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let path = std::env::temp_dir().join(format!("replay-aof-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
+/// drop(aof);
+///
+/// // boot: re-apply the log to an empty store
+/// let mut store = Store::new();
+/// replay_aof(&path, |args| {
+///     if args[0] == *b"SET" {
+///         store.set(&args[1], args[2].to_vec(), None, SetCondition::Always);
+///     }
+/// })?;
+/// assert_eq!(store.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
+    replay_with(path, false, false, Sink::Owned(&mut apply))
+}
+
+/// The replay behind [`replay_aof`], [`replay_aof_quiet`] and
+/// [`replay_aof_resync`], handing each frame to `apply` by reference. The
+/// frame's buffers are reused for the next one, so an `apply` that only
+/// reads the frame costs no allocation per frame; one that keeps it takes
+/// it with `std::mem::take`.
+///
+/// ```
+/// let dir = std::env::temp_dir().join(format!("replay-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let path = dir.join("doc.aof");
+/// let mut aof = kevy_persist::Aof::open(&path, kevy_persist::Fsync::No).unwrap();
+/// aof.append(&kevy_persist::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+///     .unwrap();
+/// drop(aof);
+///
+/// let mut verbs = Vec::new();
+/// let (mode, summary) = (kevy_persist::ReplayMode::Strict, kevy_persist::ReplaySummary::Quiet);
+/// let report = kevy_persist::replay_aof_in_place(&path, mode, summary, |frame| {
+///     verbs.push(frame[0].to_vec());
+/// })
+/// .unwrap();
+/// assert_eq!(report.commands, 1);
+/// assert_eq!(verbs, [b"SET".to_vec()]);
+/// # std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn replay_aof_in_place<F: FnMut(&mut Argv)>(
+    path: &Path,
+    mode: ReplayMode,
+    summary: ReplaySummary,
+    mut apply: F,
+) -> io::Result<ReplayReport> {
+    let (resync, quiet) = (mode == ReplayMode::Resync, summary == ReplaySummary::Quiet);
+    replay_with(path, resync, quiet, Sink::InPlace(&mut apply))
+}
+
+fn replay_with(
+    path: &Path,
+    resync: bool,
+    quiet_info: bool,
+    mut sink: Sink<'_>,
+) -> io::Result<ReplayReport> {
     // v2 files stream record-by-record: peak memory is O(largest record),
     // not O(file) — a 2 GB log replays in a container the old read_to_end
     // would have OOM'd. v1 (legacy) keeps the whole-file read; its first
     // rewrite upgrades it out of that world.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), false, false);
+        return stream_v2(path, Some(sink), resync, quiet_info);
     }
     let mut data = Vec::new();
     match File::open(path) {
@@ -58,46 +126,51 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<Repla
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
         Err(e) => return Err(e),
     }
-    replay_v1_slice(path, &data, &mut apply, false)
+    replay_v1_slice(path, &data, &mut sink, quiet_info)
 }
 
-/// [`replay_aof`] (or, with `resync`, [`replay_aof_resync`]) with the
+/// [`replay_aof`] (or, under [`ReplayMode::Resync`], [`replay_aof_resync`]) with the
 /// informational summary lines suppressed. For embedded callers that
 /// receive the same numbers through a metric sink: the data path has
 /// taken over, so the stderr line would be a duplicate. The corrupt-frame
 /// WARN still prints unconditionally — it is an incident signal, not
 /// information, and does not share this switch.
+///
+/// ```
+/// use kevy_persist::{Aof, Argv, Fsync, ReplayMode, replay_aof_quiet};
+///
+/// let path = std::env::temp_dir().join(format!("replay-quiet-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// aof.append(&Argv::from(vec![b"DEL".to_vec(), b"k".to_vec()]))?;
+/// drop(aof);
+/// let mut seen = Vec::new();
+/// let report = replay_aof_quiet(&path, ReplayMode::Strict, |args| seen.push(args))?;
+/// assert_eq!(report.commands, 1); // reported here, not on stderr
+/// assert_eq!(seen, [vec![b"DEL".to_vec(), b"k".to_vec()]]);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof_quiet<F: FnMut(Argv)>(
     path: &Path,
-    resync: bool,
+    mode: ReplayMode,
     mut apply: F,
 ) -> io::Result<ReplayReport> {
-    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), resync, true);
-    }
-    let mut data = Vec::new();
-    match File::open(path) {
-        Ok(mut f) => {
-            f.read_to_end(&mut data)?;
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReplayReport::default()),
-        Err(e) => return Err(e),
-    }
-    replay_v1_slice(path, &data, &mut apply, true)
+    replay_with(path, mode == ReplayMode::Resync, true, Sink::Owned(&mut apply))
 }
 
 /// The v1 frame loop: parse-apply until clean end, truncated tail, or a
 /// corrupt frame. Advances `pos`; returns the stop and the applied count.
-fn v1_walk<F: FnMut(Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (ReplayStop, u64) {
+fn v1_walk(data: &[u8], pos: &mut usize, sink: &mut Sink<'_>) -> (ReplayStop, u64) {
     let total = data.len();
     let mut replayed: u64 = 0;
+    let mut args = Argv::default();
     let stop = loop {
         if *pos >= total {
             break ReplayStop::Clean;
         }
-        match kevy_resp::parse_command(&data[*pos..]) {
-            Ok(Some((args, consumed))) => {
-                apply(args);
+        match kevy_resp::parse_command_into(&data[*pos..], &mut args) {
+            Ok(Some(consumed)) => {
+                sink.deliver(&mut args);
                 *pos += consumed;
                 replayed += 1;
             }
@@ -109,10 +182,10 @@ fn v1_walk<F: FnMut(Argv)>(data: &[u8], pos: &mut usize, apply: &mut F) -> (Repl
 }
 
 /// The v1 (bare-RESP) replay walk over a whole-file slice.
-fn replay_v1_slice<F: FnMut(Argv)>(
+fn replay_v1_slice(
     path: &Path,
     data: &[u8],
-    apply: &mut F,
+    sink: &mut Sink<'_>,
     quiet_info: bool,
 ) -> io::Result<ReplayReport> {
     let total = data.len();
@@ -125,7 +198,7 @@ fn replay_v1_slice<F: FnMut(Argv)>(
     // v1 (`KEVYAOF1\n`) or legacy bare-RESP (pre-1.2.0, parses from 0).
     let mut pos =
         if data.starts_with(crate::aof::AOF_MAGIC) { crate::aof::AOF_MAGIC.len() } else { 0 };
-    let (stop, replayed) = v1_walk(data, &mut pos, apply);
+    let (stop, replayed) = v1_walk(data, &mut pos, sink);
     let elapsed_ms = start.elapsed().as_millis();
     let corrupt = matches!(stop, ReplayStop::CorruptFrame(_));
     // quiet_info silences only the informational outcomes; the corrupt
@@ -138,6 +211,7 @@ fn replay_v1_slice<F: FnMut(Argv)>(
         bytes: total as u64,
         replayed_bytes: pos as u64,
         dropped_bytes: (total - pos) as u64,
+        zero_tail: 0,
         corrupt,
         resynced_ranges: Vec::new(),
     })
@@ -152,37 +226,29 @@ fn replay_v1_slice<F: FnMut(Argv)>(
 /// frames over one bad record — this is the lane that gets them back.
 /// v1 files have no checksums to anchor on: they replay strictly here
 /// too (their first rewrite upgrades them into resync's world).
+///
+/// ```
+/// use kevy_persist::{AOF2_MAGIC, Aof, Argv, Fsync, replay_aof_resync};
+///
+/// let path = std::env::temp_dir().join(format!("replay-resync-doc-{}.aof", std::process::id()));
+/// let mut aof = Aof::open(&path, Fsync::Always)?;
+/// for key in [b"a", b"b", b"c"] {
+///     aof.append(&Argv::from(vec![b"SET".to_vec(), key.to_vec(), b"v".to_vec()]))?;
+/// }
+/// drop(aof);
+/// let mut bytes = std::fs::read(&path)?;
+/// bytes[AOF2_MAGIC.len() + 12] ^= 1; // one bad record at the front
+/// std::fs::write(&path, &bytes)?;
+///
+/// let mut keys = Vec::new();
+/// let report = replay_aof_resync(&path, |args| keys.push(args[1].to_vec()))?;
+/// assert!(report.corrupt, "still worth an alert");
+/// assert_eq!(keys, [b"b".to_vec(), b"c".to_vec()]);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn replay_aof_resync<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<ReplayReport> {
-    if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return stream_v2(path, Some(&mut apply), true, false);
-    }
-    replay_aof(path, apply)
-}
-
-/// What one [`replay_aof`] pass restored — and, crucially, what it could
-/// NOT: `dropped_bytes` and `corrupt` are the machine-readable form of the
-/// WARN line, so a host can turn "the AOF lost bytes at boot" into an
-/// alert instead of a needle in stderr (the 3-day silent-loss incident was
-/// exactly this signal going unwatched).
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct ReplayReport {
-    /// Commands re-applied.
-    pub commands: u64,
-    /// Total file size in bytes (before any repair).
-    pub bytes: u64,
-    /// Bytes actually replayed (the valid prefix).
-    pub replayed_bytes: u64,
-    /// Bytes past the last complete frame — dropped, then quarantined and
-    /// truncated by [`crate::Aof::open`].
-    pub dropped_bytes: u64,
-    /// True when the stop was a corrupt frame (vs a clean end or a
-    /// partial trailing frame).
-    pub corrupt: bool,
-    /// Byte ranges resync skipped over ([`replay_aof_resync`] only):
-    /// each is a corrupt region between two valid records. Empty under
-    /// the strict replay.
-    pub resynced_ranges: Vec<(u64, u64)>,
+    replay_with(path, true, false, Sink::Owned(&mut apply))
 }
 
 /// Byte length of the AOF at `path` up to and including the last
@@ -221,7 +287,7 @@ pub(crate) fn sniff_format(path: &Path) -> io::Result<crate::AofFormat> {
 /// lying_length` and `resync_on_a_genuine_torn_tail_adds_nothing`.
 fn stream_v2(
     path: &Path,
-    mut apply: Option<&mut dyn FnMut(Argv)>,
+    mut apply: Option<Sink<'_>>,
     resync: bool,
     quiet_info: bool,
 ) -> io::Result<ReplayReport> {
@@ -246,47 +312,70 @@ fn stream_v2(
     }
     // A skipped range IS corruption — it is the only thing resync skips.
     let corrupt = corrupt || !ranges.is_empty();
-    let elapsed_ms = start.elapsed().as_millis();
-    // quiet_info silences only the informational outcomes; the corrupt
-    // WARN always prints.
-    if apply.is_some() && (corrupt || !quiet_info) {
-        log_replay_summary(
-            path,
-            total as usize,
-            w.pos as usize,
-            w.replayed,
-            &w.preview[..w.preview_len],
-            w.stop,
-            elapsed_ms,
-        );
+    // after a resync hop the records past the damage were applied one by
+    // one, so the open transaction no longer marks where the log settles
+    let end = if ranges.is_empty() { w.settled_end() } else { w.pos };
+    if apply.is_some() {
+        log_v2_outcome(path, &w, total, end, corrupt, quiet_info, start.elapsed().as_millis());
     }
     Ok(ReplayReport {
         commands: w.replayed,
         bytes: total,
-        replayed_bytes: w.pos,
-        dropped_bytes: total.saturating_sub(w.pos),
+        replayed_bytes: end,
+        dropped_bytes: total.saturating_sub(end).saturating_sub(w.zero_tail),
+        zero_tail: w.zero_tail,
         corrupt,
         resynced_ranges: ranges,
     })
 }
 
-pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<u64> {
+/// The valid prefix's length and the zero tail after it (always 0 for v1).
+/// The replay's summary lines. `quiet_info` silences only the
+/// informational outcomes; the corrupt WARN always prints.
+fn log_v2_outcome(
+    path: &Path,
+    w: &crate::replay_walk::V2Walk,
+    total: u64,
+    end: u64,
+    corrupt: bool,
+    quiet_info: bool,
+    elapsed_ms: u128,
+) {
+    if !quiet_info && end < w.pos {
+        crate::replay_log::log_open_transaction(path, w.pos - end);
+    }
+    if corrupt || !quiet_info {
+        let preview = &w.preview[..w.preview_len];
+        log_replay_summary(
+            path,
+            total as usize,
+            w.pos as usize,
+            w.replayed,
+            preview,
+            w.stop.clone(),
+            elapsed_ms,
+        );
+    }
+}
+
+pub(crate) fn valid_prefix_len_of_file(path: &Path, resync: bool) -> io::Result<(u64, u64)> {
     // v2 streams (O(largest record) memory — the same walk replay does, so
     // the truncation point and the replay stop can never disagree). Under
     // resync the point is "after the LAST recoverable record", so interior
     // corruption stays put and only trailing garbage is repaired away.
     if matches!(sniff_format(path)?, crate::AofFormat::V2) {
-        return Ok(stream_v2(path, None, resync, false)?.replayed_bytes);
+        let r = stream_v2(path, None, resync, false)?;
+        return Ok((r.replayed_bytes, r.zero_tail));
     }
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
             f.read_to_end(&mut data)?;
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
         Err(e) => return Err(e),
     }
-    Ok(valid_prefix_len(&data) as u64)
+    Ok((valid_prefix_len(&data) as u64, 0))
 }
 
 /// Offset after the last complete frame in `data` (magic-aware). Mirrors

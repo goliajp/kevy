@@ -12,9 +12,8 @@ use crate::{KevyError, KevyResult};
 use kevy_resp_client::ClientStream;
 use std::io::{Read, Write};
 
-use kevy_embedded::PubsubFrame;
 use kevy_resp::{Reply, encode_command};
-use kevy_resp_client::{ReplyReadBuf, classify_pubsub};
+use kevy_resp_client::ReplyReadBuf;
 
 use crate::subscribe::PubsubEvent;
 
@@ -88,7 +87,8 @@ pub(crate) fn recv_remote(
             // `KevyError::Protocol`, matching the malformed-parse arm
             // below and the pre-refactor local classifier's contract.
             Ok(Some(reply)) => {
-                return classify_pubsub(reply).map_err(|e| KevyError::Protocol(e.to_string()));
+                return PubsubEvent::try_from(reply)
+                    .map_err(|e| KevyError::Protocol(e.to_string()));
             }
             Ok(None) => {}
             Err(_) => {
@@ -100,31 +100,6 @@ pub(crate) fn recv_remote(
             return Err(KevyError::Closed);
         }
         buf.extend(&chunk[..n]);
-    }
-}
-
-/// Convert the embedded-mode [`PubsubFrame`] (delivered through the
-/// per-conn `Subscription` channel) into the public [`PubsubEvent`].
-/// Embedded counts are u64; the public type uses i64 to match the
-/// remote `recv` path, so each arm widens with `as i64`.
-pub(crate) fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
-    match frame {
-        PubsubFrame::Subscribe { channel, count } => {
-            PubsubEvent::Subscribe { channel, count: count as i64 }
-        }
-        PubsubFrame::Psubscribe { pattern, count } => {
-            PubsubEvent::Psubscribe { pattern, count: count as i64 }
-        }
-        PubsubFrame::Unsubscribe { channel, count } => {
-            PubsubEvent::Unsubscribe { channel, count: count as i64 }
-        }
-        PubsubFrame::Punsubscribe { pattern, count } => {
-            PubsubEvent::Punsubscribe { pattern, count: count as i64 }
-        }
-        PubsubFrame::Message { channel, payload } => PubsubEvent::Message { channel, payload },
-        PubsubFrame::Pmessage { pattern, channel, payload } => {
-            PubsubEvent::Pmessage { pattern, channel, payload }
-        }
     }
 }
 

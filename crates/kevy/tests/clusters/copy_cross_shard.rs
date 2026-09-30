@@ -49,11 +49,7 @@ impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = kevy_testnet::free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-copyxshard-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("copyxshard");
         let stop = Arc::new(AtomicBool::new(false));
         let (st, d) = (stop.clone(), dir.clone());
         let handle = std::thread::spawn(move || {
@@ -149,8 +145,8 @@ fn the_pairs_this_file_uses_are_really_on_different_shards() {
     let split = PAIRS
         .iter()
         .filter(|(a, b)| {
-            kevy_rt::shard_of_key(a.as_bytes(), SHARDS, false)
-                != kevy_rt::shard_of_key(b.as_bytes(), SHARDS, false)
+            kevy_rt::shard_of_key(a.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash)
+                != kevy_rt::shard_of_key(b.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash)
         })
         .count();
     println!("cross-shard pairs: {split} of {}", PAIRS.len());
@@ -298,8 +294,8 @@ fn a_cross_shard_copy_survives_a_restart() {
     let pairs: Vec<(String, String)> = PAIRS
         .iter()
         .filter(|(a, b)| {
-            kevy_rt::shard_of_key(a.as_bytes(), SHARDS, false)
-                != kevy_rt::shard_of_key(b.as_bytes(), SHARDS, false)
+            kevy_rt::shard_of_key(a.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash)
+                != kevy_rt::shard_of_key(b.as_bytes(), SHARDS, kevy_persist::Routing::KevyHash)
         })
         .map(|(a, b)| (format!("dur-{a}"), format!("dur-{b}")))
         .collect();

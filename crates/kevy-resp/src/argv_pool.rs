@@ -30,6 +30,21 @@ const MAX_POOLED_BYTES: usize = 4096;
 
 /// A recycling pool of owned [`Argv`]s. See the module docs for the
 /// cross-shard ownership cycle it serves.
+///
+/// ```
+/// use kevy_resp::{ArgvPool, parse_command_borrowed};
+///
+/// let mut pool = ArgvPool::new();
+/// let input = b"*2\r\n$4\r\nINCR\r\n$1\r\nn\r\n";
+/// let (view, _) = parse_command_borrowed(input)?.expect("complete frame");
+/// let owned = pool.take_filled(&view);
+/// assert_eq!(owned, vec![b"INCR".to_vec(), b"n".to_vec()]);
+/// // hand the spent argv back so the next take reuses its buffers
+/// pool.put(owned);
+/// let again = pool.take_filled(&view);
+/// assert_eq!(again.len(), 2);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 #[derive(Debug, Default)]
 pub struct ArgvPool {
     free: Vec<Argv>,

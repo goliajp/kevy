@@ -3,9 +3,9 @@
 //! `zset_range`; the multi-key algebra is not here.
 
 use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_integer, encode_null_bulk};
-use kevy_store::{Store, ZaddFlags};
+use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
 
-use crate::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed};
+use crate::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed, upper_verb};
 use crate::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, emit_int_result, fmt_score, store_err, wrong_args};
 use crate::{Effect, changed, zset_range};
 
@@ -130,38 +130,48 @@ fn removed(res: Result<usize, kevy_store::StoreError>, out: &mut Vec<u8>) -> Eff
 /// ```
 /// let argv = kevy_resp::Argv::from(vec![b"ZADD".to_vec(), b"z".to_vec(), b"NX".to_vec(), b"1".to_vec(), b"m".to_vec()]);
 /// let (flags, incr, first) = kevy_verbs::cmd::parse_zadd_flags(&argv).unwrap();
-/// assert!(flags.nx && !incr && first == 3);
+/// assert!(flags.condition() == kevy_store::SetCondition::IfAbsent && !incr && first == 3);
 /// ```
 pub fn parse_zadd_flags<A: ArgvView + ?Sized>(
     args: &A,
 ) -> Result<(ZaddFlags, bool, usize), CmdError> {
-    let mut f = ZaddFlags::default();
-    let mut incr = false;
+    const CLASH: CmdError =
+        CmdError::Wire("ERR GT, LT, and/or NX options at the same time are not compatible");
+    let (mut nx, mut xx, mut gt, mut lt, mut ch, mut incr) =
+        (false, false, false, false, false, false);
     let mut i = 2;
+    let mut buf = [0u8; 32];
     while i < args.len() {
-        let a = &args[i];
-        if a.eq_ignore_ascii_case(b"NX") {
-            f.nx = true;
-        } else if a.eq_ignore_ascii_case(b"XX") {
-            f.xx = true;
-        } else if a.eq_ignore_ascii_case(b"GT") {
-            f.gt = true;
-        } else if a.eq_ignore_ascii_case(b"LT") {
-            f.lt = true;
-        } else if a.eq_ignore_ascii_case(b"CH") {
-            f.ch = true;
-        } else if a.eq_ignore_ascii_case(b"INCR") {
-            incr = true;
-        } else {
+        // every option is a word; a score starts with a letter only as an
+        // `inf` spelling, which the match below turns away
+        if !args[i].first().is_some_and(u8::is_ascii_alphabetic) {
             break;
         }
+        let flag = match upper_verb(&args[i], &mut buf) {
+            b"NX" => &mut nx,
+            b"XX" => &mut xx,
+            b"GT" => &mut gt,
+            b"LT" => &mut lt,
+            b"CH" => &mut ch,
+            b"INCR" => &mut incr,
+            _ => break,
+        };
+        *flag = true;
         i += 1;
     }
-    if !f.valid() {
-        return Err(CmdError::Wire(
-            "ERR GT, LT, and/or NX options at the same time are not compatible",
-        ));
-    }
+    let condition = match (nx, xx) {
+        (false, false) => SetCondition::Always,
+        (true, false) => SetCondition::IfAbsent,
+        (false, true) => SetCondition::IfPresent,
+        (true, true) => return Err(CLASH),
+    };
+    let compare = match (gt, lt) {
+        (false, false) => ScoreCompare::Any,
+        (true, false) => ScoreCompare::Greater,
+        (false, true) => ScoreCompare::Less,
+        (true, true) => return Err(CLASH),
+    };
+    let f = ZaddFlags::new(condition, compare).ok_or(CLASH)?.with_ch(ch);
     Ok((f, incr, i))
 }
 
@@ -175,6 +185,13 @@ fn zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < first + 2 || !(args.len() - first).is_multiple_of(2) {
         return wrong_args(out, "zadd");
     }
+    // one pair is the common call; it stays on the stack
+    if args.len() - first == 2 {
+        let Some(score) = arg_f64(&args[first]) else {
+            return encode_error(out, ERR_NOT_FLOAT);
+        };
+        return zadd_pairs(store, args, &[(score, &args[first + 1])], flags, incr, out);
+    }
     let mut pairs: Vec<(f64, &[u8])> = Vec::with_capacity((args.len() - first) / 2);
     let mut i = first;
     while i < args.len() {
@@ -184,6 +201,17 @@ fn zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
         pairs.push((score, &args[i + 1]));
         i += 2;
     }
+    zadd_pairs(store, args, &pairs, flags, incr, out);
+}
+
+fn zadd_pairs<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    pairs: &[(f64, &[u8])],
+    flags: ZaddFlags,
+    incr: bool,
+    out: &mut Vec<u8>,
+) {
     if incr {
         if pairs.len() != 1 {
             return encode_error(out, "ERR INCR option supports a single increment-element pair");
@@ -195,11 +223,11 @@ fn zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
         };
     }
     if flags == ZaddFlags::default() {
-        return emit_int_result(store.zadd(&args[1], &pairs).map(|n| n as i64), out);
+        return emit_int_result(store.zadd(&args[1], pairs).map(|n| n as i64), out);
     }
-    match store.zadd_flags(&args[1], &pairs, flags) {
+    match store.zadd_flags(&args[1], pairs, flags) {
         Ok(rep) => {
-            let n = if flags.ch { rep.changed } else { rep.added };
+            let n = if flags.ch() { rep.changed } else { rep.added };
             emit_int_result(Ok(n as i64), out);
         }
         Err(e) => store_err(out, e),

@@ -127,16 +127,23 @@ impl<C: Commands> Shard<C> {
             // Single-source mode: the payload is the whole upstream
             // keyspace — keep only this shard's slice.
             let (id, n) = (self.id, self.nshards);
-            kevy_persist::load_snapshot_filtered(
+            kevy_persist::load_snapshot_with_aux(
                 &mut self.store,
                 Cursor::new(buf.as_slice()),
                 |key| (kevy_hash::key_hash_slot(key) as usize) % n == id,
             )
         } else {
-            kevy_persist::load_snapshot_from(&mut self.store, Cursor::new(buf.as_slice()))
+            kevy_persist::load_snapshot_with_aux(
+                &mut self.store,
+                Cursor::new(buf.as_slice()),
+                |_| true,
+            )
         };
-        if let Err(e) = res {
-            eprintln!("kevy: shard {} replica snapshot load failed: {e}", self.id);
+        match res {
+            // the primary's state replaces the replica's, nothing kept beside
+            // its keyspace included
+            Ok(aux) => self.commands.load_snapshot_aux(aux.as_ref(), true),
+            Err(e) => eprintln!("kevy: shard {} replica snapshot load failed: {e}", self.id),
         }
         // A snapshot load covers the stream up to its ack_offset — the
         // apply position jumps there (plain store, not max: a
@@ -164,8 +171,9 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.drain_persist_on_shutdown();
+        let aux = self.commands.snapshot_aux();
         let Some(aof) = self.aof.as_mut() else { return };
-        if let Err(e) = aof.rewrite_from(&self.store) {
+        if let Err(e) = aof.rewrite_from(&kevy_persist::WithAux::new(&self.store, aux.as_ref())) {
             eprintln!(
                 "kevy: shard {} post-resync aof rewrite failed: {e} — local log \
                  still holds pre-resync history until the next rewrite",
@@ -188,6 +196,7 @@ impl<C: Commands> Shard<C> {
                 crate::Route::Single(idx) => u8::try_from(idx).ok(),
                 _ => None,
             },
+            verb: resolved.verb,
         };
         self.reply_scratch.clear();
         self.commands.dispatch_into(&mut self.store, argv, &mut self.reply_scratch);

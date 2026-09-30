@@ -251,14 +251,9 @@ fn read_packed_rows(c: &mut std::net::TcpStream) -> String {
 /// AOF replay, which does. So these rows have never been offered to the
 /// hook in their lives, which is what separates this from the test above.
 ///
-/// A real server also reloads its table catalog at boot, and then the
-/// backfill runs without anyone declaring anything: verified by hand
-/// against `target/release/kevy` at two and eight shards, where a restarted
-/// server repacked `row:5` from 608 bytes back to 150 within 100 ms of the
-/// switch going on. This harness cannot cover that half — it runs the
-/// runtime directly rather than through `kevy::serve`, so the sidecar boot
-/// does not run — and it asserts the catalog is absent rather than assuming
-/// it.
+/// The snapshot carries the table catalog beside the rows, so the restarted
+/// server has the table before anyone declares it, and the backfill repacks
+/// what the loader installed.
 #[test]
 fn a_snapshot_restore_comes_back_packed() {
     let dir = std::env::temp_dir().join(format!("kevy-packbf-snap-{}", std::process::id()));
@@ -286,23 +281,20 @@ fn a_snapshot_restore_comes_back_packed() {
     // backfill missed the snapshot".
     assert_eq!(read_packed_rows(&mut c), "yes", "CONFIG SET does not outlive the process");
     assert_eq!(cmd(&mut c, &[b"HGET", b"row:5", b"name"]), b"$5\r\nuser5\r\n");
-    let restored = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
-    assert!(restored > packed_before, "the loader installs the general form");
 
-    // This harness runs the runtime directly, not `kevy::serve`, so the
-    // catalog sidecar boot does not run and the table has to be declared
-    // again. Asserted rather than assumed, because if it ever DID come back
-    // the re-declaration below would silently become a no-op and this test
-    // would stop covering the loader path it exists for.
-    assert_eq!(cmd(&mut c, &[b"TABLE.LIST"]), b"*0\r\n", "the in-process boot loads no catalog");
-    assert_eq!(declare(&mut c), b"+OK\r\n");
-
-    assert_eq!(cmd(&mut c, &[b"CONFIG", b"SET", b"packed-rows", b"yes"]), b"+OK\r\n");
-    let repacked = wait_shrunk(&mut c, b"row:5", restored);
-    assert_eq!(
-        repacked, packed_before,
-        "and turning it back on repacks the snapshot's rows to what they cost before"
-    );
+    // The snapshot carried the table catalog, so nobody declares anything:
+    // the backfill finds the rows the loader installed in the general form
+    // and packs them again.
+    let tables = cmd(&mut c, &[b"TABLE.LIST"]);
+    assert!(tables.starts_with(b"*1\r\n"), "the snapshot carried the table");
+    let deadline =
+        std::time::Instant::now() + kevy_testnet::patience(std::time::Duration::from_secs(4));
+    let mut repacked = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
+    while repacked != packed_before && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        repacked = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
+    }
+    assert_eq!(repacked, packed_before, "the snapshot's rows cost what they did before");
     assert_eq!(cmd(&mut c, &[b"HLEN", b"row:5"]), b":6\r\n");
     let _ = std::fs::remove_dir_all(&dir);
 }

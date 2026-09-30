@@ -83,16 +83,15 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     true
 }
 
-/// `SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]` — the embedded
-/// cursor is a snapshot offset (single stream), not the server's
-/// shard-encoded cursor; the `[cursor, keys]` envelope is identical.
+/// `SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]` — the cursor has
+/// the server's layout (shard index above a position within the shard).
 fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 2 {
         return wrong_args(out, "scan");
     }
-    let o = match kevy_verbs::args::scan_opts(&super::Args(argv)) {
+    let o = match kevy_verbs::args::scan_opts(&super::Args::new(argv)) {
         Ok(o) => o,
-        Err(msg) => return encode_error(out, msg),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     let (next, mut keys) = s.scan(o.cursor, o.pattern.as_deref(), o.count);
     if let Some(t) = o.type_filter {
@@ -139,7 +138,8 @@ fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv[1] == argv[2] {
         return encode_error(out, "ERR source and destination objects are the same");
     }
-    match s.copy(&argv[1], &argv[2], replace) {
+    let mode = if replace { crate::CopyMode::Replace } else { crate::CopyMode::IfAbsent };
+    match s.copy(&argv[1], &argv[2], mode) {
         Ok(copied) => encode_integer(out, i64::from(copied)),
         Err(e) => kevy_err(out, &e),
     }

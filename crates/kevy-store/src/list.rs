@@ -12,7 +12,7 @@ use crate::nostd_prelude::*;
 use crate::small_list::{self, PushResult, SmallListData};
 use crate::util::{norm_index, range_bounds};
 use crate::value::{ListData, SmallBytes, Value, list_item_weight};
-use crate::{Entry, Store, StoreError};
+use crate::{Entry, InsertPosition, Store, StoreError};
 use alloc::sync::Arc;
 
 /// Push into an inline list, promoting it to the heap encoding if the value
@@ -293,7 +293,7 @@ impl Store {
         if !needs {
             return;
         }
-        let Some(e) = self.map.get_mut(key) else { return };
+        let Some(e) = self.map.get_mut_quiet(key) else { return };
         if let Value::SmallListInline(s) = &e.value {
             let promoted = small_list::promote(s);
             e.value = Value::List(Arc::new(promoted));
@@ -331,17 +331,21 @@ impl Store {
     pub fn linsert(
         &mut self,
         key: &[u8],
-        before: bool,
+        position: InsertPosition,
         pivot: &[u8],
         val: &[u8],
     ) -> Result<i64, StoreError> {
+        let beside = |idx: usize| match position {
+            InsertPosition::Before => idx,
+            InsertPosition::After => idx + 1,
+        };
         self.promote_list_inline_to_heap(key);
         let (result, delta) = if self.is_seglist(key) {
             let l = self.seglist_mut(key);
             let Some(idx) = l.position(pivot) else {
                 return Ok(-1);
             };
-            let insert_at = if before { idx } else { idx + 1 };
+            let insert_at = beside(idx);
             l.insert(insert_at, val.to_vec());
             (l.len() as i64, list_item_weight(val.len()) as i64)
         } else {
@@ -351,7 +355,7 @@ impl Store {
                     let Some(idx) = l.iter().position(|v| v.as_slice() == pivot) else {
                         return Ok(-1);
                     };
-                    let insert_at = if before { idx } else { idx + 1 };
+                    let insert_at = beside(idx);
                     l.insert(insert_at, val.to_vec());
                     (l.len() as i64, list_item_weight(val.len()) as i64)
                 }

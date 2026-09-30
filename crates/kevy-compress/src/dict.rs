@@ -7,7 +7,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    Corrupt, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW, decode, huff, parse_dict,
+    DecodeError, TAG_LZ, TAG_LZ_DICT, TAG_LZH, TAG_LZH_DICT, TAG_RAW, decode, huff, parse_dict,
     read_varint,
 };
 
@@ -25,14 +25,14 @@ use crate::{
 /// format moves — so a `Dict` and a `&[u8]` decode identically.
 ///
 /// ```
-/// use kevy_compress::{Dict, encode, decode, decode_with, train};
+/// use kevy_compress::{Dict, encode, decode, train};
 ///
 /// let vals: Vec<&[u8]> = vec![b"user=alice role=admin", b"user=bob role=admin"];
 /// let raw = train(&vals, kevy_compress::MAX_OFFSET);
 /// let frame = encode(&raw, b"user=carol role=admin");
 ///
 /// let d = Dict::new(&raw);
-/// assert_eq!(decode_with(&d, &frame).unwrap(), decode(&raw, &frame).unwrap());
+/// assert_eq!(d.decode(&frame).unwrap(), decode(&raw, &frame).unwrap());
 /// ```
 pub struct Dict {
     lens: Option<[u8; 256]>,
@@ -79,129 +79,131 @@ impl Dict {
     }
 }
 
-/// [`decode`] against a dictionary that was parsed once.
-///
-/// Identical output to `decode(bytes, frame)` for the same bytes — this
-/// changes when the per-file work happens, not what any frame means.
-///
-/// ```
-/// use kevy_compress::{Dict, decode, decode_with, encode_high, train};
-///
-/// let vals: Vec<&[u8]> = vec![b"level=info svc=api", b"level=warn svc=api"];
-/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
-/// let frame = encode_high(&raw, b"level=error svc=api");
-///
-/// // The compaction path is the one that rebuilt an 8 KiB table per
-/// // record; same bytes out either way.
-/// let d = Dict::new(&raw);
-/// assert_eq!(decode_with(&d, &frame).unwrap(), b"level=error svc=api");
-/// assert_eq!(decode_with(&d, &frame).unwrap(), decode(&raw, &frame).unwrap());
-///
-/// // A `Dict` says its shape and not its contents.
-/// assert!(format!("{d:?}").starts_with("Dict {"));
-/// ```
-///
-/// # Errors
-/// [`Corrupt`] when the frame does not decode to exactly what its header
-/// promises, the same conditions as [`decode`].
-pub fn decode_with(dict: &Dict, frame: &[u8]) -> Result<Vec<u8>, Corrupt> {
-    let (&tag, rest) = frame.split_first().ok_or(Corrupt)?;
-    let (orig_len, payload) = read_varint(rest)?;
-    match tag {
-        TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
-        TAG_RAW => Err(Corrupt),
-        TAG_LZ => decode::lz(&[], payload, orig_len),
-        TAG_LZ_DICT if dict.content.is_empty() => Err(Corrupt),
-        TAG_LZ_DICT => decode::lz(&dict.content, payload, orig_len),
-        // The 5.0.0 compat retry, as in `decode`: that encoder could emit
-        // a shared-table literal block under the dict-less tag.
-        TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
-            Err(Corrupt) if dict.lens.is_some() => {
-                decode::lz_high(&[], dict.lens.as_ref(), dict.table.as_ref(), payload, orig_len)
-            }
-            r => r,
-        },
-        TAG_LZH_DICT if dict.content.is_empty() => Err(Corrupt),
-        TAG_LZH_DICT => decode::lz_high(
-            &dict.content,
-            dict.lens.as_ref(),
-            dict.table.as_ref(),
-            payload,
-            orig_len,
-        ),
-        _ => Err(Corrupt),
+impl Dict {
+    /// [`crate::decode`] against a dictionary that was parsed once.
+    ///
+    /// Identical output to `decode(bytes, frame)` for the same bytes — this
+    /// changes when the per-file work happens, not what any frame means.
+    ///
+    /// ```
+    /// use kevy_compress::{Dict, decode, encode_high, train};
+    ///
+    /// let vals: Vec<&[u8]> = vec![b"level=info svc=api", b"level=warn svc=api"];
+    /// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+    /// let frame = encode_high(&raw, b"level=error svc=api");
+    ///
+    /// // The compaction path is the one that rebuilt an 8 KiB table per
+    /// // record; same bytes out either way.
+    /// let d = Dict::new(&raw);
+    /// assert_eq!(d.decode(&frame).unwrap(), b"level=error svc=api");
+    /// assert_eq!(d.decode(&frame).unwrap(), decode(&raw, &frame).unwrap());
+    ///
+    /// // A `Dict` says its shape and not its contents.
+    /// assert!(format!("{d:?}").starts_with("Dict {"));
+    /// ```
+    ///
+    /// # Errors
+    /// [`DecodeError`] when the frame does not decode to exactly what its header
+    /// promises, the same conditions as [`crate::decode`].
+    pub fn decode(&self, frame: &[u8]) -> Result<Vec<u8>, DecodeError> {
+        let (&tag, rest) = frame.split_first().ok_or(DecodeError)?;
+        let (orig_len, payload) = read_varint(rest)?;
+        match tag {
+            TAG_RAW if payload.len() == orig_len => Ok(payload.to_vec()),
+            TAG_RAW => Err(DecodeError),
+            TAG_LZ => decode::lz(&[], payload, orig_len),
+            TAG_LZ_DICT if self.content.is_empty() => Err(DecodeError),
+            TAG_LZ_DICT => decode::lz(&self.content, payload, orig_len),
+            // The 5.0.0 compat retry, as in `decode`: that encoder could emit
+            // a shared-table literal block under the dict-less tag.
+            TAG_LZH => match decode::lz_high(&[], None, None, payload, orig_len) {
+                Err(DecodeError) if self.lens.is_some() => {
+                    decode::lz_high(&[], self.lens.as_ref(), self.table.as_ref(), payload, orig_len)
+                }
+                r => r,
+            },
+            TAG_LZH_DICT if self.content.is_empty() => Err(DecodeError),
+            TAG_LZH_DICT => decode::lz_high(
+                &self.content,
+                self.lens.as_ref(),
+                self.table.as_ref(),
+                payload,
+                orig_len,
+            ),
+            _ => Err(DecodeError),
+        }
     }
-}
 
-/// [`crate::encode`] against a dictionary whose match table was seeded
-/// once.
-///
-/// Seeding walks every dictionary position — 65,532 hash-and-store for
-/// the 64 KiB dictionary `kevy-vlog` trains — and it happened on every
-/// record, which is why encode time was flat in input size: an 8-byte
-/// value cost more than a 6 KiB one. Here it is a memcpy of a 16 KiB
-/// table instead.
-///
-/// Same frames as [`crate::encode`] for the same bytes — asserted here,
-/// because a speedup that changed what was written would be a different
-/// change.
-///
-/// ```
-/// use kevy_compress::{Dict, encode, encode_with, train};
-///
-/// let vals: Vec<&[u8]> = vec![b"user=alice role=admin", b"user=bob role=admin"];
-/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
-/// let d = Dict::new(&raw);
-/// let v = b"user=carol role=admin";
-/// assert_eq!(encode_with(&d, v), encode(&raw, v));
-/// ```
-#[must_use]
-pub fn encode_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
-    let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
-        crate::encode::try_lz(&dict.content, Some(&dict.seeded), input, &mut frame)
-    } else {
-        (TAG_RAW, false)
-    };
-    crate::finish_or_raw(&mut frame, tag, ok, input);
-    frame
-}
+    /// [`crate::encode`] against a dictionary whose match table was seeded
+    /// once.
+    ///
+    /// Seeding walks every dictionary position — 65,532 hash-and-store for
+    /// the 64 KiB dictionary `kevy-vlog` trains — and it happened on every
+    /// record, which is why encode time was flat in input size: an 8-byte
+    /// value cost more than a 6 KiB one. Here it is a memcpy of a 16 KiB
+    /// table instead.
+    ///
+    /// Same frames as [`crate::encode`] for the same bytes — asserted here,
+    /// because a speedup that changed what was written would be a different
+    /// change.
+    ///
+    /// ```
+    /// use kevy_compress::{Dict, encode, train};
+    ///
+    /// let vals: Vec<&[u8]> = vec![b"user=alice role=admin", b"user=bob role=admin"];
+    /// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+    /// let d = Dict::new(&raw);
+    /// let v = b"user=carol role=admin";
+    /// assert_eq!(d.encode(v), encode(&raw, v));
+    /// ```
+    #[must_use]
+    pub fn encode(&self, input: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
+        let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
+            crate::encode::try_lz(&self.content, Some(&self.seeded), input, &mut frame)
+        } else {
+            (TAG_RAW, false)
+        };
+        crate::finish_or_raw(&mut frame, tag, ok, input);
+        frame
+    }
 
-/// [`crate::encode_high`] against a dictionary parsed and seeded once.
-///
-/// Same frames as [`crate::encode_high`] for the same bytes.
-///
-/// ```
-/// use kevy_compress::{Dict, decode, encode_high, encode_high_with, train};
-///
-/// let vals: Vec<&[u8]> = vec![b"GET /a 200", b"GET /b 200", b"GET /c 404"];
-/// let raw = train(&vals, kevy_compress::MAX_OFFSET);
-/// let d = Dict::new(&raw);
-/// let v = b"GET /d 200";
-/// assert_eq!(encode_high_with(&d, v), encode_high(&raw, v));
-/// assert_eq!(decode(&raw, &encode_high_with(&d, v)).unwrap(), v);
-/// ```
-#[must_use]
-pub fn encode_high_with(dict: &Dict, input: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
-    let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
-        crate::encode::try_high(
-            &dict.content,
-            dict.lens.as_ref(),
-            Some(&dict.seeded),
-            input,
-            &mut frame,
-        )
-    } else {
-        (TAG_RAW, false)
-    };
-    crate::finish_or_raw(&mut frame, tag, ok, input);
-    frame
+    /// [`crate::encode_high`] against a dictionary parsed and seeded once.
+    ///
+    /// Same frames as [`crate::encode_high`] for the same bytes.
+    ///
+    /// ```
+    /// use kevy_compress::{Dict, decode, encode_high, train};
+    ///
+    /// let vals: Vec<&[u8]> = vec![b"GET /a 200", b"GET /b 200", b"GET /c 404"];
+    /// let raw = train(&vals, kevy_compress::MAX_OFFSET);
+    /// let d = Dict::new(&raw);
+    /// let v = b"GET /d 200";
+    /// assert_eq!(d.encode_high(v), encode_high(&raw, v));
+    /// assert_eq!(decode(&raw, &d.encode_high(v)).unwrap(), v);
+    /// ```
+    #[must_use]
+    pub fn encode_high(&self, input: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(input.len() + crate::MAX_HEADER);
+        let (tag, ok) = if input.len() >= crate::encode::MIN_INPUT {
+            crate::encode::try_high(
+                &self.content,
+                self.lens.as_ref(),
+                Some(&self.seeded),
+                input,
+                &mut frame,
+            )
+        } else {
+            (TAG_RAW, false)
+        };
+        crate::finish_or_raw(&mut frame, tag, ok, input);
+        frame
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Dict, decode_with, encode_high_with, encode_with};
+    use super::Dict;
 
     fn dict_bytes() -> Vec<u8> {
         let vals: Vec<&[u8]> = vec![b"level=info svc=api dur=12", b"level=warn svc=api dur=48"];
@@ -221,14 +223,14 @@ mod tests {
             b"level=info svc=api dur=7",
             b"unrelated bytes entirely",
         ] {
-            let high = encode_high_with(&d, v);
+            let high = d.encode_high(v);
             assert_eq!(high, crate::encode_high(&raw, v), "frames must not move");
-            assert_eq!(decode_with(&d, &high).unwrap(), v);
+            assert_eq!(d.decode(&high).unwrap(), v);
             assert_eq!(crate::decode(&raw, &high).unwrap(), v);
 
-            let fast = encode_with(&d, v);
+            let fast = d.encode(v);
             assert_eq!(fast, crate::encode(&raw, v), "frames must not move");
-            assert_eq!(decode_with(&d, &fast).unwrap(), v);
+            assert_eq!(d.decode(&fast).unwrap(), v);
         }
     }
 
@@ -240,7 +242,7 @@ mod tests {
         let d = Dict::new(&raw);
         assert!(!format!("{d:?}").contains("true"), "no entropy table here: {d:?}");
         let v = b"a plain shared prefix, and then some";
-        assert_eq!(decode_with(&d, &encode_with(&d, v)).unwrap(), v);
+        assert_eq!(d.decode(&d.encode(v)).unwrap(), v);
     }
 
     /// Corrupt input is refused, not guessed at, through this entry
@@ -248,13 +250,13 @@ mod tests {
     #[test]
     fn a_frame_that_is_not_one_is_refused() {
         let d = Dict::new(&dict_bytes());
-        assert!(decode_with(&d, b"").is_err());
-        assert!(decode_with(&d, b"\xff\xff\xff").is_err());
+        assert!(d.decode(b"").is_err());
+        assert!(d.decode(b"\xff\xff\xff").is_err());
     }
 
     /// Every arm of the tag match, because this entry point has to
     /// answer for frames it did not write. `decode` was already whole;
-    /// `decode_with` is a second reader of the same format, and a second
+    /// `Dict::decode` is a second reader of the same format, and a second
     /// reader that agrees on the frames one encoder happens to produce
     /// is not the same as one that agrees on the format. Fifteen of its
     /// lines had never run — including the whole dictionary-plus-entropy
@@ -293,17 +295,17 @@ mod tests {
             (crate::TAG_LZH, crate::encode_high(&[], &alone)),
         ] {
             assert_eq!(frame[0], want, "not the arm under test: tag {}", frame[0]);
-            assert_eq!(decode_with(&d, &frame).unwrap(), alone);
+            assert_eq!(d.decode(&frame).unwrap(), alone);
         }
 
         // Dictionary frames, through a reader that has none: refused,
         // because decoding them without the dictionary would silently
         // produce different bytes rather than fail.
-        for frame in [encode_with(&d, v), encode_high_with(&d, v)] {
+        for frame in [d.encode(v), d.encode_high(v)] {
             if frame[0] == crate::TAG_LZ_DICT || frame[0] == crate::TAG_LZH_DICT {
-                assert!(decode_with(&empty, &frame).is_err(), "tag {}", frame[0]);
+                assert!(empty.decode(&frame).is_err(), "tag {}", frame[0]);
             }
-            assert_eq!(decode_with(&d, &frame).unwrap(), v);
+            assert_eq!(d.decode(&frame).unwrap(), v);
         }
     }
 
@@ -316,14 +318,14 @@ mod tests {
         let mut lying = crate::encode(&[], b"short");
         assert_eq!(lying[0], crate::TAG_RAW, "a 5-byte input is below MIN_INPUT");
         lying.push(b'!');
-        assert!(decode_with(&d, &lying).is_err(), "a RAW frame longer than it claims");
-        assert!(decode_with(&d, &[0x7f, 0x01, b'x']).is_err(), "an unknown tag");
+        assert!(d.decode(&lying).is_err(), "a RAW frame longer than it claims");
+        assert!(d.decode(&[0x7f, 0x01, b'x']).is_err(), "an unknown tag");
     }
 
     /// The 5.0.0 compatibility retry: a `TAG_LZH` frame that fails
     /// against no table is tried again against the dictionary's, because
     /// that encoder could emit a shared-table literal block under the
-    /// dict-less tag. `decode` had this covered and `decode_with` did
+    /// dict-less tag. `decode` had this covered and `Dict::decode` did
     /// not — the second reader of a format needs the same history as the
     /// first, and a copied `match` arm that is never entered is a claim
     /// rather than a behaviour.
@@ -346,7 +348,7 @@ mod tests {
         }
         let good = crate::encode_high(&[], &v);
         assert_eq!(good[0], crate::TAG_LZH, "not the arm under test: tag {}", good[0]);
-        assert_eq!(decode_with(&d, &good).unwrap(), v);
+        assert_eq!(d.decode(&good).unwrap(), v);
 
         // Corrupt the payload, not the header: the length still promises
         // what it promised, so the failure happens inside the entropy
@@ -354,7 +356,7 @@ mod tests {
         for cut in [good.len() / 2, good.len() - 1] {
             let mut bad = good.clone();
             bad[cut] ^= 0xff;
-            let out = decode_with(&d, &bad);
+            let out = d.decode(&bad);
             if let Ok(ref got) = out {
                 assert_ne!(got.len(), 0, "an empty success is not a decode");
             }
@@ -391,15 +393,15 @@ mod tests {
             x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
             v.push(alphabet[(x >> 16) as usize % alphabet.len()]);
         }
-        let frame = encode_high_with(&d, &v);
+        let frame = d.encode_high(&v);
         assert_eq!(frame[0], crate::TAG_LZH_DICT, "not the arm under test: tag {}", frame[0]);
-        assert_eq!(decode_with(&d, &frame).unwrap(), v);
+        assert_eq!(d.decode(&frame).unwrap(), v);
         assert_eq!(crate::decode(&raw, &frame).unwrap(), v, "both readers, one format");
         // The same input through the fast encoder takes the other
         // dictionary arm, so both are covered by one construction.
-        let fast = encode_with(&d, &v);
+        let fast = d.encode(&v);
         assert_eq!(fast[0], crate::TAG_LZ_DICT, "not the arm under test: tag {}", fast[0]);
-        assert_eq!(decode_with(&d, &fast).unwrap(), v);
+        assert_eq!(d.decode(&fast).unwrap(), v);
 
         // Every single-byte corruption of the entropy frame, because the
         // prebuilt table is the one thing this path does that `decode`
@@ -411,7 +413,7 @@ mod tests {
         for i in 1..frame.len() {
             let mut bad = frame.clone();
             bad[i] ^= 0xa5;
-            let ours = decode_with(&d, &bad);
+            let ours = d.decode(&bad);
             refused += usize::from(ours.is_err());
             assert_eq!(
                 ours.ok(),
@@ -430,9 +432,9 @@ mod tests {
     fn an_input_too_short_to_match_comes_back_raw() {
         let d = Dict::new(&dict_bytes());
         for v in [b"".as_slice(), b"a", b"1234567"] {
-            for frame in [encode_with(&d, v), encode_high_with(&d, v), crate::encode_high(&[], v)] {
+            for frame in [d.encode(v), d.encode_high(v), crate::encode_high(&[], v)] {
                 assert_eq!(frame[0], crate::TAG_RAW, "{v:?} did not come back raw");
-                assert_eq!(decode_with(&d, &frame).unwrap(), v);
+                assert_eq!(d.decode(&frame).unwrap(), v);
             }
         }
     }

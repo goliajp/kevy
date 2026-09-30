@@ -91,13 +91,15 @@ fn state(c: &mut Conn) -> Vec<String> {
 fn generated_ids_and_idle_claims_replay_as_answered() {
     let dir = kevy_tmpdir::TmpDir::new("stream-replay");
     let mut before = Vec::new();
+    let mut dropped = String::new();
     with_runtime(free_port(), dir.path(), 1, |p| {
         let mut c = Conn::open(p);
-        for i in 0..4 {
+        for i in 0..150 {
             assert!(c.call(&format!("XADD s * f {i}")).starts_with('$'));
-            std::thread::sleep(Duration::from_millis(3));
         }
-        assert!(c.call("XADD s MAXLEN ~ 3 * f 4").starts_with('$'));
+        // an approximate trim takes whole nodes of 100 entries: the first
+        assert!(c.call("XADD s MAXLEN ~ 50 * f 150").starts_with('$'));
+        assert_eq!(c.call("XLEN s"), ":51\r\n");
         assert!(c.call("XADD s2 7-* f v").starts_with("$3\r\n7-0"));
         assert!(c.call("XADD s2 7-* f w").starts_with("$3\r\n7-1"));
         assert_eq!(c.call("XGROUP CREATE s g 0"), "+OK\r\n");
@@ -111,8 +113,9 @@ fn generated_ids_and_idle_claims_replay_as_answered() {
         let second = c.call("XRANGE s - +").split("\r\n").nth(11).unwrap().to_string();
         assert_eq!(c.call(&format!("XDEL s {second}")), ":1\r\n");
         let auto = c.call("XAUTOCLAIM s g c3 100 0 COUNT 3");
-        assert!(auto.ends_with(&format!("*1\r\n$15\r\n{second}\r\n")), "{auto}");
+        assert!(auto.ends_with(&format!("*1\r\n${}\r\n{second}\r\n", second.len())), "{auto}");
         before = state(&mut c);
+        dropped = second;
     });
     with_runtime(free_port(), dir.path(), 1, |p| {
         let after = state(&mut Conn::open(p));
@@ -123,8 +126,9 @@ fn generated_ids_and_idle_claims_replay_as_answered() {
     // what was compared is the state the writes made, not an empty one
     let pending = &before[2];
     assert!(pending.contains("c2") && pending.contains("c3"), "{pending}");
-    assert!(before[0].starts_with("*2\r\n"), "{}", before[0]);
-    assert!(pending.starts_with("*2\r\n"), "the dropped entry left the list: {pending}");
+    assert!(before[0].starts_with("*50\r\n"), "{}", before[0]);
+    assert!(before[4] == ":50\r\n", "{}", before[4]);
+    assert!(!before[2].contains(&dropped), "the dropped entry left the list: {pending}");
 }
 
 /// The idle column of the extended `XPENDING` rows.
@@ -136,13 +140,17 @@ fn idles(reply: &str) -> Vec<i64> {
         .collect()
 }
 
-/// `XINFO CONSUMERS`' idle column, which counts from the consumer's last
-/// contact, blanked.
+/// `XINFO CONSUMERS`' idle and inactive columns, which count from the
+/// consumer's last contact and last activity, blanked; an inactive of -1
+/// (never handed an entry) is kept.
 fn blank_consumer_idle(reply: &str) -> String {
     let mut t: Vec<String> = reply.split("\r\n").map(str::to_string).collect();
     for i in 0..t.len() {
         if t[i] == "idle" && i + 1 < t.len() {
             t[i + 1] = ":idle".into();
+        }
+        if t[i] == "inactive" && i + 1 < t.len() && t[i + 1] != ":-1" {
+            t[i + 1] = ":inactive".into();
         }
     }
     t.join("\r\n")
@@ -298,6 +306,77 @@ fn consumer_seen_times_survive_a_restart() {
     });
 }
 
+const HISTORY_READS: &[&str] =
+    &["XPENDING s g - + 10", "XINFO GROUPS s", "XINFO STREAM s", "XLEN s"];
+
+fn history_state(c: &mut Conn) -> Vec<String> {
+    HISTORY_READS.iter().map(|r| blank_idle(&c.call(r))).collect()
+}
+
+/// Wait up to ~10 s for `cond`.
+fn wait_for(what: &str, cond: impl Fn() -> bool) {
+    let done = (0..1000).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        cond()
+    });
+    assert!(done, "timed out waiting for {what}");
+}
+
+/// The delivery counts history reads raised (one past what a snapshot's
+/// narrow count holds, too), a claim's `LASTID` and an approximate trim
+/// come back the same from the log, from the log `BGREWRITEAOF` compacts
+/// it to, and from a snapshot.
+#[test]
+fn history_reads_lastid_and_node_trims_survive_every_restart() {
+    let dir = kevy_tmpdir::TmpDir::new("stream-history");
+    let mut before = Vec::new();
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        let mut c = Conn::open(p);
+        for i in 1..=150 {
+            assert!(c.call(&format!("XADD s {i}-0 f v")).starts_with('$'));
+        }
+        assert_eq!(c.call("XGROUP CREATE s g 0"), "+OK\r\n");
+        assert!(c.call("XREADGROUP GROUP g a COUNT 3 STREAMS s >").starts_with("*1"));
+        assert!(c.call("XREADGROUP GROUP g a STREAMS s 0").starts_with("*1"));
+        assert!(c.call("XREADGROUP GROUP g a COUNT 1 STREAMS s 0").starts_with("*1"));
+        assert!(c.call("XCLAIM s g b 0 2-0 JUSTID LASTID 120-0").starts_with("*1"));
+        assert!(c.call("XCLAIM s g b 0 3-0 RETRYCOUNT 4294967300 JUSTID").starts_with("*1"));
+        assert!(c.call("XADD s MAXLEN ~ 50 151-0 f v").starts_with('$'));
+        // the entries are gone now: handed back empty and not counted
+        assert!(c.call("XREADGROUP GROUP g a STREAMS s 0").starts_with("*1"));
+        before = history_state(&mut c);
+    });
+    let pending = &before[0];
+    for row in [":idle\r\n:3\r\n", "$1\r\nb\r\n:idle\r\n:2\r\n", ":idle\r\n:4294967300\r\n"] {
+        assert!(pending.contains(row), "{row:?} in {pending}");
+    }
+    assert!(before[1].contains("$5\r\n120-0\r\n"), "{}", before[1]);
+    assert_eq!(before[3], ":51\r\n", "the trim took the first node of 100");
+    let same = |p: u16, when: &str| {
+        let after = history_state(&mut Conn::open(p));
+        for ((read, b), a) in HISTORY_READS.iter().zip(&before).zip(&after) {
+            assert_eq!(a, b, "{read} changed across the restart {when}");
+        }
+    };
+    let aof = dir.path().join("aof-0.aof");
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        same(p, "from the log");
+        assert_eq!(Conn::open(p).call("BGREWRITEAOF"), "+OK\r\n");
+        wait_for("the rewritten log", || {
+            std::fs::read(&aof).is_ok_and(|b| b.windows(8).any(|w| w == b"MKSTREAM"))
+        });
+    });
+    with_runtime(free_port(), dir.path(), 1, |p| {
+        same(p, "from the rewritten log");
+        assert_eq!(Conn::open(p).call("BGSAVE"), "+OK\r\n");
+        wait_for("the snapshot and the reset log", || {
+            dir.path().join("dump-0.rdb").exists()
+                && std::fs::read(&aof).is_ok_and(|b| !b.windows(8).any(|w| w == b"MKSTREAM"))
+        });
+    });
+    with_runtime(free_port(), dir.path(), 1, |p| same(p, "from the snapshot"));
+}
+
 /// The internal record verb is refused from a client — over the wire and
 /// from a script — and changes nothing; the same frame read back from the
 /// AOF is applied (the restart tests above).
@@ -310,6 +389,7 @@ fn the_internal_record_verb_is_refused_from_a_client() {
         let want = format!("-{}\r\n", kevy_verbs::aof::INTERNAL_REFUSAL);
         assert_eq!(c.call("XINTERNAL.CONSUMERSEEN s g c 1"), want);
         assert_eq!(c.call("xinternal.consumerseen s g c 1"), want);
+        assert_eq!(c.call("XINTERNAL.PENDING s g c 1 1 1-0"), want);
         // the call splits on spaces, so the script has none
         let script = "return(redis.call('XINTERNAL.CONSUMERSEEN','s','g','c','1'))";
         let reply = c.call(&format!("EVAL {script} 0"));

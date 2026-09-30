@@ -12,7 +12,7 @@ kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压�
 - 把 `kevy_embedded::Store` 嵌进宿主应用，想弄清进程崩溃后什么能留下、什么留不下，以及在宿主内部怎么观测。
 - 有个键的 TTL 在重启前后行为怪异。
 
-如果只想要“`kill -9` 能不能扛住”的快速答案：能。默认策略下，进程被杀最多丢一个 tick（约 100 ms）的写入；断电最多丢约一秒再加一次 fsync 的耗时。
+如果只想要“`kill -9` 能不能扛住”的快速答案：能。嵌入式存储被杀时，已经返回的写入一条不丢；服务器被杀最多丢最后一轮 reactor 迭代的写入。默认策略下，断电最多丢约一秒再加一次 fsync 的耗时。
 
 ## 核心思路
 
@@ -140,7 +140,7 @@ v1 格式的日志没有记录信封，表达不了事务边界；在首次重�
 | 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发增长规则。 |
 | 自动重写绝对上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（关）| 独立触发器：AOF 超过 `n` 字节即重写，与增长比例无关。可在线调整（`CONFIG SET auto-aof-rewrite-bytes`）。 |
 | 自动重写陈旧度 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（关）| 独立触发器：距上次重写超过该时长且日志有增长即重写。可在线调整。 |
-| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_resync(true)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
+| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_mode(ReplayMode::Resync)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
 | 持久化目录 | `data_dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
 | reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 的 fsync、`No` 的缓冲写入、自动重写检查、TTL 清理。 |
 
@@ -159,12 +159,12 @@ v1 格式的日志没有记录信封，表达不了事务边界；在首次重�
 | 策略 | 耐久性 | 代价 |
 |---|---|---|
 | `Always` | 零丢失——每次写入先 fsync 再回复 | 吞吐约砍半 |
-| `EverySec`（默认）| 断电：约 1 秒加一个 tick，再加一次 fsync 的耗时。进程崩溃：最多丢一个 tick 的写入，每个 tick 都把缓冲的记录写进内核 | 开销小 |
-| `No` | 每个 tick 把缓冲的记录写进内核，从不 fsync：进程被杀最多丢一个 tick 的写入；断电后哪些落了盘由 OS 决定 | 开销最小 |
+| `EverySec`（默认）| 断电：约 1 秒加一个 tick，再加一次 fsync 的耗时。进程崩溃：嵌入式存储的追加是暂存的（[见下文](#嵌入式存储的暂存追加)），已返回的不丢；服务器丢最后一轮 reactor 迭代 | 开销小 |
+| `No` | 从不 fsync：进程被杀丢的和 `EverySec` 一样；断电后哪些落了盘由 OS 决定 | 开销最小 |
 
 ## 取舍与限制
 
-**各策略的吞吐与数据丢失。**`Always` 让每条回复都等 `fsync` 完成，是唯一能在 `kill -9` 下做到零命令丢失的策略，代价是在典型 NVMe 上把 SET 密集的吞吐砍掉约一半。`EverySec` 由后台大约每秒 fsync 一次，不挡写入，所以断电可能丢掉这一秒，外加 fsync 进行期间到达的写入，而进程被杀最多丢一个 tick 的写入——之所以选它当默认，正因为它与 Redis 的取舍一致，且丢失窗口通常可以接受。`No` 每个 tick 把缓冲的记录写进内核，何时落盘交给内核：吞吐最高，进程被杀最多丢一个 tick 的写入，但断电可能丢掉内核还没写回的一切，时间跨度可能达数秒。
+**各策略的吞吐与数据丢失。**`Always` 让每条回复都等 `fsync` 完成，是唯一能在 `kill -9` 下做到零命令丢失的策略，代价是在典型 NVMe 上把 SET 密集的吞吐砍掉约一半。`EverySec` 由后台大约每秒 fsync 一次，不挡写入，所以断电可能丢掉这一秒，外加 fsync 进行期间到达的写入——之所以选它当默认，正因为它与 Redis 的取舍一致，且丢失窗口通常可以接受。`No` 何时落盘交给内核：吞吐最高，但断电可能丢掉内核还没写回的一切，时间跨度可能达数秒。两种策略下，进程被杀丢多少取决于写入路径，而不是策略（见下一段和[耐久性契约](#耐久性契约v21)）。
 
 **`AppendFsync` 管什么、不管什么。** 它设定的是单条命令的掉电窗口。它从来与「一个 `atomic` 块是否全有全无」无关——那是日志里事务标记的事（见[崩溃一致性](#崩溃一致性契约v4)），而且自 4.0 起在任何 fsync 策略下都成立。
 
@@ -281,7 +281,16 @@ store.evictions_total();        // total evicted by maxmemory
 
 `Store::fsync_aof()` 是逐写入粒度的耐久性逃生口（Postgres 按事务 `synchronous_commit` 那一路）：部署跑 `everysec` 换吞吐，再把屏障放在少数几笔“一经确认就必须扛住机器崩溃”的写入之后。代价：每个脏 shard 一次 `fdatasync`。
 
-进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入。其他策略只丢还没离开用户态的写入：服务器默认的 reactor 每轮迭代都把追加交给内核，所以服务器进程被杀只丢最后一轮的写入；嵌入式引擎按 shard 缓冲追加（最多 256 KiB），`no` 和 `everysec` 下每个 tick 都把缓冲写进内核，进程被杀最多丢一个 tick 的写入（服务器设 `KEVY_AOF_OFFLOAD=0` 时同样如此）。AOF 尾巴在下次打开时回放，撕裂的末记录在打开时截掉（丢弃区先复制到隔离文件），绝不静默应用（完整状态机见下面的崩溃一致性契约）。
+进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入。其他策略只丢还没离开用户态的写入：服务器默认的 reactor 每轮迭代都把追加交给内核，所以服务器进程被杀只丢最后一轮的写入；嵌入式引擎把追加暂存在内核持有的内存里（见下一节），进程被杀时已返回的写入一条不丢；关掉暂存后，它按 shard 缓冲追加（最多 256 KiB），每个 tick 把缓冲写进内核，进程被杀最多丢一个 tick 的写入（服务器设 `KEVY_AOF_OFFLOAD=0` 时同样如此）。AOF 尾巴在下次打开时回放，撕裂的末记录在打开时截掉（丢弃区先复制到隔离文件），绝不静默应用（完整状态机见下面的崩溃一致性契约）。
+
+### 嵌入式存储的暂存追加
+
+在 `everysec` 和 `no` 下，嵌入式的一次追加在返回的那一刻就已经在内核持有的内存里，追加路径上没有系统调用：
+
+- **在 Apple 平台上**，映射的是 AOF 本身，末尾预分配一段（4 MiB 起，翻倍到 64 MiB 为止），追加就是往里复制。存储打开期间文件比其中的记录长，多出来的部分全是零；干净关闭时会截掉，被杀的进程留下的零在下次打开时清掉。
+- **在其他平台上**，追加先进一个暂存环 `aof-<i>.aof.stage`（默认每个 shard 4 MiB），这是一个小的映射文件，每个 tick 排进 AOF。下次打开时会重放被杀的进程留在里面的内容，在原目录里和在被杀之后复制出来的目录里都一样。
+
+放得进暂存环的一阵写入不会在调用方线程上调用 `write()`；比暂存环大的持续写入流，速度受限于排空时 `write()` 的速度。断电的丢失上界照旧由 fsync 策略决定。`Config::with_stage_ring(0)` 和 `Config::with_mapped_aof(false)` 可以关掉这两样；`always` 两样都不用。6.4 及更早的版本两样都不认识：进程被杀之后，先用 7.0 打开并关闭一次目录，再退回旧版本（[upgrading-6.4-to-7.0.md](upgrading-6.4-to-7.0.md#1-退回-64目录里可能有什么)）。
 
 **有序停机**（`SHUTDOWN` 或 SIGTERM）在任何策略下都零丢失：排空过程会在退出前强制 fsync AOF 尾巴，所以崩溃可能丢掉的 `everysec` 窗口对干净停机不适用。
 
@@ -352,7 +361,7 @@ store.evictions_total();        // total evicted by maxmemory
 replay_resync = true
 ```
 
-（嵌入式用 `Config::with_replay_resync(true)`，手工搭 runtime 用 `Runtime::with_replay_resync(true)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
+（嵌入式用 `Config::with_replay_mode(ReplayMode::Resync)`，手工搭 runtime 用 `Runtime::with_replay_mode(ReplayMode::Resync)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
 
 resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、CRC **和**恰好一条良构命令的解析三者同时吻合的位置（伪接受需要同时骗过三者——每个候选偏移约 2⁻³²），然后从那里继续应用。每段被跳过的区间都会上报——persist 层的 `ReplayReport::resynced_ranges`、`Store::open_report()` 上的 `OpenReport::resynced_bytes`——且 `corrupt` 标志保持竖起：resync 恢复数据，但不宣布文件健康。
 

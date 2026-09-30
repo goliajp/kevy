@@ -16,6 +16,7 @@
 //! The read-only listener whitelist (`listener/verbs.rs`) is a
 //! separate, intentionally narrower surface and stays untouched.
 
+mod args;
 mod bitmap;
 #[cfg(feature = "index")]
 mod describe;
@@ -39,7 +40,6 @@ mod view;
 mod zset_algebra;
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
-use kevy_verbs::reply::store_err_msg;
 
 use crate::store::Store;
 use crate::{KevyError, KevyResult};
@@ -53,6 +53,14 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     // for the verb; an over-long token misses every arm and is unknown
     let mut vbuf = [0u8; 32];
     let up = kevy_verbs::args::upper_verb(verb, &mut vbuf);
+    // the server refuses a write on a closed or replica store before it
+    // reads the arguments, so a malformed write gets the state error too;
+    // the state is asked first, so a writable store never classifies
+    if let Err(e) = crate::store::ensure_writable(s)
+        && is_write(up)
+    {
+        return kevy_err(out, &e);
+    }
     let handled = strings::dispatch(s, up, argv, out)
         || set::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
@@ -65,6 +73,17 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let shown = String::from_utf8_lossy(verb);
         encode_error(out, &format!("ERR unknown command '{shown}'"));
     }
+}
+
+/// Whether the server counts `up` a write: the shared layer's registry,
+/// then the command table for the verbs the server runs itself.
+fn is_write(up: &[u8]) -> bool {
+    kevy_verbs::is_write(up).unwrap_or_else(|| {
+        core::str::from_utf8(up)
+            .ok()
+            .and_then(kevy_resp::ops_table::spec)
+            .is_some_and(|o| o.write && o.surfaces & kevy_resp::ops_table::surface::SERVER != 0)
+    })
 }
 
 #[cfg(feature = "index")]
@@ -85,9 +104,9 @@ fn dispatch_index(_s: &Store, _up: &[u8], _argv: &[Vec<u8>], _out: &mut Vec<u8>)
 /// its bare `READONLY` prefix, as Redis does.
 fn kevy_err(out: &mut Vec<u8>, e: &KevyError) {
     let msg: String = match e {
-        KevyError::Store(se) => return encode_error(out, store_err_msg(se)),
+        KevyError::Store(se) => return encode_error(out, se.as_wire()),
         KevyError::ReadOnly => {
-            return encode_error(out, "READONLY You can't write against a read only replica");
+            return encode_error(out, "READONLY You can't write against a read only replica.");
         }
         KevyError::InvalidInput(m) | KevyError::NotFound(m) | KevyError::Unsupported(m) => {
             format!("ERR {m}")
@@ -137,24 +156,7 @@ fn rest(argv: &[Vec<u8>], from: usize) -> Vec<&[u8]> {
     argv[from..].iter().map(Vec::as_slice).collect()
 }
 
-/// An argv as the shared command layer reads it.
-struct Args<'a>(&'a [Vec<u8>]);
-
-impl core::ops::Index<usize> for Args<'_> {
-    type Output = [u8];
-    fn index(&self, i: usize) -> &[u8] {
-        &self.0[i]
-    }
-}
-
-impl kevy_resp::ArgvView for Args<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    fn get(&self, i: usize) -> Option<&[u8]> {
-        self.0.get(i).map(Vec::as_slice)
-    }
-}
+pub(crate) use args::Args;
 
 /// Every verb the dispatcher owns an arm for — the parity tests hold
 /// this table against `op_manifest::ESTORE_OPS` (⊇) and probe each
@@ -358,3 +360,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
 #[cfg(test)]
 #[path = "dispatch_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[cfg(all(feature = "text", feature = "vector"))]
+#[path = "dispatch_tests_index.rs"]
+mod tests_index;

@@ -7,51 +7,55 @@
 //! a revival: promote-then-write replaces the stub and the segment
 //! record strands. Idempotent — an already-stubbed row is left alone.
 
+use crate::SegRowsError;
 use crate::Store;
 use crate::value::Value;
 
-/// Apply one `SEGMENTED <file>` frame against `store`. The manifest in
-/// `segs_dir` is the segment set's truth, fsynced before the frame was
-/// logged — a frame naming a segment it does not hold means the truth
-/// set was damaged afterwards, and the error is a startup refusal (the
-/// rows' only durable copy is unreachable; silence would drop them).
-pub fn apply_segmented(
-    store: &mut Store,
-    segs_dir: &std::path::Path,
-    file: &[u8],
-) -> Result<u64, String> {
-    let name =
-        str::from_utf8(file).map_err(|_| "SEGMENTED frame names a non-utf8 segment".to_string())?;
-    store.enable_seg_rows(segs_dir)?;
-    let Some(seq) = store.row_seg_seq(name) else {
-        return Err(format!(
-            "AOF says segment '{name}' holds evicted rows, but the manifest at {} does not \
-             list it — the segment truth set was damaged after the eviction; restore the \
-             segment directory from backup before starting",
-            segs_dir.display()
-        ));
-    };
-    let mut stitched = 0u64;
-    let records = store.row_seg_records(seq);
-    for (key, payload) in records {
-        match store.peek_value_kind(&key) {
-            RowState::Hot => {
-                if store.demote_row_to_seg(&key, seq) {
+impl Store {
+    /// Apply one `SEGMENTED <file>` frame against this self. The manifest in
+    /// `segs_dir` is the segment set's truth, fsynced before the frame was
+    /// logged — a frame naming a segment it does not hold means the truth
+    /// set was damaged afterwards, and the error is a startup refusal (the
+    /// rows' only durable copy is unreachable; silence would drop them).
+    pub fn apply_segmented(
+        &mut self,
+        segs_dir: &std::path::Path,
+        file: &[u8],
+    ) -> Result<u64, SegRowsError> {
+        let name = str::from_utf8(file).map_err(|_| SegRowsError::NonUtf8Name)?;
+        self.enable_seg_rows(segs_dir)?;
+        let Some(seq) = self.row_seg_seq(name) else {
+            return Err(SegRowsError::NotInManifest {
+                file: name.to_string(),
+                dir: segs_dir.to_path_buf(),
+            });
+        };
+        let mut stitched = 0u64;
+        let records = self.row_seg_records(seq);
+        for (key, payload) in records {
+            match self.peek_value_kind(&key) {
+                RowState::Hot => {
+                    if self.demote_row_to_seg(&key, seq) {
+                        stitched += 1;
+                    }
+                }
+                RowState::Absent => {
+                    let weight =
+                        crate::tier_codec::decode(crate::value::COLD_TAG_HASH, payload, &[])
+                            .map_err(|reason| SegRowsError::Record {
+                                file: name.to_string(),
+                                reason,
+                            })?
+                            .weight();
+                    self.insert_row_stub(&key, seq, weight);
                     stitched += 1;
                 }
+                RowState::AlreadyCold | RowState::OtherType => {}
             }
-            RowState::Absent => {
-                let weight = crate::tier_codec::decode(crate::value::COLD_TAG_HASH, payload)
-                    .map_err(|e| format!("segment '{name}': {e}"))?
-                    .weight();
-                store.insert_row_stub(&key, seq, weight);
-                stitched += 1;
-            }
-            RowState::AlreadyCold | RowState::OtherType => {}
         }
+        self.note_stitched(seq, stitched);
+        Ok(stitched)
     }
-    store.note_stitched(seq, stitched);
-    Ok(stitched)
 }
 
 /// What replay found under a stitched key.

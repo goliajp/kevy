@@ -70,7 +70,7 @@ impl<C: Commands> Shard<C> {
                     let fd = sock.raw();
                     let id = self.next_conn_id;
                     self.next_conn_id += self.conn_id_step;
-                    self.poller.add(fd, true, false)?;
+                    self.poller.add(fd, kevy_sys::Interest::READ)?;
                     self.fd_to_conn.insert(fd, id);
                     let mut conn = Conn::new(sock);
                     conn.cluster = cluster;

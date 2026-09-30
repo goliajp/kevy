@@ -192,12 +192,10 @@ fn one_session(
 ) -> u64 {
     let connected = match &dial.links {
         Some(links) => links.connect(dial.addr, replica_id, *data_gen, from_offset),
-        None => ReplicaClient::connect_at(
+        None => ReplicaClient::connect_with(
             dial.addr,
-            replica_id,
-            *data_gen,
-            from_offset,
-            Duration::from_secs(5),
+            &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                .with_from(kevy_replicate::feed::FeedPosition::new(*data_gen, from_offset)),
         ),
     };
     match connected {

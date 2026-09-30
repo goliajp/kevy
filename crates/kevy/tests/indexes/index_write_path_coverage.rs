@@ -83,11 +83,7 @@ impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = kevy_testnet::free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-idxcov-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("idxcov");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -142,11 +138,16 @@ fn counter(reply: &[u8], field: &str) -> u64 {
 
 /// Verify, and say which verb we had just run if it is not clean.
 fn assert_clean(c: &mut std::net::TcpStream, after: &str) {
+    assert_clean_on(c, "u_age", after);
+}
+
+/// [`assert_clean`] for index `name`.
+fn assert_clean_on(c: &mut std::net::TcpStream, name: &str, after: &str) {
     // The index is maintained on the write path, but VERIFY walks it;
     // give a tick to land before reading, and retry rather than
     // asserting on the first sample.
     for attempt in 0..40 {
-        let r = cmd(c, &[b"IDX.VERIFY", b"u_age"]);
+        let r = cmd(c, &[b"IDX.VERIFY", name.as_bytes()]);
         if r.starts_with(b"-INDEXBUILDING") {
             std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
@@ -345,4 +346,81 @@ fn every_write_path_that_touches_a_row_keeps_the_index_honest() {
     // can overwrite one, which is the multi-key type change.
     ok(&mut c, &[b"MSET", b"u:1", b"gone", b"u:2", b"gone"], "MSET over hashes");
     assert_clean(&mut c, "MSET (multi-key type change over indexed rows)");
+}
+
+/// The paths that used to reach no hook at all — a field expiring on a
+/// read, a script writing a row it did not name, a transaction, a `*STORE`
+/// over a row, eviction — each checked the same way. The store records
+/// every row before its first write, so these are maintained like any
+/// command; this pins that they stay so.
+#[test]
+fn writes_no_hook_names_still_keep_the_index_honest() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for (name, extra) in [("w_age", &[][..]), ("w_vals", &[&b"VALUES"[..], b"team"][..])] {
+        let mut argv: Vec<&[u8]> = vec![
+            b"IDX.CREATE",
+            name.as_bytes(),
+            b"ON",
+            b"PREFIX",
+            b"w:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ];
+        argv.extend_from_slice(extra);
+        ok(&mut c, &argv, "IDX.CREATE");
+    }
+    for i in 1..=12 {
+        let (key, age) = (format!("w:{i}"), format!("{}", 20 + i));
+        ok(
+            &mut c,
+            &[b"HSET", key.as_bytes(), b"age", age.as_bytes(), b"team", b"red"],
+            "HSET seed",
+        );
+    }
+    let clean = |c: &mut std::net::TcpStream, after: &str| {
+        assert_clean_on(c, "w_age", after);
+        assert_clean_on(c, "w_vals", after);
+    };
+    clean(&mut c, "the seed writes");
+
+    // a field that expires and is then only read: no write command runs
+    ok(&mut c, &[b"HPEXPIRE", b"w:1", b"20", b"FIELDS", b"1", b"age"], "HPEXPIRE");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    ok(&mut c, &[b"HGET", b"w:1", b"age"], "HGET");
+    clean(&mut c, "a field expiring on a read");
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"w_vals", b"RANGE", b"0", b"99", b"LIMIT", b"50"]);
+    assert!(!String::from_utf8_lossy(&r).contains("w:1\r"), "w:1 lost its indexed field");
+
+    // a script that writes a row it was not handed as a key; one hashtag
+    // keeps both rows on the script's shard
+    for key in [&b"w:{s}2"[..], b"w:{s}3"] {
+        ok(&mut c, &[b"HSET", key, b"age", b"40", b"team", b"red"], "HSET seed");
+    }
+    let script = b"redis.call('HSET', KEYS[1], 'age', '70'); redis.call('HSET', 'w:{s}3', 'age', '71'); return 1";
+    ok(&mut c, &[b"EVAL", script, b"1", b"w:{s}2"], "EVAL");
+    clean(&mut c, "EVAL writing a row outside KEYS");
+
+    // a transaction
+    ok(&mut c, &[b"MULTI"], "MULTI");
+    cmd(&mut c, &[b"HSET", b"w:4", b"age", b"80"]);
+    cmd(&mut c, &[b"HDEL", b"w:5", b"age"]);
+    ok(&mut c, &[b"EXEC"], "EXEC");
+    clean(&mut c, "MULTI/EXEC");
+
+    // a *STORE result replacing a row
+    ok(&mut c, &[b"SADD", b"s:a", b"x"], "SADD");
+    ok(&mut c, &[b"SINTERSTORE", b"w:6", b"s:a", b"s:a"], "SINTERSTORE over a row");
+    clean(&mut c, "SINTERSTORE over an indexed row");
+
+    // eviction: every row goes with no command naming it
+    ok(&mut c, &[b"CONFIG", b"SET", b"maxmemory-policy", b"allkeys-random"], "CONFIG SET policy");
+    ok(&mut c, &[b"CONFIG", b"SET", b"maxmemory", b"1"], "CONFIG SET maxmemory");
+    let _ = cmd(&mut c, &[b"SET", b"pressure", b"x"]);
+    ok(&mut c, &[b"CONFIG", b"SET", b"maxmemory", b"0"], "CONFIG SET maxmemory 0");
+    clean(&mut c, "eviction");
 }

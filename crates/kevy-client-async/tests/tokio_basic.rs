@@ -7,6 +7,7 @@
 //! async-std equivalents live in `smol_basic.rs` / `async_std_basic.rs`.
 
 #![cfg(feature = "tokio")]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io;
 

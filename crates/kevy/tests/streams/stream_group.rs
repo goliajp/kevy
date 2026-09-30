@@ -78,11 +78,7 @@ impl Server {
     fn start(nshards: usize) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-stream-group-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("stream-group");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -320,10 +316,50 @@ fn xautoclaim_walks_pel_and_returns_cursor() {
     let s = String::from_utf8_lossy(&r);
     // 3-element array: cursor, claimed entries, deleted ids
     assert!(s.starts_with("*3\r\n"), "want 3-element: {s}");
-    // Cursor must be > 2-0 (next-after-last claimed)
-    assert!(s.contains("2-1") || s.contains("3-0"), "cursor advanced: {s}");
+    // the cursor is the next pending entry's id, as Redis 8.10.2 answers
+    assert!(s.starts_with("*3\r\n$3\r\n3-0\r\n"), "cursor is the next entry: {s}");
     // Two entries claimed
     assert!(s.contains("1-0") && s.contains("2-0"));
+}
+
+/// The cursor XAUTOCLAIM returns, as Redis 8.10.2 answers the same
+/// commands: `0-0` once a call reaches the end of the pending list, and a
+/// scan of at most COUNT x 10 entries, idle enough or not.
+#[test]
+fn xautoclaim_cursor_matches_redis() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    let call = |c: &mut std::net::TcpStream, parts: &[&[u8]]| {
+        c.write_all(&req(parts)).unwrap();
+        String::from_utf8_lossy(&read_reply(c)).into_owned()
+    };
+    for i in 1..=25 {
+        let id = format!("{i}-0");
+        call(&mut c, &[b"XADD", b"s", id.as_bytes(), b"f", b"v"]);
+    }
+    call(&mut c, &[b"XGROUP", b"CREATE", b"s", b"g", b"0"]);
+    call(&mut c, &[b"XREADGROUP", b"GROUP", b"g", b"a", b"COUNT", b"100", b"STREAMS", b"s", b">"]);
+    let cursor = |r: &str| r.split("\r\n").nth(2).unwrap_or_default().to_string();
+    // one call covers the whole list: the scan reached the end
+    let r =
+        call(&mut c, &[b"XAUTOCLAIM", b"s", b"g", b"b", b"0", b"0-0", b"COUNT", b"100", b"JUSTID"]);
+    assert_eq!(cursor(&r), "0-0", "{r}");
+    // COUNT 2 stops after two, at the third entry
+    let r =
+        call(&mut c, &[b"XAUTOCLAIM", b"s", b"g", b"b", b"0", b"0-0", b"COUNT", b"2", b"JUSTID"]);
+    assert_eq!(cursor(&r), "3-0", "{r}");
+    // nothing idle enough: COUNT 2 still scans only 20 entries
+    let r = call(
+        &mut c,
+        &[b"XAUTOCLAIM", b"s", b"g", b"b", b"100000", b"0-0", b"COUNT", b"2", b"JUSTID"],
+    );
+    assert_eq!(cursor(&r), "21-0", "{r}");
+    // COUNT 3 may scan 30, past the 25 there are
+    let r = call(
+        &mut c,
+        &[b"XAUTOCLAIM", b"s", b"g", b"b", b"100000", b"0-0", b"COUNT", b"3", b"JUSTID"],
+    );
+    assert_eq!(cursor(&r), "0-0", "{r}");
 }
 
 // ───────────── XGROUP CREATECONSUMER / DELCONSUMER ─────────────

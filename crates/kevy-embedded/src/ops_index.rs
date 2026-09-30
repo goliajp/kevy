@@ -15,17 +15,6 @@
 //! no race window per shard). No `Building` state embedded — create
 //! returns when the index serves.
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; an open question"
-)]
-
 use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
@@ -39,6 +28,21 @@ use crate::store::{Store, lock_write};
 pub(crate) use crate::ops_index_sync::{each_written_key_pub, on_commit, sync_segs};
 
 /// One page of index hits plus the cursor to resume from.
+///
+/// ```
+/// use kevy_embedded::{Config, IndexKind, IndexPage, IndexValType, IndexValue, Store};
+/// let s = Store::open(Config::default())?;
+/// s.idx_create(b"by_age", b"u:", b"age", IndexValType::I64, IndexKind::Range)?;
+/// for (k, age) in [(&b"u:1"[..], &b"30"[..]), (b"u:2", b"40")] {
+///     s.hset(k, &[(b"age", age)])?;
+/// }
+/// let (lo, hi) = (IndexValue::I64(0), IndexValue::I64(99));
+/// let (rows, cursor): IndexPage = s.idx_query(b"by_age", &lo, &hi, None, 1)?;
+/// assert_eq!(rows, [(b"u:1".to_vec(), IndexValue::I64(30))]);
+/// let (rest, _) = s.idx_query(b"by_age", &lo, &hi, cursor.as_ref(), 10)?; // resume
+/// assert_eq!(rest[0].0, b"u:2");
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type IndexPage = (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>);
 
 /// One field's highlight: its name and the `(start, end)` match spans.
@@ -61,6 +65,13 @@ pub(crate) mod highlight;
 // the `text` feature: a range index filters fine without a tokenizer.
 #[path = "ops_index_claused.rs"]
 pub(crate) mod claused;
+
+// The optional query clauses both of those take; MATCH's set has its own file.
+#[cfg(feature = "text")]
+#[path = "ops_index_match_opts.rs"]
+pub(crate) mod match_opts;
+#[path = "ops_index_opts.rs"]
+pub(crate) mod opts;
 
 // The auto-declaration loop's observation face (refusal log + advice).
 #[path = "ops_index_advise.rs"]
@@ -88,11 +99,16 @@ pub(crate) fn merge_page(mut all: Vec<(IndexValue, Vec<u8>)>, limit: usize) -> I
     all.sort();
     all.truncate(limit);
     let next = if all.len() == limit {
-        all.last().map(|(v, k)| Cursor { value: v.clone(), key: k.clone() })
+        all.last().map(|(v, k)| Cursor::new(v.clone(), k.clone()))
     } else {
         None
     };
     (all.into_iter().map(|(v, k)| (k, v)).collect(), next)
+}
+
+/// A spec from `b`, its refusal reported as the catalog's are.
+pub(crate) fn built(b: kevy_index::IndexSpecBuilder) -> KevyResult<IndexSpec> {
+    Ok(b.build().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?)
 }
 
 /// Store-level index state: catalog + a version stamp the per-shard
@@ -147,6 +163,8 @@ pub(crate) struct ShardSegs {
     pub(crate) stats_dirty: bool,
     #[cfg(all(feature = "tier", not(target_arch = "wasm32")))]
     pub(crate) reserved_cache: u64,
+    /// The store record's state between drains.
+    pub(crate) drain: crate::ops_index_changes::Drain,
 }
 
 impl ShardSegs {
@@ -171,9 +189,6 @@ impl ShardSegs {
     }
 }
 
-#[cfg(feature = "persist")]
-const SIDECAR: &str = "index-catalog.meta";
-
 impl Store {
     /// `IDX.CREATE` equivalent. Builds synchronously; errors on
     /// duplicate name / cap / bad spec.
@@ -196,22 +211,12 @@ impl Store {
         if kind == IndexKind::Ann {
             return Err(KevyError::Unsupported("vector indexes need the `vector` feature".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let spec = built(IndexSpec::builder(name, prefix, kind, ty).with_field(field))?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
+    /// Admit `spec` and build it on every shard; the caller records the
+    /// change ([`Self::catalog_change`]).
     pub(crate) fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
         // Tiering floor refusal: body in
         // `ops_index_sync::tier_floor_check` (500-LOC rule).
@@ -224,7 +229,6 @@ impl Store {
             cat.create(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             *ver += 1;
         }
-        self.persist_index_sidecar();
         self.advise_clear();
         self.usage_rekey();
         // Build every shard's slice now (each under its own lock).
@@ -246,32 +250,29 @@ impl Store {
         field: &[u8],
         params: kevy_index::AnnSpec,
     ) -> KevyResult<()> {
-        if params.dim == 0 || params.distance > 2 {
+        // M = 1 has no level distribution (1/ln 1); 0 means the default
+        if params.dim == 0 || params.distance > 2 || params.m == 1 {
             return Err(KevyError::InvalidInput("bad ann parameters".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty: ValType::Vector,
-            kind: IndexKind::Ann,
-            max_bytes: 0,
-            ann: Some(kevy_index::AnnSpec {
-                m: if params.m == 0 { 16 } else { params.m },
-                ef: if params.ef == 0 { 200 } else { params.ef },
-                ..params
-            }),
-            group_by: None,
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let ann = params
+            .with_m(if params.m == 0 { 16 } else { params.m })
+            .with_ef(if params.ef == 0 { 200 } else { params.ef });
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Ann, ValType::Vector)
+            .with_field(field)
+            .with_ann(ann);
+        let spec = built(spec)?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
-    /// `IDX.DROP` equivalent; `false` if absent. On a hit the catalog
-    /// sidecar is re-persisted so the drop survives restart.
-    pub fn idx_drop(&self, name: &[u8]) -> bool {
+    /// `IDX.DROP` equivalent; `false` if absent. Refused on a replica
+    /// and after [`Store::shutdown`], like every write.
+    pub fn idx_drop(&self, name: &[u8]) -> KevyResult<bool> {
+        self.catalog_change(|| Ok(self.drop_index(name)))
+    }
+
+    /// Drop the index named `name` from the catalog; the caller records
+    /// the change.
+    pub(crate) fn drop_index(&self, name: &[u8]) -> bool {
         let hit = {
             let mut g =
                 self.indexes.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -283,7 +284,6 @@ impl Store {
             hit
         };
         if hit {
-            self.persist_index_sidecar();
             self.advise_clear();
             self.usage_rekey();
         }
@@ -295,7 +295,7 @@ impl Store {
     /// which shard it landed on (see docs/text-search.md).
     ///
     /// Two query-time passes: the first sums each shard's `n_docs`,
-    /// `total_len` and per-query-token `df` into one [`CorpusStats`]; the
+    /// `total_len` and per-query-token `df` into one [`kevy_text::CorpusStats`]; the
     /// second scores every shard against it. Only the query's tokens'
     /// df is aggregated, not a whole-corpus table — the query narrows it.
     #[cfg(feature = "text")]
@@ -325,33 +325,24 @@ impl Store {
         if !matches!(ty, ValType::I64 | ValType::F64) || group_by.is_empty() {
             return Err(KevyError::InvalidInput("agg requires numeric type + group field".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: vec![kevy_index::FieldSpec::new(field.to_vec())],
-            ty,
-            kind: IndexKind::Agg,
-            max_bytes: 0,
-            ann: None,
-            group_by: Some(group_by.to_vec()),
-            with_positions: false,
-            values: Vec::new(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Agg, ty)
+            .with_field(field)
+            .with_group_by(group_by);
+        let spec = built(spec)?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
     /// One group's merged stats across shards.
     pub fn idx_group(&self, name: &[u8], group: &[u8]) -> KevyResult<kevy_index::GroupStats> {
-        let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
+        let mut merged = kevy_index::GroupStats::default();
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name() == name) {
                 found = true;
-                kevy_index::merge_group(&mut merged, &a.group(group));
+                merged.merge(&a.group(group));
             }
         }
         if !found {
@@ -377,11 +368,11 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 for (gk, st) in a.all_groups() {
                     match merged.get_mut(&gk) {
-                        Some(m) => kevy_index::merge_group(m, &st),
+                        Some(m) => m.merge(&st),
                         None => {
                             merged.insert(gk, st);
                         }
@@ -415,7 +406,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 all.extend(graph.knn(query, k, ef));
             }
@@ -428,50 +419,17 @@ impl Store {
         Ok(all)
     }
 
-    /// Without `persist` there is no data dir — the catalog lives only
-    /// in memory, so the sidecar halves are no-ops.
-    #[cfg(not(feature = "persist"))]
-    fn persist_index_sidecar(&self) {}
-
-    #[cfg(not(feature = "persist"))]
-    pub(crate) fn idx_boot(&self) {}
-
     fn for_each_segment(&self, name: &[u8], mut f: impl FnMut(&Segment)) -> KevyResult<()> {
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, seg)) = inner.idx_segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 f(seg);
             }
         }
         if found { Ok(()) } else { Err(KevyError::NotFound("no such index".into())) }
-    }
-
-    #[cfg(feature = "persist")]
-    fn persist_index_sidecar(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tmp = dir.join("index-catalog.meta.tmp");
-        if std::fs::write(&tmp, g.1.to_sidecar()).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-        }
-    }
-
-    /// Boot half — load a persisted catalog (indexes rebuild lazily on
-    /// first touch via `sync_segs`).
-    #[cfg(feature = "persist")]
-    pub(crate) fn idx_boot(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-            && let Some(cat) = Catalog::from_sidecar(&text)
-            && !cat.is_empty()
-        {
-            let mut g =
-                self.indexes.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-            *g = (g.0 + 1, cat);
-        }
     }
 }

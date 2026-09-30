@@ -64,7 +64,9 @@ fn precedence_chain_cli_beats_env_beats_file_beats_default() {
     assert_eq!(cfg.server.port, 7001);
 
     // CLI overlay (port = 7002) > env.
-    cfg.merge_cli(CliOverrides { port: Some(7002), ..CliOverrides::default() }).unwrap();
+    let mut cli = CliOverrides::default();
+    cli.port = Some(7002);
+    cfg.merge_cli(cli).unwrap();
     assert_eq!(cfg.server.port, 7002);
 }
 
@@ -145,7 +147,9 @@ fn log_output_file_path_round_trips() {
 #[test]
 fn cli_no_aof_overrides_file_aof_true() {
     let mut cfg = Config::from_toml_str("[persistence]\naof = true\n", None).unwrap();
-    cfg.merge_cli(CliOverrides { aof: Some(false), ..CliOverrides::default() }).unwrap();
+    let mut cli = CliOverrides::default();
+    cli.aof = Some(false);
+    cfg.merge_cli(cli).unwrap();
     assert!(!cfg.persistence.aof);
 }
 
