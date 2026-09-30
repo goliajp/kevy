@@ -240,6 +240,8 @@ fn shard_upkeep(
     crate::shard::tier_tick_upkeep(&mut g, tier, nshards);
     let _ = g.store.demote_step();
     let _ = g.store.tier_compact_tick();
+    #[cfg(feature = "index")]
+    crate::ops_index_tidy::tick(&mut g.idx_segs);
     tick_aof(&mut g)
 }
 
