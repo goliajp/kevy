@@ -148,9 +148,10 @@ fn xclaim_argv(
     ]
 }
 
-/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM
-/// [ENTRIESREAD n]` (MKSTREAM covers groups on a virgin empty stream; the
-/// read counter when known), one `XCLAIM … TIME t RETRYCOUNT n FORCE
+/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
+/// (MKSTREAM covers groups on a virgin empty stream), `XGROUP SETID …
+/// ENTRIESREAD n` when the read counter is known (its own frame, which a
+/// 6.4 reader skips and still has the group), one `XCLAIM … TIME t RETRYCOUNT n FORCE
 /// JUSTID` per live PEL row — full delivery_time/count fidelity, the same
 /// technique Redis's own AOF rewrite uses — then one internal
 /// `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per known consumer,
@@ -170,7 +171,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
     let mut frames = 0usize;
     for g in s.export_groups() {
         let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1);
-        let mut argv = vec![
+        let argv = vec![
             b"XGROUP".to_vec(),
             b"CREATE".to_vec(),
             key.to_vec(),
@@ -178,12 +179,21 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             last_delivered.encode(),
             b"MKSTREAM".to_vec(),
         ];
-        if let Some(n) = g.entries_read {
-            argv.push(b"ENTRIESREAD".to_vec());
-            argv.push(n.to_string().into_bytes());
-        }
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
+        if let Some(n) = g.entries_read {
+            let argv = vec![
+                b"XGROUP".to_vec(),
+                b"SETID".to_vec(),
+                key.to_vec(),
+                g.name.clone(),
+                last_delivered.encode(),
+                b"ENTRIESREAD".to_vec(),
+                n.to_string().into_bytes(),
+            ];
+            emit(w, &Argv::from(argv), fmt, scratch)?;
+            frames += 1;
+        }
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
             let id = StreamId::new(*ms, *seq);
             let argv = if s.contains_entry(id) {

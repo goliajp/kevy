@@ -111,11 +111,12 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
                         kevy_store::MissingStream::Create,
                     )
                     .unwrap();
-                if args.len() == 8 {
-                    assert_eq!(args[6].to_ascii_uppercase(), b"ENTRIESREAD");
-                    let n = std::str::from_utf8(&args[7]).unwrap().parse().unwrap();
-                    store.xgroup_set_entries_read(&args[2], &args[3], Some(n)).unwrap();
-                }
+                assert_eq!(args.len(), 6, "a create frame a 6.4 reader also takes");
+            }
+            b"SETID" => {
+                assert_eq!(args[5].to_ascii_uppercase(), b"ENTRIESREAD");
+                let n = std::str::from_utf8(&args[6]).unwrap().parse().unwrap();
+                store.xgroup_set_entries_read(&args[2], &args[3], Some(n)).unwrap();
             }
             other => {
                 panic!("unexpected XGROUP sub in AOF rewrite: {:?}", String::from_utf8_lossy(other))
