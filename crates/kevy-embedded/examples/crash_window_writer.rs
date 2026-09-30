@@ -8,6 +8,8 @@
 //! line survives the kill, wherever it lives (hot or segment)".
 //!
 //!   crash_window_writer <dir> [--shards N] [--always]
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::io::Write as _;
 use std::time::Duration;
 

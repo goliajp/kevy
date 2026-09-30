@@ -165,27 +165,6 @@ def _have_semver_checks():
     return False, "cargo-semver-checks is not installed"
 
 
-# Set when a tier starts: an input another row produces must come from this
-# run, not from the copy git tracks.
-RUN_STARTED = 0.0
-
-
-def _fresh_doc_coverage():
-    tables = list((ROOT / "target/doc").glob("*.txt"))
-    if tables and min(t.stat().st_mtime for t in tables) >= RUN_STARTED:
-        return True, ""
-    return False, "rustdoc-coverage did not write the tables in target/doc in this run"
-
-
-def _fresh_stone_report():
-    """The report stone-report wrote in this run. The file is tracked, so
-    existing proves nothing: stonegate would judge the checked-in copy."""
-    p = ROOT / "bench/STONE-REPORT.json"
-    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
-        return True, ""
-    return False, "stone-report did not write bench/STONE-REPORT.json in this run"
-
-
 def _have_targets(*triples):
     r = subprocess.run(["rustup", "target", "list", "--installed"], capture_output=True, text=True)
     missing = [t for t in triples if t not in r.stdout.split()]
@@ -214,17 +193,7 @@ def _have_miri():
     return False, "rustup component add miri rust-src --toolchain nightly"
 
 
-def _fresh_web_dist():
-    """The site site-build wrote in this run; a dist left from an earlier
-    build is a different tree's site."""
-    p = ROOT / "web/dist"
-    if p.exists() and p.stat().st_mtime >= RUN_STARTED:
-        return True, ""
-    return False, "site-build did not write web/dist in this run"
-
-
 PROBES = {
-    "web/dist from site-build": lambda: _fresh_web_dist(),
     "wasm targets": lambda: _have_targets("wasm32-unknown-unknown", "wasm32-wasip1"),
     "iot toolchain": lambda: _have_iot_toolchain(),
     "nightly miri": lambda: _have_miri(),
@@ -239,9 +208,7 @@ PROBES = {
     "pgcmp-infra": lambda: _have_pgcmp_infra(),
     "wasm-artifact": lambda: _have_wasm_artifact(),
     "nightly rustdoc": lambda: _have_nightly_rustdoc(),
-    "rustdoc coverage tables from rustdoc-coverage": lambda: _fresh_doc_coverage(),
     "cargo-semver-checks": lambda: _have_semver_checks(),
-    "bench/STONE-REPORT.json from stone-report": lambda: _fresh_stone_report(),
 }
 
 

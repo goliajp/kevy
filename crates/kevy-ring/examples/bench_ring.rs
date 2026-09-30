@@ -6,6 +6,8 @@
 //!
 //! `cargo run -p kevy-ring --example bench_ring --release`
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_bench::{bench, black_box};
 use kevy_ring::ring;
 use std::time::Instant;

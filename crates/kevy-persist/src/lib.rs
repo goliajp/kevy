@@ -321,19 +321,23 @@ const _: () = {
 mod tests;
 #[cfg(test)]
 mod tests_aof;
-#[cfg(all(test, unix, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 mod tests_fail;
 #[cfg(test)]
 mod tests_log_base;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests_mapped;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]
 mod tests_rewrite;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests_stage;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests_stage_aof;
 #[cfg(test)]
 mod tests_sync;
@@ -341,5 +345,6 @@ mod tests_sync;
 mod tests_tier_stream;
 #[cfg(test)]
 mod tests_txn_tail;
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests_zero_tail;

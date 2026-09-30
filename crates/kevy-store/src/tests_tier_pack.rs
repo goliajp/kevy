@@ -8,6 +8,8 @@
 //! already reads and decodes the row; building the packed form there costs
 //! less than the general hash it replaces.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use crate::Store;
 use crate::packed_row::ColumnNames;
 use crate::value::Value;

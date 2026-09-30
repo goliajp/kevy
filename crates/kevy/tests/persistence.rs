@@ -1,6 +1,8 @@
 //! Detection suite: data written, SAVEd, and reloaded by a fresh runtime (same
 //! shard count) survives a "restart". Each shard persists its own store.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

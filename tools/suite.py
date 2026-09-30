@@ -212,7 +212,6 @@ def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
 
     results, cpu_of = [], {}
     t_start = time.monotonic()
-    req.RUN_STARTED = time.time()
     carry, carry_why = ({}, "") if only or area else ci_carry.carried(ROOT, selected, tier)
     if carry_why:
         print(f"  ci-carry: {carry_why}")

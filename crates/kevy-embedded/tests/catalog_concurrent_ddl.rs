@@ -3,6 +3,7 @@
 //! back from after a reopen, and on a replica.
 
 #![cfg(all(feature = "index", feature = "replicate", not(target_arch = "wasm32")))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};

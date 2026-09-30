@@ -3,6 +3,7 @@
 //! process allocates. So these checks live in a test binary of their own
 //! and run one after the other from a single test.
 #![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use kevy_alloc::{Heap, class, os};
 

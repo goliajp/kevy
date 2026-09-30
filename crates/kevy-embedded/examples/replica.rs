@@ -30,6 +30,8 @@
 //! kevy-cli -p 6004 INCR counter
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::time::{Duration, Instant};
 
 use kevy_embedded::Store;

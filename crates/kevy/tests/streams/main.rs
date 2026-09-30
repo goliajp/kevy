@@ -1,5 +1,7 @@
 //! Streams and blocking commands.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod blocking;
 mod blocking_cross_shard;
 mod stream;

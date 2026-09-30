@@ -9,9 +9,13 @@
 # claimed from memory for a whole release line while every page said the
 # previous version.
 #
+# Then three readings of the built site against its sources: the content
+# export is current, every written fragment reached the built pages, and
+# every RESP example the site shows runs against a real server.
+#
 # usage: sitegate.sh
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 2
 
 PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
 SRV=""
@@ -37,4 +41,9 @@ done
 
 (cd web && node verify.mjs "http://localhost:$PORT") || exit 1
 
-echo "sitegate: PASS (built, checked, and opened in a browser)"
+python3 tools/export_site_content.py --check || exit 1
+python3 tools/check_site_content_parity.py || exit 1
+cargo build -q -p kevy --bin kevy || exit 1
+python3 tools/check_site_commands.py || exit 1
+
+echo "sitegate: PASS (built, checked, opened in a browser, and every example run)"

@@ -15,6 +15,8 @@
 //! standard deviation over the same samples. Absolute ns drift with host
 //! load — treat cross-machine numbers as separate baselines.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod rng;
 mod s_alloc;
 mod s_config;

@@ -25,6 +25,7 @@
 //! used to fail to build here, which only the release pipeline runs — so
 //! it surfaced at tag time instead of in CI.
 #![cfg(debug_assertions)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

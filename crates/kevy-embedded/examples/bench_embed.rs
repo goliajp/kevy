@@ -7,6 +7,8 @@
 //! Run: `cargo run -p kevy-embedded --example bench_embed --release`
 //! Override op count with `KEVY_BENCH_N` (default 2_000_000).
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_embedded::{AppendFsync, Config, Store};
 use std::time::Instant;
 

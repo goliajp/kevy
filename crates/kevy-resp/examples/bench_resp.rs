@@ -6,6 +6,8 @@
 //! thread-per-core runtime forwards cross-core; encoders append to a reused
 //! buffer and should be near-free).
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_bench::{bench, black_box};
 use kevy_resp::{encode_bulk, encode_integer, encode_simple_string, parse_command};
 

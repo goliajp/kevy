@@ -4,6 +4,8 @@
 //! real Redis cluster; these tests run under `cargo test` so coverage sees
 //! the code, with expected outputs written from the rules that gate checks.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 mod cluster_fake;
 
 use cluster_fake::{Shared, bulk, cluster, start};
