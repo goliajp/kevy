@@ -477,6 +477,21 @@ defect.
 
 ### Behaviour changes
 
+- **A server whose snapshot does not load, or whose shard stops, stops
+  instead of serving.** Since 1.0.0 a shard whose `dump-<i>.rdb` failed
+  to load (cut short, overwritten, unreadable) logged `failed to load`
+  and served whatever part of the file it had read, and the writes that
+  followed landed on top; since the same release a shard that stopped
+  with an error left the other shards serving without it. Startup now
+  fails with `shard <i>: <file> does not load: <error>`, the process
+  exits with status 1, and the same holds for any shard that stops with
+  an error while running: every shard stops and the server exits naming
+  the error. A startup that refuses a log whose snapshot is missing or
+  replaced stops the same way. There is no switch to start anyway: move
+  the file aside, or restore it from a backup. The embedded store
+  already failed to open on such a snapshot; its error now names the
+  file.
+
 - **`XINFO` answers as a Redis server does, field for field.** Measured
   against valkey 9.1.2 and Redis 8.10.2 over the wire, both protocols:
   `XINFO GROUPS` lists `entries-read` before `lag`, and both are now kept
