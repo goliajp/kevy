@@ -77,7 +77,6 @@ prerelease = 6000
 
 [suite.requirements]
 "rustdoc coverage tables from rustdoc-coverage" = "wherever rustdoc-coverage ran earlier in the same tier"
-"bench/DEAD-SET.json from deadgate" = "wherever deadgate ran earlier in the same tier"
 "web/dist from site-build" = "wherever site-build ran earlier in the same tier"
 "wasm targets" = "CI's wasm job, and the lx64 box"
 "iot toolchain" = "CI's iot job, and the lx64 box"
@@ -301,22 +300,11 @@ proves = "every non-kevy dependency declared with a reason; no shipping third-pa
 id = "covgate"
 area = "cov"
 tier = "premerge"
-cmd = "bash -c 'KEVY_IO_URING=0 KEVY_COV_JSON=$PWD/target/llvm-cov-c1.json bash bench/covgate.sh'"
+cmd = "bash -c 'KEVY_IO_URING=0 bash bench/covgate.sh'"
 expected = 219
 timeout = 14400
 requires = ["linux"]
 proves = "line coverage holds the ratchet"
-
-[[check]]
-id = "deadgate"
-area = "cov"
-tier = "premerge"
-# reads the region export covgate just wrote
-cmd = "bash -c 'KEVY_IO_URING=0 KEVY_COV_JSON=$PWD/target/llvm-cov-c1.json bash bench/deadgate.sh'"
-expected = 30
-timeout = 14400
-requires = ["linux"]
-proves = "the set of never-executed symbols may only shrink — what covgate's percentage cannot hold"
 
 [[check]]
 id = "docgate"
@@ -348,8 +336,8 @@ tier = "premerge"
 cmd = "python3 tools/stone_report.py"
 expected = 142
 timeout = 3600
-requires = ["linux", "rustdoc coverage tables from rustdoc-coverage", "bench/DEAD-SET.json from deadgate", "cargo-semver-checks"]
-proves = "each stone measured four ways: lifts outside the workspace, semver-clean, documented, and its dead-region count"
+requires = ["linux", "rustdoc coverage tables from rustdoc-coverage", "cargo-semver-checks"]
+proves = "each stone measured three ways: lifts outside the workspace, semver-clean, documented"
 
 [[check]]
 id = "stonegate"

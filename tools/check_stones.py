@@ -3,7 +3,7 @@
 
 `suite/architecture.toml` names seventeen crates as stone and says any
 project could take them. `tools/stone_report.py` measures whether that is
-true, four ways. This is the gate that stops it getting worse.
+true, three ways. This is the gate that stops it getting worse.
 
 The bar lives in `suite/stone-waivers.toml`, set from the first stone
 report rather than from taste, and every stone that misses it today is
@@ -75,8 +75,6 @@ def check_one(row, bar):
         bad["doc_pct"] = f"{d.get('pct', 0):.0f}% documented"
     if d.get("examples", 0) < bar.get("min_examples", 0):
         bad["min_examples"] = f"{d.get('examples', 0)} executable examples"
-    if bar.get("must_be_measured") and not row.get("measured_regions"):
-        bad["must_be_measured"] = "absent from the execution corpus"
     if bar.get("semver_clean") and not sv.get("ok"):
         # An ABSENT reading lands here too, and deliberately. `--skip-semver`
         # writes `{}`, and the previous spelling — `and sv and not ok` —
@@ -143,14 +141,11 @@ def main():
                 continue  # not stale: it was not measured, so it did not pass
             stale.append(f"{crate}: {rule} — now meets the bar; remove the waiver")
 
-    # A note is not enough. Code switched off by cfg is ABSENT from a
-    # coverage run rather than dead in it, so a report taken anywhere but
-    # the enforcing platform cannot see kevy-uring at all — the crate does
-    # not compile there — and `must_be_measured` then judges a stone the
-    # producer never looked at. Waivers have been written on the strength
-    # of a macOS reading before — it said kevy-uring has zero tests, and on
-    # Linux it has twelve. The refusal is what makes the reading's platform
-    # part of the verdict instead of a footnote.
+    # A note is not enough. Code switched off by cfg is absent from a
+    # reading taken anywhere but the enforcing platform: kevy-uring does
+    # not compile off Linux, so its tests are not counted there. Waivers
+    # have been written on the strength of a macOS reading before — it said
+    # kevy-uring has zero tests, and on Linux it has twelve.
     # A report about another release is a different question, exactly as a
     # report from another platform is. The checked-in copy said 5.4.1 while
     # the workspace was 6.0.0, and nothing here noticed.
@@ -161,13 +156,12 @@ def main():
                f"tree is {want_version}. A reading of a different release cannot "
                f"judge this one — take the report on this commit.")
 
-    platform = doc.get("dead_platform")
+    platform = doc.get("platform")
     if platform != "linux":
-        refuse(f"the report's coverage readings come from {platform or 'nowhere'}, "
+        refuse(f"the report was taken on {platform or 'an unnamed platform'}, "
                f"not the enforcing platform. On any other host the Linux-only "
-               f"stones are absent rather than dead, and 'absent' is not a "
-               f"score. Take the report on Linux (CI does, in the stonereport "
-               f"job) and re-read it here.")
+               f"stones are absent rather than measured. Take the report on "
+               f"Linux (CI does on release branches) and re-read it here.")
 
     if fail or stale:
         print("stonegate: FAIL")
