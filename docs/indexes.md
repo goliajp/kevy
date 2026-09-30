@@ -227,10 +227,10 @@ TABLE.DECLARE user PREFIX user: PK id COLUMN id i64 COLUMN age i64 INDEX age ran
   bytes. `value_len` is 8 for `i64` / `f64` and the string's length plus
   2 for `str`; `handle_len` is the key without the index's prefix, half
   that (rounded up) when it is all digits. `fill` is how full the leaves
-  are: 1.0 after a build or `IDX.REBUILD`, which pack them, and never
-  below two-thirds whatever order rows are written and deleted in: every
-  leaf but a segment's first and last keeps two-thirds of its page, less
-  two entries. Random writes leave them 0.85–0.9 full. Over 1.25 million
+  are: 1.0 after a build or `IDX.REBUILD`, which pack them; whatever
+  order rows are written in, every leaf but a segment's first and last
+  keeps two-thirds of its page less two entries, and half less two
+  entries once rows have been deleted. Random writes leave them 0.85–0.9 full. Over 1.25 million
   rows keyed `row:<n>`, an `i64` index measured 15.9 bytes a row packed
   and 16.8 after random writes, a `str` index of ten-byte values 20.1 and
   22.8. `IDX.LIST` and `IDX.VERIFY` report what the leaves hold;

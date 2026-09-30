@@ -64,18 +64,6 @@ impl Tree {
         lay
     }
 
-    /// Bytes of the group's entry `v`.
-    fn span_in(&self, g: &Group, lay: &Layout, v: usize) -> usize {
-        let j = (0..g.k).rfind(|&j| lay.first[j] <= v).expect("entry 0 is in leaf 0");
-        let local = v - lay.first[j];
-        let slot = match g.into {
-            Some((i, s, eb)) if i == j && s == local => return eb,
-            Some((i, s, _)) if i == j && s < local => local - 1,
-            _ => local,
-        };
-        self.leaf(g.ids[j]).span_bytes(slot, slot + 1)
-    }
-
     /// The entry boundary nearest `want` bytes into the group and the
     /// bytes before it, walking in from the nearer end of its leaf.
     fn nearest_cut(&self, g: &Group, lay: &Layout, want: usize) -> (usize, usize) {
@@ -84,7 +72,16 @@ impl Tree {
         if want >= bhi {
             return (hi, bhi);
         }
-        let span = |i: usize| self.span_in(g, lay, i);
+        let (l, into) = (self.leaf(g.ids[j]), g.into.filter(|&(i, _, _)| i == j));
+        // bytes of the group's entry `i`, which sits in this leaf
+        let span = |i: usize| {
+            let local = i - lo;
+            match into {
+                Some((_, s, eb)) if s == local => eb,
+                Some((_, s, _)) if s < local => l.span_bytes(local - 1, local),
+                _ => l.span_bytes(local, local + 1),
+            }
+        };
         let (mut i, mut acc) = (lo, blo);
         if want - blo <= bhi - want {
             let mut s = span(i);

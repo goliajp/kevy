@@ -439,13 +439,17 @@ impl Leaf {
     /// they are (an out-of-line slab moves with them); `into` must have room.
     pub(crate) fn move_span(&mut self, from: usize, to: usize, into: &mut Leaf, dst: usize) {
         let k = to - from;
-        let bytes: usize = (from..to).map(|i| self.tail_len(i).0).sum();
+        let mut lens = [0u16; BUF / (SLOT + 1)]; // a tail is one tag byte at least
+        for (j, i) in (from..to).enumerate() {
+            lens[j] = self.tail_len(i).0 as u16;
+        }
+        let bytes: usize = lens[..k].iter().map(|&l| usize::from(l)).sum();
         let fit = into.make_room(k * SLOT + bytes);
         debug_assert!(fit, "the receiving leaf has room");
         let n = into.len();
         into.buf.copy_within(dst * SLOT..n * SLOT, (dst + k) * SLOT);
         for (j, i) in (from..to).enumerate() {
-            let (start, len) = (self.off(i), self.tail_len(i).0);
+            let (start, len) = (self.off(i), usize::from(lens[j]));
             let top = usize::from(into.top) - len;
             into.buf[top..top + len].copy_from_slice(&self.buf[start..start + len]);
             into.top = top as u16;
