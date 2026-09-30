@@ -399,6 +399,7 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
         .unwrap_or(0);
     let views: Vec<kevy_store::SnapshotView> =
         guards.iter().map(|g| g.store.collect_snapshot()).collect();
+    let aux = guards.first().and_then(|g| crate::shard_restore::catalog_aux(g));
     drop(guards);
 
     struct Multi<'v>(&'v [kevy_store::SnapshotView]);
@@ -418,6 +419,8 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
     // Serialize the whole snapshot into memory first, matching the
     // server pump's posture (streaming straight to the socket is a
     // follow-up on both ends).
-    let _ = kevy_persist::write_snapshot_to(&Multi(&views), &mut payload);
+    let all = Multi(&views);
+    let image = kevy_persist::WithAux::new(&all, aux.as_ref());
+    let _ = kevy_persist::write_snapshot_to(&image, &mut payload);
     (payload, ack)
 }

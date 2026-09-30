@@ -12,13 +12,13 @@ use crate::store::Shards;
 use crate::store_glue::lock_write;
 
 /// The engine backbone [`crate::store::Store::open`] stands on: the
-/// shards, the boot report, the table registry, and the reaper.
+/// shards, the boot report, the catalog registries, and the reaper.
 /// Split from `open_inner` for the fn-length rule.
 pub(crate) struct Backbone {
     pub(crate) shards: Shards,
     pub(crate) open_report: crate::metric::OpenReport,
     #[cfg(feature = "index")]
-    pub(crate) tables: Arc<crate::ops_table::TableReg>,
+    pub(crate) catalog: Arc<crate::catalog_record::CatalogRegs>,
     pub(crate) reaper_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) reaper_join: Option<std::thread::JoinHandle<()>>,
 }
@@ -37,22 +37,26 @@ pub(crate) fn claim_dir(
     })
 }
 
+/// The registries are in every shard, holding the restored catalog,
+/// before anything that snapshots, rewrites or replicates a shard starts.
 pub(crate) fn boot_backbone(config: &crate::config::Config) -> KevyResult<Backbone> {
-    let (shards, open_report) = crate::shard::build_shards(config)?;
+    let (shards, open_report, restored) = crate::shard::build_shards(config)?;
     let shards: Shards = Arc::new(shards);
     #[cfg(feature = "index")]
-    let tables = Arc::new(crate::ops_table::TableReg::default());
+    let catalog = wire_registries(&shards, restored.as_ref());
+    #[cfg(not(feature = "index"))]
+    drop(restored);
     let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(
         config,
         &shards,
         #[cfg(feature = "index")]
-        &tables,
+        &catalog.tables,
     )?;
     Ok(Backbone {
         shards,
         open_report,
         #[cfg(feature = "index")]
-        tables,
+        catalog,
         reaper_stop,
         reaper_join,
     })
@@ -133,20 +137,23 @@ pub(crate) fn wire_blocker(shards: &Shards) -> Arc<crate::ops_blocking::Blocker>
     blocker
 }
 
-/// Create the store-level index + view catalogs and hand every shard's
-/// `Inner` a clone.
+/// Create the store-level catalog registries holding the newest catalog
+/// frame the restore met, and hand every shard's `Inner` a clone.
 #[cfg(feature = "index")]
-pub(crate) fn wire_registries(
+fn wire_registries(
     shards: &Shards,
-) -> (Arc<crate::ops_index::IndexReg>, Arc<crate::ops_view::ViewReg>) {
-    let indexes = Arc::new(crate::ops_index::IndexReg::default());
-    let views = Arc::new(crate::ops_view::ViewReg::default());
+    restored: Option<&kevy_resp::Argv>,
+) -> Arc<crate::catalog_record::CatalogRegs> {
+    let tables = Arc::new(crate::ops_table::TableReg::default());
+    let regs = Arc::new(crate::catalog_record::CatalogRegs::new(tables));
+    regs.adopt(restored, false);
     for shard in shards.iter() {
         let mut g = lock_write(shard);
-        g.idx_reg = Some(indexes.clone());
-        g.view_reg = Some(views.clone());
+        g.idx_reg = Some(regs.indexes.clone());
+        g.view_reg = Some(regs.views.clone());
+        g.catalog = Some(regs.clone());
     }
-    (indexes, views)
+    regs
 }
 
 /// The engine-lifetime `DropGuard` (owner of the boot report and the
@@ -169,7 +176,7 @@ pub(crate) fn build_guard(
         Arc<std::sync::Mutex<kevy_replicate::feed::FeedSource>>,
     >,
     config: &crate::config::Config,
-    #[cfg(feature = "index")] tables: &Arc<crate::ops_table::TableReg>,
+    #[cfg(feature = "index")] catalog: &Arc<crate::catalog_record::CatalogRegs>,
     #[cfg(feature = "persist")] dir_lock: Option<kevy_persist::DirLock>,
 ) -> Arc<crate::store_inner::DropGuard> {
     #[cfg(any(target_arch = "wasm32", not(feature = "replicate")))]
@@ -178,7 +185,7 @@ pub(crate) fn build_guard(
         shutdown: std::sync::atomic::AtomicBool::new(false),
         open_report: open_report.clone(),
         #[cfg(feature = "index")]
-        tables: tables.clone(),
+        catalog: catalog.clone(),
         reaper_stop,
         reaper_join: std::sync::Mutex::new(reaper_join),
         shards_for_flush: shards.clone(),

@@ -5,6 +5,8 @@
 
 use crate::store::Store;
 
+use super::kevy_err;
+
 use kevy_index::{IndexSpec, IndexValue};
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
@@ -18,7 +20,10 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             if argv.len() != 2 {
                 encode_error(out, "ERR usage: IDX.DROP name");
             } else {
-                encode_integer(out, i64::from(s.idx_drop(&argv[1])));
+                match s.idx_drop(&argv[1]) {
+                    Ok(hit) => encode_integer(out, i64::from(hit)),
+                    Err(e) => kevy_err(out, &e),
+                }
             }
         }
         b"IDX.LIST" => cmd_idx_list(s, out),

@@ -178,7 +178,13 @@ impl Store {
             &[],
         );
         if count >= kevy_index::AUTODECLARE_AFTER {
-            self.auto_declare(name, shape, count);
+            // a replica takes its catalog from its primary and declares
+            // nothing; a record that fails is the log's failure, which
+            // the next write meets too
+            drop(self.catalog_change(|| {
+                self.auto_declare(name, shape, count);
+                Ok(())
+            }));
         }
     }
 
@@ -210,18 +216,15 @@ impl Store {
         if crate::ops_index_sync::tier_floor_check(&self.shards).is_err() {
             return;
         }
-        self.idx_drop(&path);
+        self.drop_index(&path);
         if self.register_spec(ispec).is_err() {
             return;
         }
-        {
-            let mut g = self.tables.catalog.write().unwrap_or_else(PoisonError::into_inner);
-            g.drop_table(&spec.name);
-            if g.create(spec).is_err() {
-                return;
-            }
-        }
-        self.persist_table_sidecar();
+        let mut g = self.tables.catalog.write().unwrap_or_else(PoisonError::into_inner);
+        g.drop_table(&spec.name);
+        // the declaration the catalog admitted, with only its auto part
+        // grown
+        drop(g.create(spec));
     }
 
     /// [`Self::observe_refused`] when `r` is a no-such-index refusal

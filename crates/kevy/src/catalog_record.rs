@@ -208,9 +208,9 @@ pub(crate) fn load_snapshot_aux(state: &RuntimeState, aux: Option<&Argv>, full_s
 }
 
 /// A shard finished its startup restore; no shard serves until all have.
-/// The last one settles the files a 6.4 directory kept its catalog in: superseded when the log or snapshot
-/// held a catalog, otherwise read once and recorded, then removed as soon
-/// as the record is on disk.
+/// The last one settles the files a 6.4 directory kept its catalog in:
+/// superseded when the log or snapshot held a catalog, otherwise read
+/// once and recorded, then removed as soon as the record is on disk.
 pub(crate) fn shard_restored(state: &RuntimeState, record: &mut dyn FnMut(&Argv) -> bool) {
     let r = &state.catalogs.record;
     if r.restored.fetch_add(1, Ordering::AcqRel) + 1 != state.nshards() {
@@ -230,17 +230,38 @@ pub(crate) fn shard_restored(state: &RuntimeState, record: &mut dyn FnMut(&Argv)
     }
 }
 
+/// What one sidecar holds: empty when absent, `None` when present but
+/// unreadable.
+fn read_sidecar<T: Default>(
+    dir: &std::path::Path,
+    name: &str,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Option<T> {
+    match std::fs::read_to_string(dir.join(name)) {
+        Ok(text) => parse(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(T::default()),
+        Err(_) => None,
+    }
+}
+
 /// Install the catalog the sidecars in `dir` hold and record it; `true`
-/// once it is on disk in the log (the sidecars are then redundant).
+/// once it is on disk in the log (the sidecars are then redundant). A
+/// sidecar that does not parse is left in place for someone to look at.
 fn import(
     state: &RuntimeState,
     dir: &std::path::Path,
     record: &mut dyn FnMut(&Argv) -> bool,
 ) -> bool {
-    let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
-    let mut icat = read(SIDECARS[0]).and_then(|t| Catalog::from_sidecar(&t)).unwrap_or_default();
-    let vcat = read(SIDECARS[1]).and_then(|t| ViewCatalog::from_sidecar(&t)).unwrap_or_default();
-    let tcat = read(SIDECARS[2]).and_then(|t| TableCatalog::from_sidecar(&t)).unwrap_or_default();
+    let icat = read_sidecar(dir, SIDECARS[0], Catalog::from_sidecar);
+    let vcat = read_sidecar(dir, SIDECARS[1], ViewCatalog::from_sidecar);
+    let tcat = read_sidecar(dir, SIDECARS[2], TableCatalog::from_sidecar);
+    let (Some(mut icat), Some(vcat), Some(tcat)) = (icat, vcat, tcat) else {
+        eprintln!(
+            "kevy: a catalog file in {} does not parse; it stays in place, not imported",
+            dir.display()
+        );
+        return false;
+    };
     if icat.is_empty() && vcat.is_empty() && tcat.is_empty() {
         return true;
     }

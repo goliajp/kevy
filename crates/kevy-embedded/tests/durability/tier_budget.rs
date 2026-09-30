@@ -268,7 +268,7 @@ fn the_reserved_floor_cache_never_serves_stale_floors() {
     let after_flush = reserved(&s);
     assert!(after_flush < after_writes, "FLUSHALL resets the segments and the cache sees it");
     // Drop (catalog chokepoint) — back to zero.
-    assert!(s.idx_drop(b"by_score"));
+    assert!(s.idx_drop(b"by_score").unwrap());
     s.tick();
     assert_eq!(reserved(&s), 0, "no index, no floor");
 }

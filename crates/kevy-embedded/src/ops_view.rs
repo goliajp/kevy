@@ -7,20 +7,6 @@
 //! synchronous builds, typed API (`Tree` passed directly — no text
 //! grammar in-process).
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here.
-#![cfg_attr(
-    feature = "persist",
-    expect(
-        clippy::let_underscore_must_use,
-        reason = "the catalog has no other home; an open question"
-    )
-)]
-
 use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
@@ -112,13 +98,21 @@ impl ShardViews {
 /// ```
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
 
-#[cfg(feature = "persist")]
-const SIDECAR: &str = "view-catalog.meta";
-
 impl Store {
     /// Declare a view (typed tree; `via` is not supported embedded —
     /// read fields in-process). Builds synchronously.
     pub fn view_create(
+        &self,
+        name: &[u8],
+        tree: Tree,
+        order_by: &[u8],
+        order: SortOrder,
+        mode: ViewMode,
+    ) -> KevyResult<()> {
+        self.catalog_change(|| self.create_view(name, tree, order_by, order, mode))
+    }
+
+    fn create_view(
         &self,
         name: &[u8],
         tree: Tree,
@@ -135,7 +129,6 @@ impl Store {
             cat.create(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             *ver += 1;
         }
-        self.persist_view_sidecar();
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
@@ -159,9 +152,10 @@ impl Store {
         Ok(())
     }
 
-    /// Drop a view; `false` if absent.
-    pub fn view_drop(&self, name: &[u8]) -> bool {
-        let hit = {
+    /// Drop a view; `false` if absent. Refused on a replica and after
+    /// [`Store::shutdown`], like every write.
+    pub fn view_drop(&self, name: &[u8]) -> KevyResult<bool> {
+        self.catalog_change(|| {
             let mut g =
                 self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
@@ -169,12 +163,8 @@ impl Store {
             if hit {
                 *ver += 1;
             }
-            hit
-        };
-        if hit {
-            self.persist_view_sidecar();
-        }
-        hit
+            Ok(hit)
+        })
     }
 
     /// Ordered page across shards (`after` resumes exclusively; DESC
@@ -236,38 +226,6 @@ impl Store {
     /// Summed member count across shards.
     pub fn view_count(&self, name: &[u8]) -> KevyResult<u64> {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)
-    }
-
-    #[cfg(feature = "persist")]
-    fn persist_view_sidecar(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tmp = dir.join("view-catalog.meta.tmp");
-        if std::fs::write(&tmp, g.1.to_sidecar()).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-        }
-    }
-
-    /// Without `persist` there is no data dir — no sidecar to write
-    /// or load; both halves are no-ops.
-    #[cfg(not(feature = "persist"))]
-    fn persist_view_sidecar(&self) {}
-
-    #[cfg(not(feature = "persist"))]
-    pub(crate) fn view_boot(&self) {}
-
-    /// Boot half — load the persisted view catalog.
-    #[cfg(feature = "persist")]
-    pub(crate) fn view_boot(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-            && let Some(cat) = ViewCatalog::from_sidecar(&text)
-            && !cat.is_empty()
-        {
-            let mut g =
-                self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-            *g = (g.0 + 1, cat);
-        }
     }
 }
 
