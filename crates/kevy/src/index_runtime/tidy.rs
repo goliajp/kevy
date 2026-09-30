@@ -16,7 +16,7 @@ use super::{BuildState, ShardIndexes};
 /// Time one shard tick spends packing index leaves at most.
 const TICK_BUDGET: Duration = Duration::from_micros(500);
 /// Leaves one segment's step visits between clock reads.
-const STEP_LEAVES: usize = 16;
+const STEP_LEAVES: usize = 4;
 
 thread_local! {
     static NEXT: Cell<usize> = const { Cell::new(0) };

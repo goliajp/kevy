@@ -10,7 +10,7 @@ use crate::ops_index::ShardSegs;
 #[cfg(not(target_arch = "wasm32"))]
 const TICK_BUDGET: std::time::Duration = std::time::Duration::from_micros(500);
 /// Leaves one segment's step visits between clock reads.
-const STEP_LEAVES: usize = 16;
+const STEP_LEAVES: usize = 4;
 
 /// One tick's packing on this shard.
 #[cfg(not(target_arch = "wasm32"))]
