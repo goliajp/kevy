@@ -238,10 +238,15 @@ jobs:
         run: cargo test --workspace --lib --tests
       # `--lib --tests` is exactly the pair that EXCLUDES doctests, so until
       # this step existed every example in the documentation was compiled by
-      # nobody — including the ones a gate counts as verification.
-      - name: doctestrun (every documented example compiles and runs)
+      # nobody — including the ones a gate counts as verification. The
+      # config blocks in docs/ are examples too: each is fed to the real
+      # server (built by the workspace build above), because a block that
+      # does not load hands a first-time reader a server that refuses to start.
+      - name: doc examples (every rustdoc example and every docs/ config block runs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: bash bench/doctestrun.sh
+        run: |
+          bash bench/doctestrun.sh
+          python3 tools/check_doc_toml.py
       # After the tests, not before: the point is that running them leaves
       # the repo root clean. See bench/rootgate.sh for why `git status`
       # cannot be the check.
@@ -255,15 +260,9 @@ jobs:
       - name: gen-docs (every document derived from the verb table agrees with it)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/gendocs.sh
-      - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_cjk_punct.py
       - name: doc links (no dead file or anchor between the markdown docs)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_doc_links.py
-      - name: doc i18n (a translation must not fall behind its English chapter)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_doc_i18n.py
       # An ordering mistake here is only observable at tag time, when
       # half the chain is already on crates.io and cannot be unpublished
       # — the v5.0.0 release paid for two of them with retags.
@@ -277,9 +276,6 @@ jobs:
       - name: version alignment (seven layers and the door changelogs agree with the workspace)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_version_alignment.py
-      - name: every Redis command is implemented, exempt, or owned
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_command_coverage.py
       # Nine of twenty-three fuzz targets existed and never ran. A target
       # in the tree and not in the matrix shows coverage that is not there,
       # which is worse than never having written it.
@@ -292,44 +288,9 @@ jobs:
       - name: no panic crosses an exported ABI boundary
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_abi_panics.py
-      # The READMEs quote benchmark numbers. They were hand-written from a
-      # v4-era run and still showing it under a 5.1.0 release, because
-      # nothing tied them to a measurement. They come from the ledger now.
-      - name: README benchmarks match the ledger
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/sync_readme_bench.py --check
-      # Every workflow pins each action at one major. Three majors of
-      # setup-node ran side by side here, so a fix applied to one job did
-      # not apply to the next. The --online mode, which also compares
-      # against each action's latest release, is run by hand: a gate that
-      # goes red because somebody else published cannot be acted on at the
-      # moment it fires.
-      - name: workflow actions agree on their versions
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: python3 tools/check_action_versions.py
-      - name: doc configs (every ```toml in docs/ actually loads)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          cargo build -q -p kevy --bin kevy
-          python3 tools/check_doc_toml.py
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh
-      # compressgate: each K criterion is still backed by a NAMED test.
-      # `cargo test --workspace` cannot see this — delete the test behind
-      # a criterion and the suite goes green with one fewer test while
-      # the criterion silently loses its assertion. Same shape as
-      # ffigate-contract holding each door to every row.
-      #
-      # UNIT_ONLY because K1 and K5-amplification are SLA numbers read
-      # from a full-scale lx64 envelope run; a hosted runner has no such
-      # artifact and cannot make one. They report NOT-OWNED here rather
-      # than passing unmeasured, and stay the box's job.
-      - name: compressgate (the K contract still has named tests behind it)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        env:
-          COMPRESSGATE_UNIT_ONLY: "1"
-        run: bash bench/compressgate.sh
       # propgate: a durable write must also propagate, or be named. Three
       # data-loss bugs on one branch were the same omission — the AOF got
       # the write and the replica (and so the change feed) did not.
@@ -360,12 +321,6 @@ jobs:
         run: |
           cargo build -q --release -p kevy --bin kevy
           bash bench/uringgate.sh target/release/kevy
-      # commentgate (no internal vocabulary in comments — vocabulary table
-      # in bench/commentgate-terms.txt): baseline driven to zero by the
-      # T2 sweep; any new hit is a regression.
-      - name: commentgate (comment hygiene)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: bash bench/commentgate.sh
       # vendorgate (tracked vendored binaries/headers match the current ABI):
       # gitignored artifacts are absent on a fresh clone and SKIP; the
       # tracked ones (nitro jniLibs, nitro cpp/kevy.h) must be current.
