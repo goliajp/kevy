@@ -1,8 +1,9 @@
 """perfgate callgrind: exact instructions per op, per function, A against B.
 
-Each side runs one shard under `valgrind --tool=callgrind` with collection
-off; the angle's keys are written first, then collection is switched on for
-exactly OPS requests from redis-benchmark and switched off again. The
+Each side runs one shard under `valgrind --tool=callgrind` with
+instrumentation off; the angle's keys are written first, then
+instrumentation is switched on for exactly OPS requests from
+redis-benchmark and the counts are dumped when they are done. The
 counts do not depend on the box's load, its clock or its neighbours, so the
 same build gives the same numbers on any quiet or busy machine. It answers
 "did the instructions per op change, and where"; it says nothing about
@@ -38,7 +39,8 @@ def function_name(field):
 
 def annotate(path):
     """{function: Ir} of one callgrind output, exclusive counts."""
-    out = subprocess.run(["callgrind_annotate", "--inclusive=no", "--threshold=100", str(path)],
+    out = subprocess.run(["callgrind_annotate", "--inclusive=no", "--threshold=100", "--auto=no",
+                          str(path)],
                          capture_output=True, text=True, check=True).stdout
     total, funcs = None, {}
     for line in out.splitlines():
@@ -75,7 +77,7 @@ def one(side, angle, ops, port, work):
     warm_cmd, load_cmd = ang.CALLGRIND[angle]
     out = work / f"cg.{angle}.{side['name']}"
     env = dict(side["env"], KEVY_IO_URING="0")
-    proc = subprocess.Popen(["valgrind", "--tool=callgrind", "--collect-atstart=no",
+    proc = subprocess.Popen(["valgrind", "--tool=callgrind", "--instr-atstart=no",
                              f"--callgrind-out-file={out}", side["bin"], "--threads", "1",
                              "--port", str(port), "--no-aof", "--dir", str(work / "data")],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -86,13 +88,14 @@ def one(side, angle, ops, port, work):
         c0 = int(pm.info_field(port, "total_commands_processed"))
         control(proc.pid, "-i", "on")
         ang.run_quiet(ang.bench(port, *load_cmd.split(), n=ops, keyspace=100_000, conns=4, pipe=16))
-        control(proc.pid, "-i", "off")
+        control(proc.pid, "-d")
         c1 = int(pm.info_field(port, "total_commands_processed"))
     finally:
         proc.terminate()
         proc.wait()
         shutil.rmtree(work / "data", ignore_errors=True)
-    total, funcs = annotate(out)
+    # the dump is <out>.1; <out> itself is written at exit and holds the rest
+    total, funcs = annotate(pathlib.Path(f"{out}.1"))
     return ops, c1 - c0, total, funcs
 
 
