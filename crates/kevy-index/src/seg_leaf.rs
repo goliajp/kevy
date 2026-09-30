@@ -397,6 +397,19 @@ impl Leaf {
         self.n += 1;
     }
 
+    /// Copy entry `j` of `from` in at slot `i`, tail bytes as they are
+    /// (an out-of-line slab moves with them).
+    fn copy_entry(&mut self, i: usize, from: &Leaf, j: usize) {
+        let start = from.off(j);
+        let (bytes, _) = from.tail_len(j);
+        let fit = self.make_room(SLOT + bytes);
+        debug_assert!(fit, "the receiving leaf has room");
+        let top = usize::from(self.top) - bytes;
+        self.buf[top..top + bytes].copy_from_slice(&from.buf[start..start + bytes]);
+        self.top = top as u16;
+        self.put_slot(i, from.head(j), top);
+    }
+
     /// Take entry `i` out, releasing any out-of-line slab.
     pub(crate) fn remove_at(&mut self, i: usize, ov: &mut Overflow) {
         let (bytes, slab) = self.tail_len(i);
@@ -435,30 +448,13 @@ impl Leaf {
         self.dead = 0;
     }
 
-    /// Move entries `from..to` into `into` at slot `dst`, tail bytes as
-    /// they are (an out-of-line slab moves with them); `into` must have room.
-    pub(crate) fn move_span(&mut self, from: usize, to: usize, into: &mut Leaf, dst: usize) {
-        let k = to - from;
-        let mut lens = [0u16; BUF / (SLOT + 1)]; // a tail is one tag byte at least
-        for (j, i) in (from..to).enumerate() {
-            lens[j] = self.tail_len(i).0 as u16;
+    /// Move entries `at..` to the end of `into` (which must have room).
+    pub(crate) fn move_tail_to(&mut self, at: usize, into: &mut Leaf) {
+        for j in at..self.len() {
+            into.copy_entry(into.len(), self, j);
         }
-        let bytes: usize = lens[..k].iter().map(|&l| usize::from(l)).sum();
-        let fit = into.make_room(k * SLOT + bytes);
-        debug_assert!(fit, "the receiving leaf has room");
-        let n = into.len();
-        into.buf.copy_within(dst * SLOT..n * SLOT, (dst + k) * SLOT);
-        for (j, i) in (from..to).enumerate() {
-            let (start, len) = (self.off(i), usize::from(lens[j]));
-            let top = usize::from(into.top) - len;
-            into.buf[top..top + len].copy_from_slice(&self.buf[start..start + len]);
-            into.top = top as u16;
-            let s = (dst + j) * SLOT;
-            into.buf[s..s + 8].copy_from_slice(&self.head(i).to_be_bytes());
-            into.buf[s + 8..s + 10].copy_from_slice(&(top as u16).to_le_bytes());
-        }
-        into.n += k as u16;
-        self.drop_slots(from, to, bytes);
+        let bytes = (at..self.len()).map(|i| self.tail_len(i).0).sum();
+        self.drop_slots(at, self.len(), bytes);
     }
 
     /// Remove the first `k` entries, releasing their slabs.
@@ -481,11 +477,6 @@ impl Leaf {
     /// Page bytes entries `from..to` take, slots included.
     pub(crate) fn span_bytes(&self, from: usize, to: usize) -> usize {
         (from..to).map(|i| SLOT + self.tail_len(i).0).sum()
-    }
-
-    /// Page bytes `e` would take here, slot included.
-    pub(crate) fn span_of(&self, e: &Ent<'_>) -> usize {
-        SLOT + self.tail_bytes(e.key.len(), e.payload.len(), e.vlen).0
     }
 
     /// The slot number of every entry's out-of-line slab, for checks.
