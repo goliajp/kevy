@@ -160,3 +160,21 @@ fn put_sep(inners: &mut [Inner], sep_bytes: &mut usize, node: u32, at: usize, pa
     s[parts[0].len()..].copy_from_slice(parts[1]);
     n.heads[at] = head16_of(s);
 }
+
+#[cfg(feature = "tidy-trace")]
+impl Tree {
+    pub(crate) fn tidy_probe(&self, t: &Tidy) -> crate::segment_tidy::TidyProbe {
+        crate::segment_tidy::TidyProbe {
+            entries: self.len,
+            leaves: self.live_leaves(),
+            inners: self.live_inners(),
+            height: self.height,
+            sep_bytes: self.sep_bytes,
+            overflow_bytes: self.ov.bytes,
+            free_list_cap: self.free_leaves.capacity(),
+            hand_cap: t.hand.capacity(),
+            lap_moved: t.moved,
+            resting: t.rest.is_some(),
+        }
+    }
+}

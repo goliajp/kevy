@@ -164,3 +164,6 @@ const _: () = {
     send_sync::<ColdBloom>();
     send_sync::<WindowAudit>();
 };
+
+#[cfg(feature = "tidy-trace")]
+pub use segment_tidy::TidyProbe;

@@ -335,3 +335,8 @@ const _: () = {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(feature = "thread-usage", any(target_os = "linux", target_os = "macos")))]
+mod usage;
+#[cfg(all(feature = "thread-usage", any(target_os = "linux", target_os = "macos")))]
+pub use usage::{ThreadUsage, thread_usage};
