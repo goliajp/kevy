@@ -31,8 +31,19 @@ impl Node {
         Self::primary_with(nshards, dir, true)
     }
 
+    /// [`Self::primary`] again on the ports of a primary that stopped, so
+    /// its replicas reconnect to it.
+    #[allow(dead_code)] // not every test binary restarts a primary
+    pub fn primary_restarted(port: u16, nshards: usize, dir: &TmpDir) -> Self {
+        Self::primary_at(port, nshards, dir, false)
+    }
+
     fn primary_with(nshards: usize, dir: &TmpDir, shard_ports: bool) -> Self {
         let base = kevy_testnet::free_port_block(2 * nshards);
+        Self::primary_at(base, nshards, dir, shard_ports)
+    }
+
+    fn primary_at(base: u16, nshards: usize, dir: &TmpDir, shard_ports: bool) -> Self {
         let (port, replication_base) = (base, base + 1);
         let cluster_base = base + 1 + nshards as u16;
         let shard_ports: Vec<u16> = if shard_ports {

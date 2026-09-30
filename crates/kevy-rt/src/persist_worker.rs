@@ -246,8 +246,16 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn finish_restore(&mut self) {
         self.store.sweep_orphan_row_segs();
         self.store.demote_to_watermark();
-        let (aof, id) = (&mut self.aof, self.id);
-        self.commands.on_restored(&mut |f| crate::persist_jobs::record_durably(aof, id, f));
+        // what the restore records goes to the log and to the replicas, as
+        // any recorded change does: a replica that resumes the stream
+        // after this start takes no snapshot that would carry it
+        let (aof, feed, id) = (&mut self.aof, &mut self.replicate, self.id);
+        self.commands.on_restored(&mut |f| {
+            if let Some(src) = feed.as_mut().map(|f| f.source_mut()) {
+                src.push_mutation(f);
+            }
+            crate::persist_jobs::record_durably(aof, id, f)
+        });
         self.restore_gate.arrive(self.id);
         self.restore_gate.wait();
     }
