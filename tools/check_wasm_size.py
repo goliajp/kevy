@@ -9,8 +9,9 @@ it again — the same way the site said 4.0 while shipping 5.1.0.
 
 So it is measured here, from the artifact the npm package would carry, and
 compared against every place the number is written down. The tolerance is
-10%: gzip output moves with the zlib version, but by a percent or two, not
-by ten. It was 25% at first, and 25% was too kind — docs/wasm.md said "416
+3%: gzip output moves with the zlib version, but by a percent or two. It
+was 10% until a 557 KB claim sat beside a 539 KB module for a release, and
+25% before that, which was worse — docs/wasm.md said "416
 KB uncompressed" for a 1442 KB module, and 416 sits inside 25% of the 481
 KB compressed figure, so the gate read a number that was wrong about a
 different quantity as a number that was nearly right about this one. A
@@ -66,7 +67,7 @@ NEAR = re.compile(r"wasm|WebAssembly|gzip|gzipped|packed|回線|ブラウザ|浏
 # `max(512 KB, ...)`) is a setting, not the size of anything.
 NOT_OURS = re.compile(r"IoT|no_std|chip|チップ|芯片|core tier|`core`|max\(", re.I)
 
-TOLERANCE = 0.10
+TOLERANCE = 0.03
 PACKED = re.compile(r"packed|パック|打包", re.I)
 
 
