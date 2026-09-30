@@ -136,6 +136,8 @@ mod ops_index_changes;
 mod ops_index_cold;
 #[cfg(feature = "index")]
 mod ops_index_sync;
+#[cfg(feature = "index")]
+mod ops_index_tidy;
 #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
 mod ops_index_window;
 mod ops_keyspace;

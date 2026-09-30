@@ -134,6 +134,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
             freeze_text_batches(st, table, keys, dir);
         }
     }
+    tidy::tick(st);
 }
 
 /// Σ approximate heap bytes of this shard's index segments, every
@@ -473,6 +474,7 @@ use row_apply::advance_backfill;
 pub(crate) use row_apply::{RowValue, row_value};
 mod changes;
 mod seg_new;
+mod tidy;
 use seg_new::{new_ann_seg, new_scalar_seg, new_text_seg};
 
 #[cfg(test)]
