@@ -126,9 +126,16 @@ fi
 
 # ---- binaries -------------------------------------------------------------
 
-TREE=$(git rev-parse --short=12 HEAD)
-DIRTY=$(git status --porcelain -- crates Cargo.toml Cargo.lock | wc -l | tr -d ' ')
-[ "$DIRTY" != 0 ] && TREE="$TREE-dirty$(git diff HEAD -- crates Cargo.toml Cargo.lock | cksum | cut -d' ' -f1)"
+if git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    TREE=$(git rev-parse --short=12 HEAD)
+    DIRTY=$(git status --porcelain -- crates Cargo.toml Cargo.lock | wc -l | tr -d ' ')
+    [ "$DIRTY" != 0 ] && TREE="$TREE-dirty$(git diff HEAD -- crates Cargo.toml Cargo.lock | cksum | cut -d' ' -f1)"
+else
+    # a synced copy has no .git; key the cache by the sources themselves, or
+    # an unchanged key would hand back binaries built from older code
+    TREE=src$(find crates -type f \( -name '*.rs' -o -name Cargo.toml \) -print0 | sort -z |
+        xargs -0 cksum | cat - Cargo.toml Cargo.lock | cksum | cut -d' ' -f1)
+fi
 FLAVOUR=release
 if [ "${REPACK_FAST_BUILD:-0}" = 1 ]; then
     export CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
