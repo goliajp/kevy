@@ -61,6 +61,7 @@ class Server:
         self.proc = subprocess.Popen(argv, env=env, stdout=self.log, stderr=subprocess.STDOUT,
                                      preexec_fn=lambda: os.sched_setaffinity(0, cpus))
         ports = [PORT] + ([PORT + 1 + i for i in range(topo["srv_threads"])] if cluster else [])
+        self.ports = ports
         deadline = time.time() + 20
         while not all(pm.ping(p) for p in ports):
             if self.proc.poll() is not None or time.time() > deadline:
@@ -78,6 +79,19 @@ class Server:
                 self.proc.kill()
                 self.proc.wait()
         self.log.close()
+        # an io_uring server's listeners outlive its exit by a few ms, and the
+        # next side binds the same ports at once
+        deadline = time.time() + 2
+        while any(listening(p) for p in self.ports) and time.time() < deadline:
+            time.sleep(0.01)
+
+
+def listening(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+        return True
+    except OSError:
+        return False
 
 
 def stop_all(procs):

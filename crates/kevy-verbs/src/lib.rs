@@ -39,6 +39,7 @@ mod keyspace;
 mod list;
 mod list_move;
 mod record;
+mod record_group;
 mod record_read;
 pub mod reply;
 mod set;
@@ -167,10 +168,11 @@ pub enum Effect {
     /// let effect = exec(&mut store, b"XCLAIM", &claim, &mut Vec::new()).unwrap();
     /// assert!(matches!(effect, Effect::RecordClaim(_)));
     /// let frames = kevy_verbs::aof::deferred_frames(&mut store, &claim, &effect);
-    /// // the claim, then b's times as the claim left them
-    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[0][i]).collect();
+    /// // b made, the claim, then b's times as the claim left them
+    /// assert_eq!(&frames[0][1], b"CREATECONSUMER");
+    /// let head: Vec<&[u8]> = (0..6).map(|i| &frames[1][i]).collect();
     /// assert_eq!(head, [&b"XCLAIM"[..], b"s", b"g", b"b", b"0", b"1-1"]);
-    /// assert_eq!(&frames[1][0], b"XINTERNAL.CONSUMERSEEN");
+    /// assert_eq!(&frames[2][0], b"XINTERNAL.CONSUMERSEEN");
     /// ```
     RecordClaim(Box<aof::Claim>),
     /// Record a one-stream `XREADGROUP` as what it left, not as a read a
@@ -194,8 +196,10 @@ pub enum Effect {
     /// assert_eq!(effect, Effect::RecordRead(kevy_store::StreamId::MIN, kevy_verbs::aof::Consumer::Created));
     /// let frames = kevy_verbs::aof::deferred_frames(&store, &read, &effect);
     /// let verbs: Vec<&[u8]> = frames.iter().map(|f| &f[0]).collect();
-    /// // the group's move, the delivery, then the consumer's times
-    /// assert_eq!(verbs, [&b"XGROUP"[..], b"XCLAIM", b"XINTERNAL.CONSUMERSEEN"]);
+    /// // the group's move and read counter, the consumer made, the
+    /// // delivery, then the consumer's times
+    /// let group = &b"XGROUP"[..];
+    /// assert_eq!(verbs, [group, group, group, b"XCLAIM", b"XINTERNAL.CONSUMERSEEN"]);
     /// ```
     RecordRead(StreamId, aof::Consumer),
     /// [`Effect::RecordRead`] for an `XREADGROUP` over several streams:
@@ -240,9 +244,9 @@ pub enum Effect {
     /// assert_eq!(&frames[0][0], b"XCLAIM", "the delivery, with its count now 2");
     /// ```
     RecordHistory(Box<aof::History>),
-    /// Record an `XGROUP CREATECONSUMER` that created its consumer as
-    /// `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the time it was
-    /// created at, so a replay does not create it at its own. Carries no
+    /// Record an `XGROUP CREATECONSUMER` that created its consumer as the
+    /// command, then `XINTERNAL.CONSUMERSEEN key group consumer t`, `t` the
+    /// time it was created at, so a replay does not keep its own. Carries no
     /// frame: a caller that records builds it with
     /// [`aof::deferred_frames`].
     ///
@@ -257,10 +261,30 @@ pub enum Effect {
     /// let create = argv("XGROUP CREATECONSUMER s g c");
     /// let effect = exec(&mut store, b"XGROUP", &create, &mut Vec::new()).unwrap();
     /// assert_eq!(effect, Effect::RecordSeen);
-    /// let frame = &kevy_verbs::aof::deferred_frames(&store, &create, &effect)[0];
+    /// let frame = &kevy_verbs::aof::deferred_frames(&store, &create, &effect)[1];
     /// assert_eq!((frame.len(), &frame[0]), (5, &b"XINTERNAL.CONSUMERSEEN"[..]));
     /// ```
     RecordSeen,
+    /// Record an `XGROUP CREATE` or `SETID` that set the group's read
+    /// counter (`ENTRIESREAD n`) as the same command without it, then
+    /// `XGROUP SETID key group id ENTRIESREAD n` alone: a reader that
+    /// does not know the option still takes the first. Carries no frame:
+    /// a caller that records builds them with [`aof::deferred_frames`].
+    ///
+    /// ```
+    /// use kevy_verbs::{Effect, exec};
+    /// if kevy_verbs::verb(b"XGROUP").is_none() {
+    ///     return; // built without the `streams-geo` feature
+    /// }
+    /// let mut store = kevy_store::Store::new();
+    /// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+    /// let create = argv("XGROUP CREATE s g $ MKSTREAM ENTRIESREAD 0");
+    /// let effect = exec(&mut store, b"XGROUP", &create, &mut Vec::new()).unwrap();
+    /// assert_eq!(effect, Effect::RecordGroup);
+    /// let frames = kevy_verbs::aof::deferred_frames(&store, &create, &effect);
+    /// assert_eq!((frames[0].len(), frames[1].len()), (6, 7), "CREATE … MKSTREAM, then SETID … ENTRIESREAD 0");
+    /// ```
+    RecordGroup,
     /// Record nothing, not even the argv: a random command that removed
     /// nothing, or a claim that changed nothing.
     ///
