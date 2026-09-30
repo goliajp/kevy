@@ -156,23 +156,30 @@ impl Segment {
     /// ```
     pub unsafe fn init(base: NonNull<u8>, owner: usize) -> NonNull<Segment> {
         let seg = base.as_ptr().cast::<Segment>();
+        // Field by field, never as one `Segment` value: the header is tens
+        // of KiB, and a by-value write builds it on the stack first. That
+        // frame then lands on every caller this is inlined into, and the
+        // allocation fast path paid a stack probe per call for it.
         // SAFETY: the caller guarantees an exclusive writable mapping
-        // large enough for the header, which lives in span 0.
+        // large enough for the header, which lives in span 0; every
+        // field is written before the reference below is made.
         unsafe {
-            seg.write(Segment {
-                magic: MAGIC,
-                next: core::ptr::null_mut(),
-                owner,
-                foreign: AtomicPtr::new(core::ptr::null_mut()),
-                queued: AtomicBool::new(false),
-                queued_next: AtomicPtr::new(core::ptr::null_mut()),
-                parked: ForeignTally::new(),
-                home: core::ptr::null(),
-                spans: [SpanMeta::new(); SPANS_PER_SEGMENT],
-                links: [crate::spanlist::SpanLink::NONE; SPANS_PER_SEGMENT],
-                stamps: [crate::purge::Stamps::NEW; SPANS_PER_SEGMENT],
-            });
-            (*seg).home = &raw const (*seg).parked;
+            (&raw mut (*seg).magic).write(MAGIC);
+            (&raw mut (*seg).next).write(core::ptr::null_mut());
+            (&raw mut (*seg).owner).write(owner);
+            (&raw mut (*seg).foreign).write(AtomicPtr::new(core::ptr::null_mut()));
+            (&raw mut (*seg).queued).write(AtomicBool::new(false));
+            (&raw mut (*seg).queued_next).write(AtomicPtr::new(core::ptr::null_mut()));
+            (&raw mut (*seg).parked).write(ForeignTally::new());
+            (&raw mut (*seg).home).write(&raw const (*seg).parked);
+            let spans = (&raw mut (*seg).spans).cast::<SpanMeta>();
+            let links = (&raw mut (*seg).links).cast::<crate::spanlist::SpanLink>();
+            let stamps = (&raw mut (*seg).stamps).cast::<crate::purge::Stamps>();
+            for i in 0..SPANS_PER_SEGMENT {
+                spans.add(i).write(SpanMeta::new());
+                links.add(i).write(crate::spanlist::SpanLink::NONE);
+                stamps.add(i).write(crate::purge::Stamps::NEW);
+            }
         }
         // SAFETY: just written.
         unsafe { NonNull::new_unchecked(seg) }
