@@ -86,6 +86,8 @@ pub struct Segment {
     /// Scratch for an order key and a payload, reused by every write.
     ebuf: Vec<u8>,
     pbuf: Vec<u8>,
+    /// The background repack's hand, driven by [`Segment::tidy`].
+    pub(crate) tidy: crate::seg_tree::Tidy,
 }
 
 impl Default for Segment {
@@ -95,7 +97,7 @@ impl Default for Segment {
 }
 
 impl Segment {
-    fn with_codec(codec: Codec) -> Segment {
+    pub(crate) fn with_codec(codec: Codec) -> Segment {
         Segment {
             tree: Tree::new(shape_of(&codec)),
             codec,
@@ -103,6 +105,7 @@ impl Segment {
             key_dir: None,
             ebuf: Vec::new(),
             pbuf: Vec::new(),
+            tidy: Default::default(),
         }
     }
 

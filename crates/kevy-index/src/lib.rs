@@ -57,6 +57,7 @@ mod segment;
 mod segment_claused;
 mod segment_claused_merge;
 mod segment_stats;
+mod segment_tidy;
 mod spec;
 mod spec_builder;
 mod spec_parts;
