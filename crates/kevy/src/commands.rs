@@ -91,6 +91,7 @@ impl Commands for KevyCommands {
 
     fn load_snapshot_aux(&self, frame: Option<&kevy_rt::Argv>, full_sync: bool) {
         crate::catalog_record::load_snapshot_aux(self.state(), frame, full_sync);
+        crate::table_runtime::on_snapshot_loaded(&self.ctx());
     }
 
     fn on_data_dir(&self, dir: &std::path::Path) {
@@ -178,7 +179,7 @@ impl Commands for KevyCommands {
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             // Views probe the segments the line above just refreshed.
-            crate::view_runtime::on_write(&self.ctx(), key);
+            crate::view_runtime::on_write(&self.ctx());
         }
     }
 
