@@ -92,7 +92,7 @@ pub use aof_rewrite::{RewritePlan, RewriteStats};
 pub use aof_stage::StageOpen;
 pub use aof_sync::PendingSync;
 pub use baseline::estimate_rewrite_size;
-pub use log_base::settle_snapshot;
+pub use log_base::{is_log_base, settle_snapshot};
 pub use modes::{Fsync, ReplayMode, ReplaySummary};
 pub use record::{AOF2_MAGIC, AofFormat, RecordStep, next_record, write_record_multibulk};
 pub use replay::{
