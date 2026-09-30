@@ -132,6 +132,34 @@ fn copy_survives_reopen() {
 }
 
 #[test]
+fn a_copy_of_any_type_survives_reopen_and_a_replace_does_not_merge() {
+    use crate::CopyMode::{IfAbsent, Replace};
+    let dir = tmp_dir("replay-copy-types");
+    {
+        let s = Store::open(persist_cfg(&dir)).unwrap();
+        s.hset(b"h", &[(b"f", b"1")]).unwrap();
+        s.expire(b"h", std::time::Duration::from_secs(600)).unwrap();
+        s.rpush(b"l", &[b"a", b"b"]).unwrap();
+        s.zadd(b"z", &[(1.5, b"m")]).unwrap();
+        s.hset(b"taken", &[(b"old", b"x")]).unwrap();
+        assert!(s.copy(b"h", b"h2", IfAbsent).unwrap());
+        assert!(s.copy(b"l", b"l2", IfAbsent).unwrap());
+        assert!(s.copy(b"z", b"z2", IfAbsent).unwrap());
+        assert!(!s.copy(b"h", b"taken", IfAbsent).unwrap());
+        assert!(s.copy(b"h", b"taken", Replace).unwrap());
+        assert_eq!(s.hgetall(b"taken").unwrap(), [(b"f".to_vec(), b"1".to_vec())]);
+    }
+    let s2 = Store::open(reopen_cfg(&dir)).unwrap();
+    assert_eq!(s2.hgetall(b"h2").unwrap(), [(b"f".to_vec(), b"1".to_vec())]);
+    assert!(s2.ttl_ms(b"h2") > 0, "the source's deadline came along");
+    assert_eq!(s2.lrange(b"l2", 0, -1).unwrap(), [b"a".to_vec(), b"b".to_vec()]);
+    assert_eq!(s2.zrange(b"z2", 0, -1).unwrap(), [(b"m".to_vec(), 1.5)]);
+    assert_eq!(s2.hgetall(b"taken").unwrap(), [(b"f".to_vec(), b"1".to_vec())], "no old field");
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn spop_replay_removes_exactly_the_popped_members() {
     let dir = tmp_dir("replay-spop");
     let (popped, remaining_before): (Vec<Vec<u8>>, Vec<Vec<u8>>);

@@ -396,7 +396,10 @@ pub(crate) fn apply_one_key(
 /// FLUSHALL / FLUSHDB: every segment resets to empty.
 pub(crate) fn reset_all_segs(shard_segs: &mut ShardSegs) {
     for (spec, seg) in &mut shard_segs.segs {
+        // a view reads the new segment by key as it read the old one
+        let key_dir = seg.key_dir().is_some();
         *seg = new_scalar(spec);
+        seg.set_key_dir(key_dir);
     }
     #[cfg(feature = "text")]
     for (spec, ts) in &mut shard_segs.text {
