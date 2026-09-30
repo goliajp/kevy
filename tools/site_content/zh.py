@@ -1455,7 +1455,7 @@ PAGES["benchmarks"] = {
             "t": "code",
             "h2": "自己复现",
             "caption": "两个脚本。这一页上的所有东西都是它们跑出来的。",
-            "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh",
+            "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD",
         },
     ],
 }

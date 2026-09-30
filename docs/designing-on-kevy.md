@@ -68,7 +68,9 @@ is the wrong shape:
 Numbers are ratchets — floors only rise. The standing lines
 (measured values in [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)):
 
-- Redis-parity throughput: 12-angle perfgate, floor = baseline×0.92.
+- Throughput: perfgate, measured beside the previous build in the same
+  run — throughput ≥ 0.92×, instructions per op ≤ 1.03×, cycles per
+  op ≤ 1.05×.
 - Hydrated row-list page p99 < 1ms; view page < 1ms; write fan-out
   through index+view hooks p99 < 200µs — on one server carrying the
   full stack.

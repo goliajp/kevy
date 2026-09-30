@@ -16,7 +16,7 @@ use kevy_config::{CliOverrides, Config};
 /// switch — whatever it costs, it costs on every `SET`, `GET` and
 /// published message — so the decision to build with it belongs to
 /// whoever builds, and the measurement that justifies it is the
-/// interleaved A/B in `bench/allocgate.sh` (M1, M2).
+/// two builds side by side, `bench/perfgate.sh compare HEAD HEAD+kevy-alloc`.
 #[cfg(feature = "kevy-alloc")]
 #[global_allocator]
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;

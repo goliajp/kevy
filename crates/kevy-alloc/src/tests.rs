@@ -1,6 +1,6 @@
 //! Behavioural tests for the heap.
 //!
-//! These are the assertions `bench/allocgate.sh` names: M3 (the
+//! These are the allocator contract's assertions: M3 (the
 //! accounting identity), M4 (reclaim actually returns pages), M6 (an
 //! exhausted class refuses rather than hands back a wild pointer).
 //! Every test skips cleanly where mapping is unavailable, because a test
@@ -748,7 +748,8 @@ fn claims_span_words_and_never_strand_occupancy() {
 /// This asserts the check exists and agrees with the system, which is
 /// the only part that can be checked from inside the process. What it
 /// cannot check is whether `madvise` did anything — that needs RSS, and
-/// `bench/allocgate-mem.sh` is where that lives.
+/// `bench/capacity-envelope.sh` run against a build with the allocator is
+/// where that lives.
 #[test]
 fn the_page_size_check_agrees_with_the_system() {
     let matches = crate::os::page_size_matches();
