@@ -26,8 +26,10 @@ on:
   # a door it could not build, four publishable doors behind it never got
   # their turn, and nothing would have asked a registry about any of them
   # until the next morning. Red here after a release means the release is
-  # not finished — including when the remaining doors are the ones a Linux
-  # runner cannot build and a person still has to publish by hand.
+  # not finished. The tag publishes every door except PyPI, NuGet and Maven
+  # Central, which the owner dispatches, so right after a release those
+  # three are expected here until then; each door found behind is printed
+  # with what publishes it.
   workflow_run:
     workflows: ['Release']  # exact `name:` of release.yml — matching is by name
     types: [completed]
