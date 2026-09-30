@@ -50,7 +50,7 @@ kevy-embedded = "7.0.0"
 | may downgrade to 6.4 | open and close cleanly with 7.0 first; keep the catalog side files from before the upgrade | 1 |
 | set `MAXMEM` on an index, or size a tiered store near its index floor | index sizes read differently: smaller for large indexes, about 1.8 KB a shard at least | 5 |
 | parse `IDX.LIST` or `IDX.DESCRIBE` positionally | each gains a `partitioning` pair | 6 |
-| read an embedded store's change feed or AOF | an `MSET` arrives as one frame per shard | 7 |
+| read the change feed or the AOF | an embedded `MSET` arrives as one frame per shard; stream writes arrive in the form a replay needs | 7 |
 | start two servers on one port by accident | the second one now refuses to start | 8 |
 | run the io_uring reactor | 16 MiB of receive buffers a shard instead of 64; a shard polls for 200 µs after forwarded work | 9 |
 | build `kevy_config` structs with struct literals | new fields to name, or `..Default::default()` | 10 |
@@ -274,6 +274,15 @@ and logs them as one `MSET` frame, so a crash keeps each shard's share
 whole or not at all. The AOF, a replica and the change feed see `MSET`
 frames where they saw one `SET` per key; a feed consumer that handles only
 `SET` should handle `MSET` too, as it already had to for a server.
+
+Stream writes are recorded differently too, on a server and an embedded
+store alike, so that a replay gives the answers the client got: an
+`XADD` with a generated id is recorded with the id it gave; a claim
+(`XCLAIM`, `XAUTOCLAIM`) and a group read (`XREADGROUP`) are recorded
+as `XCLAIM … FORCE JUSTID` frames for the entries they touched, plus
+`XGROUP SETID` for how far a read moved the group; and a served
+blocking pop is recorded as the `LPOP` / `RPOP` it performed. A feed
+consumer that interprets these commands sees the recorded forms.
 
 ## 8. A port already held is refused
 
