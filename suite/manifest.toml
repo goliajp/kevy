@@ -68,8 +68,8 @@ prerelease = 6000
 # loud in the audit's summary rather than silent in a NOT-RUN line.
 
 [suite.requirements]
-"wasm targets" = "CI's wasm job, and the lx64 box"
-"iot toolchain" = "CI's iot job, and the lx64 box"
+"wasm targets" = "CI's iot + wasm job, and the lx64 box"
+"iot toolchain" = "CI's iot + wasm job, and the lx64 box"
 "nightly miri" = "CI's miri job, and the lx64 box"
 "linux" = "CI's Linux jobs, and the lx64 box"
 "box" = "the lx64 box, as kevybench with TMPDIR=$HOME/captmp"

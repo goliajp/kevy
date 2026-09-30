@@ -503,41 +503,6 @@ jobs:
       - name: Test (workspace, release-tests profile, --lib --tests)
         run: cargo test --workspace --profile release-tests --lib --tests
 
-  # ───────────── wasm32: kevy-bytes / -store / -embedded must build ─────────────
-  wasm:
-    name: cargo check ${{ matrix.target }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - wasm32-unknown-unknown
-          - wasm32-wasip1
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust + wasm target
-        run: |
-          rustup toolchain install stable --no-self-update
-          rustup default stable
-          rustup target add ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ matrix.target }}-
-
-      - name: Check wasm-eligible crates
-        run: bash bench/wasmcheck.sh ${{ matrix.target }}
-
   # ───────────── crashgate: the crash-consistency contract, executed ─────────────
   # SIGKILL matrix + injected torn-tail / mid-file / payload damage against
   # the loss-bound and no-black-hole invariants (durability-trust arc T1).
@@ -576,19 +541,20 @@ jobs:
   # item (see bench/iotgate.sh header) — this job gates the compile
   # face; resource budgets (size / RSS) are bench/iotgate.sh's job.
   iot:
-    name: iot (musl / no_std / feature archetypes)
+    name: iot + wasm (musl / no_std / feature archetypes / wasm32)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust + iot targets
+      - name: Install Rust + iot and wasm targets
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
           rustup target add aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf \
             arm-unknown-linux-musleabihf x86_64-unknown-linux-musl \
-            riscv64gc-unknown-linux-musl thumbv7em-none-eabihf
+            riscv64gc-unknown-linux-musl thumbv7em-none-eabihf \
+            wasm32-unknown-unknown wasm32-wasip1
 
       - name: Install the RISC-V linker and a Cortex-M emulator
         # riscv64-musl's target spec wants libgcc_s, which rust-lld cannot
@@ -613,6 +579,10 @@ jobs:
       # standalone consumer on every board, and the Cortex-M boot under QEMU
       - name: iotcheck (the embedded cut compiles, and boots, on every board it claims)
         run: bash bench/iotcheck.sh
+      # the same kind of question for the browser and WASI targets
+      - name: wasmcheck (every wasm-eligible crate compiles for both wasm targets)
+        if: success() || failure()
+        run: bash bench/wasmcheck.sh
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
   # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
@@ -672,12 +642,12 @@ jobs:
         run: python3 tools/check_loom.py
 
   # ───────────── fuzz smoke: 60s per target on every push ─────────────
-  # The twelve libFuzzer targets (v3.18 T5a + the stone fuzz corpus) get a
-  # 60-second smoke each — long enough to replay the checked-in corpus and
-  # shake the shallow states, short enough for the CI budget (the matrix
-  # runs in parallel; each leg is one target's build + 60s). A crash or
-  # sanitizer hit is a hard failure. Deep fuzzing stays on the bench box;
-  # this keeps "never regress on a known input class" in the merge gate.
+  # Every libFuzzer target gets a 60-second smoke — long enough to replay
+  # the checked-in corpus and shake the shallow states, short enough for
+  # the CI budget (each leg is one target's build + 60s). A crash or
+  # sanitizer hit is a hard failure. This list is the only fuzz list:
+  # fuzzgate holds it to the tree, and fuzz.yml's daily five-minute run
+  # reads its matrix from here.
   fuzz-smoke:
     name: fuzz-smoke (${{ matrix.crate }}/${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -838,7 +808,9 @@ jobs:
   # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
   # smokes all run the same contract — commands, a protocol error as data,
   # a pub/sub round trip, and a close-and-reopen durability check. The
-  # Rust door is the kevy-embedded suite itself.
+  # Rust door is the kevy-embedded suite itself. On Linux the
+  # client-conformance legs run each door's full suite, so that leg keeps
+  # only the contract table and the C smoke; macOS runs every smoke.
   ffigate:
     name: ffigate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -874,20 +846,21 @@ jobs:
 
       - name: C smoke
         run: |
-          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
+          extra=(); [ "$(uname)" = Linux ] && extra=(-lpthread -ldl -lm)
           cc -Icrates/kevy-ffi/include crates/kevy-ffi/examples/c/smoke.c \
-             target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-c
+             target/debug/libkevy_ffi.a "${extra[@]}" -o /tmp/kevy-smoke-c
           /tmp/kevy-smoke-c /tmp/kevy-smoke-c-data
 
       - name: C++ smoke
+        if: runner.os == 'macOS'
         run: |
-          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
           c++ -std=c++17 -Icrates/kevy-ffi/include \
               crates/kevy-ffi/examples/cpp/smoke.cpp \
-              target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-cpp
+              target/debug/libkevy_ffi.a -o /tmp/kevy-smoke-cpp
           /tmp/kevy-smoke-cpp /tmp/kevy-smoke-cpp-data
 
       - name: Go smoke
+        if: runner.os == 'macOS'
         uses: actions/setup-go@v7
         with:
           go-version: 'stable'
@@ -896,41 +869,50 @@ jobs:
       # pure-Go remote client — which is a real thing to test, but not
       # in the job that just built libkevy_ffi to test the door.
       - run: go test -tags kevy_embedded ./...
+        if: runner.os == 'macOS'
         working-directory: bindings/go
 
       - name: Bun smoke
+        if: runner.os == 'macOS'
         uses: oven-sh/setup-bun@v2
       - run: bun test bun.test.js
+        if: runner.os == 'macOS'
         working-directory: bindings/node
 
       - name: Node smoke
+        if: runner.os == 'macOS'
         uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
       - run: cargo build -p kevy-napi
+        if: runner.os == 'macOS'
       - run: node --test node.test.js
+        if: runner.os == 'macOS'
         working-directory: bindings/node
 
       # The Electron door reuses the Node door's addon (no separate native
       # build). Its main-process bridge + preload are dependency-injected, so
       # the whole surface runs headlessly here — no display / xvfb.
       - name: Electron door smoke (headless)
+        if: runner.os == 'macOS'
         run: node --test test/*.test.js
         working-directory: bindings/electron
 
       - name: C# smoke
+        if: runner.os == 'macOS'
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
       - run: |
-          ext=so; [ "$(uname)" = Darwin ] && ext=dylib
-          KEVY_FFI_LIB="$PWD/target/debug/libkevy_ffi.$ext" \
+          KEVY_FFI_LIB="$PWD/target/debug/libkevy_ffi.dylib" \
             dotnet run --project bindings/csharp/smoke -c Release -- /tmp/kevy-smoke-cs-data
+        if: runner.os == 'macOS'
 
       # The native shells need a host Expo project (and Xcode / the NDK) —
       # they are exercised by the mobile smokes, not here. This pins the
       # TS surface, where the whole typed layer of the expo door lives.
       - name: Expo door typecheck
+        if: runner.os == 'macOS'
         run: npx -y -p typescript@5 tsc --noEmit -p tsconfig.json
         working-directory: bindings/expo
 
