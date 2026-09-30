@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Embedded `COPY` copies a key of any type, as the server does.** Since
+  2.0.13 `Store::copy` and the embedded `COPY` verb read the source as a
+  string, so a hash, list, set, sorted set or stream source answered
+  `WRONGTYPE` and was not copied. The copy now clones the value and its
+  remaining TTL. With an AOF, a replica source or a change feed, it is
+  recorded as the commands that rebuild the value, after a `DEL` when it
+  replaced a key, so a reopen does not merge the copy into the old value.
+
 - **`kevy_index::sort_groups` ranks a group without a maximum last under
   `AggBy::Max`.** Since 3.8.0 it put such groups first, while
   `AggBy::Min` put a group without a minimum last and
