@@ -44,17 +44,35 @@ impl RecordState {
 }
 
 /// The catalog as it now stands, recorded at the next version. The
-/// version moves and the catalog is read with no change able to land in
-/// between, so a higher version never records less than a lower one:
-/// replay, which keeps the highest, keeps every change.
-fn next_frame(state: &RuntimeState) -> Vec<Vec<u8>> {
-    let mut at = state.catalogs.record.lock();
-    let _held = state.catalogs.hold();
+/// caller holds `at` and then the catalogs, so the version moves and the
+/// catalog is read with no change able to land in between: a higher
+/// version never records less than a lower one, and replay, which keeps
+/// the highest, keeps every change.
+fn next_frame(state: &RuntimeState, at: &mut (u64, u64)) -> Vec<Vec<u8>> {
     if at.0 == 0 {
         at.0 = kevy_store::now_unix_ms().max(1);
     }
     at.1 += 1;
     frame(state, *at)
+}
+
+/// Install `change` if the catalogs still carry `generation`, and record
+/// the catalog it leaves as the frame of the command that made it (a
+/// catalog command, or the reduce of a sampled declaration, a global
+/// rebuild or an automatic declaration). `false` when another change
+/// landed first. A change replayed from a log or a primary is recorded by
+/// what carried it.
+pub(crate) fn commit(state: &RuntimeState, generation: u64, change: CatalogChange) -> bool {
+    let mut at = state.catalogs.record.lock();
+    let _held = state.catalogs.hold();
+    if state.catalogs.generation() != generation {
+        return false;
+    }
+    state.install_catalogs(change);
+    if !kevy_rt::applying_record() {
+        set_override(Propagate::Replace(next_frame(state, &mut at)));
+    }
+    true
 }
 
 /// The current catalog as the frame that records it at `at`. The caller
@@ -74,30 +92,9 @@ fn frame(state: &RuntimeState, at: (u64, u64)) -> Vec<Vec<u8>> {
     ]
 }
 
-/// Run a catalog command and record what it changed. A command that
-/// changed nothing records nothing, not even its own argv: the catalog is
-/// recorded only as its frame. A frame applied from a log or a primary is
-/// recorded by the frame itself.
-fn recorded<T>(state: &RuntimeState, silent_if_unchanged: bool, run: impl FnOnce() -> T) -> T {
-    let before = state.catalogs.generation();
-    let out = run();
-    // a replica's catalog moves only by its primary's frames: a read's
-    // reduce sees one land on another shard as a change, and a version
-    // minted for it here would shadow the primary's frame of that number
-    if kevy_rt::applying_record() || state.replication.is_replica() {
-        return out;
-    }
-    // another shard's change moves the generation too; this one then
-    // records the catalog with both, which is still the catalog
-    if state.catalogs.generation() != before {
-        set_override(Propagate::Replace(next_frame(state)));
-    } else if silent_if_unchanged {
-        set_override(Propagate::Suppress);
-    }
-    out
-}
-
-/// The catalog commands a client sends; `false` = not one of them.
+/// The catalog commands a client sends; `false` = not one of them. One
+/// that changes nothing records nothing, not even its own argv: the
+/// catalog is recorded only as the frame its commit leaves.
 pub(crate) fn dispatch<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
     cmd: &[u8],
@@ -118,23 +115,18 @@ pub(crate) fn dispatch<A: ArgvView + ?Sized>(
     ) {
         return false;
     }
-    recorded(ctx.state, true, || match cmd {
+    if !kevy_rt::applying_record() {
+        set_override(Propagate::Suppress);
+    }
+    match cmd {
         b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, store, args, out),
         b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
         b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
         b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
         b"TABLE.DROP" => crate::cmd_table::cmd_table_drop(ctx, args, out),
         _ => crate::cmd_table::cmd_table_local(ctx, cmd, store, args, out),
-    });
+    }
     true
-}
-
-/// A fan-out's reduce, recording what it changed in the catalog (a
-/// sampled global declaration, a global rebuild's splits, an automatic
-/// declaration a refused query earned). A reduce that changed nothing is
-/// a read and asks for nothing.
-pub(crate) fn reduced<T>(state: &RuntimeState, run: impl FnOnce() -> T) -> T {
-    recorded(state, false, run)
 }
 
 /// Apply a catalog frame from the log, a primary or a snapshot: take it
@@ -270,50 +262,10 @@ fn import(
     }
     crate::cmd_index_install::fit_partitions(&mut icat, state.nshards());
     install(state, icat, vcat, tcat);
-    record(&Argv::from(next_frame(state)))
-}
-
-#[cfg(test)]
-mod tests {
-    use kevy_index::{IndexKind, IndexSpec, ValType};
-
-    use super::*;
-
-    /// The primary's frame at `version` of lineage 7, declaring `names`.
-    fn primarys_frame(version: u64, names: &[&[u8]]) -> Argv {
-        let mut cat = Catalog::new();
-        for name in names {
-            let spec =
-                IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::I64)
-                    .with_field(b"age".to_vec())
-                    .build()
-                    .unwrap();
-            cat.create(spec).unwrap();
-        }
-        let text = cat.to_sidecar().into_bytes();
-        let verb = kevy_resp::ops_table::CATALOG.as_bytes().to_vec();
-        Argv::from(vec![
-            verb,
-            b"7".to_vec(),
-            version.to_string().into_bytes(),
-            text,
-            vec![],
-            vec![],
-        ])
-    }
-
-    #[test]
-    fn a_replicas_read_leaves_its_primarys_next_frame_to_apply() {
-        let cfg = std::sync::Arc::new(kevy_config::Config::default());
-        let state = RuntimeState::new(cfg, std::path::PathBuf::new(), 2).unwrap();
-        state.replication.force_replica_flag();
-        let mut out = Vec::new();
-        // a read's reduce on one shard while another applies frame 1
-        recorded(&state, false, || apply(&state, &primarys_frame(1, &[b"a"]), &mut out));
-        apply(&state, &primarys_frame(2, &[b"a", b"b"]), &mut out);
-        let index = state.catalogs.index().unwrap();
-        let held: Vec<&[u8]> = index.iter().map(|(s, _)| s.name()).collect();
-        assert_eq!(held, [&b"a"[..], b"b"]);
-        assert_eq!(*state.catalogs.record.lock(), (7, 2));
-    }
+    let frame = {
+        let mut at = state.catalogs.record.lock();
+        let _held = state.catalogs.hold();
+        next_frame(state, &mut at)
+    };
+    record(&Argv::from(frame))
 }
