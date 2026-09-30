@@ -360,7 +360,8 @@ what the ports SHOULD offer typed helpers for over time — from
   `| COMPOSE AND|OR nameA RANGE/EQ … nameB RANGE/EQ … [LIMIT n] [CURSOR c] [FIELDS …]`
 - `IDX.COUNT name RANGE min max | EQ value`
 - `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args …]`
-- `IDX.REBUILD name` (ANN tombstone compaction)
+- `IDX.REBUILD name` (range / unique: pack the leaves; ann: compact the
+  tombstones; global: sample the split points again; text / agg: refused)
 - `IDX.VERIFY name` (re-read every held entry; reports
   entries/bytes/coerce_failures/duplicates/drift/checked)
 

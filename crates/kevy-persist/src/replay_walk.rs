@@ -153,44 +153,52 @@ pub(crate) fn apply_record(
 ) -> bool {
     match kevy_resp::parse_command_into(payload, args) {
         Ok(Some(used)) if used == payload.len() => {
-            let marker = txn_marker(args);
-            match marker {
-                Some(TxnMarker::Begin) => {
-                    // A begin inside a begin cannot happen from this
-                    // writer; if a log ever shows one, the outer
-                    // transaction was never committed — drop it.
-                    if w.txn.take().is_some() {
-                        w.txn_discarded += 1;
-                    }
-                    w.txn = Some(Vec::new());
-                    w.txn_at = w.pos;
-                }
-                Some(TxnMarker::Commit) => {
-                    if let Some(buffered) = w.txn.take()
-                        && let Some(f) = apply.as_mut()
-                    {
-                        for mut a in buffered {
-                            f.deliver(&mut a);
-                        }
-                    }
-                }
-                None => match w.txn.as_mut() {
-                    Some(buf) => buf.push(std::mem::take(args)),
-                    None => {
-                        if let Some(f) = apply.as_mut() {
-                            f.deliver(args);
-                        }
-                    }
-                },
+            // which snapshot the log continues was settled before replay
+            if crate::log_base::base_of(args).is_none() {
+                route_frame(args, apply, w);
+                w.replayed += 1;
             }
             w.pos += 8 + u64::from(len);
-            w.replayed += 1;
             true
         }
         _ => {
             w.preview_len = preview_of(payload, &mut w.preview);
             false
         }
+    }
+}
+
+/// Apply one parsed command, or hold it inside an open transaction, or
+/// act on a transaction marker.
+fn route_frame(args: &mut Argv, apply: &mut Option<Sink<'_>>, w: &mut V2Walk) {
+    match txn_marker(args) {
+        Some(TxnMarker::Begin) => {
+            // A begin inside a begin cannot happen from this
+            // writer; if a log ever shows one, the outer
+            // transaction was never committed — drop it.
+            if w.txn.take().is_some() {
+                w.txn_discarded += 1;
+            }
+            w.txn = Some(Vec::new());
+            w.txn_at = w.pos;
+        }
+        Some(TxnMarker::Commit) => {
+            if let Some(buffered) = w.txn.take()
+                && let Some(f) = apply.as_mut()
+            {
+                for mut a in buffered {
+                    f.deliver(&mut a);
+                }
+            }
+        }
+        None => match w.txn.as_mut() {
+            Some(buf) => buf.push(std::mem::take(args)),
+            None => {
+                if let Some(f) = apply.as_mut() {
+                    f.deliver(args);
+                }
+            }
+        },
     }
 }
 

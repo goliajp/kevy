@@ -105,6 +105,7 @@ discovery surface (an agent that hits one can recover in-band).
 |---|---|---|
 | `ERR <VERB> '<name>': bad arguments — run COMMAND DOCS <VERB> for the syntax` | argument parse failed on an IDX./VIEW. verb | `COMMAND DOCS <verb>` returns the full syntax string |
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | query names an index that doesn't exist | `IDX.LIST` / `VIEW.LIST` enumerate the catalog |
+| `ERR IDX.REBUILD '<name>': IDX.REBUILD applies to range, unique, ann and global indexes; this is a <kind> index` | `IDX.REBUILD` names a text or agg index, which has nothing to pack or compact | none needed; `IDX.DROP` + `IDX.CREATE` rebuilds one from its rows |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | query raced the post-create backfill | poll `IDX.LIST` `state`; see docs/migration.md |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | build hit the memory budget | raise `maxmemory` or `IDX.DROP` |
 | `FEEDRESYNC <gen> <tail>` | a FEED cursor is no longer servable (generation bump or past-backlog) | restart consumption from a fresh snapshot + the returned cursor; see docs/cdc.md |

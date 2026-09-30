@@ -6070,8 +6070,8 @@ IDX.REBUILD
 *14
 $7
 summary
-$44
-Rebuild an ANN index (tombstone compaction).
+$176
+Rebuild an index: a range or unique index packs its leaves, an ANN index compacts its tombstones, a global index samples its split points again. A text or agg index is refused.
 $5
 since
 $5
@@ -6086,8 +6086,8 @@ $16
 IDX.REBUILD name
 $10
 complexity
-$186
-Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
+$283
+Depends on the index kind, on every shard, synchronously. range / unique: O(N) to pack the leaves. global: one sample of every shard's values, then the moved entries. ann: O(V_live * ef_construction * M * dim) distance evaluations — the most expensive verb in the extension surface
 $6
 compat
 $103

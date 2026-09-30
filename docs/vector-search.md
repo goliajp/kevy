@@ -34,7 +34,7 @@ bytes of little-endian f32) written by your client library; the
 
 Supporting verbs work like on every kind: `IDX.EXPLAIN embs KNN …`
 (parse + plan without execution), `IDX.VERIFY` / `IDX.LIST` (live
-stats), `IDX.DROP`. `IDX.REBUILD` is specific to ANN — see
+stats), `IDX.DROP`. On an ANN index `IDX.REBUILD` compacts the graph — see
 "Deletes and rebuild".
 
 ## Quick start (embedded)

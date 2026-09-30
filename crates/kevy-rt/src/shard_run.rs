@@ -81,9 +81,9 @@ impl<C: Commands> Shard<C> {
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         self.announce_to_commands();
-        // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
-        // since that SAVE). The AOF is truncated at each SAVE, so this never
-        // double-applies. Replay goes straight to the store (no re-logging).
+        // Restore: the snapshot the AOF continues (none under a rewritten,
+        // complete AOF), then the AOF. Replay goes straight to the store
+        // (no re-logging).
         // Row segments are truth: load the registered set FIRST — a
         // v7 snapshot's stub records and the AOF's SEGMENTED frames
         // both resolve against it.
@@ -91,7 +91,7 @@ impl<C: Commands> Shard<C> {
         if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
             return Err(io::Error::other(format!("shard {}: {e}", self.id)));
         }
-        self.load_boot_snapshot();
+        self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;

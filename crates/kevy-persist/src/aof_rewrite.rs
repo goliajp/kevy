@@ -107,7 +107,9 @@ pub struct RewritePlan {
 ///     (total.keys, total.bytes) = (total.keys + stats.keys, total.bytes + stats.bytes);
 /// }
 /// assert_eq!(total.keys, 0);
-/// assert_eq!(total.bytes, 2 * kevy_persist::AOF2_MAGIC.len() as u64);
+/// // an empty image is its header alone
+/// let empty = kevy_persist::estimate_rewrite_size(&kevy_store::Store::new());
+/// assert_eq!(total.bytes, 2 * empty);
 /// # std::fs::remove_dir_all(&dir)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```

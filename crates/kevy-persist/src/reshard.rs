@@ -172,15 +172,19 @@ pub fn merge_sources<L: ShardLayout>(
     let mut sources: Vec<PathBuf> = Vec::new();
     for i in 0..src_n {
         let snap = lay.snapshot_path(dir, i, src_n);
-        if snap.exists() {
+        let aof = lay.aof_path(dir, i, src_n);
+        let log = aof.exists().then_some(aof.as_path());
+        if crate::settle_snapshot(&snap, log)? {
             let file = std::io::BufReader::new(std::fs::File::open(&snap)?);
             // the frame kept beside the keyspace goes the way of a logged one
             if let Some(aux) = crate::load_snapshot_with_aux(temp, file, |_| true)? {
                 replay(temp, aux);
             }
+        }
+        if snap.exists() {
+            // a snapshot a complete log supersedes is still an old source
             sources.push(snap);
         }
-        let aof = lay.aof_path(dir, i, src_n);
         if aof.exists() {
             replay_aof(&aof, |args| replay(temp, args))?;
             sources.push(aof);

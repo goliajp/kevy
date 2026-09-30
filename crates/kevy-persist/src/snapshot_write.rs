@@ -162,10 +162,33 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(
     src: &S,
     path: &Path,
 ) -> io::Result<std::path::PathBuf> {
+    write_snapshot_tmp_with_cursor(src, path, None)
+}
+
+/// [`write_snapshot_tmp`] with the recovery-point header of
+/// [`write_snapshot_to_with_cursor`]. The file ends with the snapshot's
+/// id, which the log reset that commits with it names
+/// ([`crate::Aof::commit_snapshot`]).
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("snapshot-tmp-cursor-doc");
+/// let path = dir.join("dump.rdb");
+/// let at = kevy_replicate::feed::FeedPosition::new(3, 42);
+/// let tmp = kevy_persist::write_snapshot_tmp_with_cursor(&kevy_store::Store::new(), &path, Some(at))?;
+/// assert_eq!(kevy_persist::read_snapshot_cursor(&tmp)?, Some(at));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn write_snapshot_tmp_with_cursor<S: SnapshotSource>(
+    src: &S,
+    path: &Path,
+    cursor: Option<FeedPosition>,
+) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
         let mut file = File::create(&tmp)?;
-        write_snapshot_to(src, &mut file)?;
+        write_snapshot_to_with_cursor(src, &mut file, cursor)?;
+        crate::log_base::write_snapshot_id(&mut file)?;
         file.sync_all()?; // durably on disk before the rename
     }
     Ok(tmp)
