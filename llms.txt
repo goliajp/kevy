@@ -408,48 +408,48 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
   - complexity: O(A log P)
   - compat: full
-- `XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+- `XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
   - complexity: O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
-  - compat: differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
 - `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
-  - complexity: O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full
-  - compat: differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip
-- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]` [write] — Claim specific idle pending entries for a consumer.
+  - complexity: O(log P + COUNT log N): at most COUNT x 10 pending entries are looked at per call
+  - compat: full
+- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID] [LASTID lastid]` [write] — Claim specific idle pending entries for a consumer.
   - complexity: O(A * (log P + log N))
-  - compat: differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP
+  - compat: full
 - `XDEL key id [id ...]` [write] — Delete entries from a stream by ID.
   - complexity: O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream
   - compat: full
-- `XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD entries-read] | DESTROY key group | SETID key group id|$ [ENTRIESREAD entries-read] | CREATECONSUMER key group consumer | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
+- `XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD entries-read] | DESTROY key group | SETID key group id|$ [ENTRIESREAD entries-read] | CREATECONSUMER key group consumer | DELCONSUMER key group consumer | HELP` [write] — Manage stream consumer groups.
   - complexity: CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
-  - compat: differs: CREATE / SETID (with MKSTREAM and ENTRIESREAD) / DESTROY / CREATECONSUMER / DELCONSUMER are supported, but on a missing key DESTROY / CREATECONSUMER / DELCONSUMER return 0 instead of Redis's error, and XGROUP HELP is absent
+  - compat: full
 - `XINFO STREAM key [FULL [COUNT count]] | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
   - complexity: STREAM: O(log N). GROUPS: O(G log N + G log G) — 'lag' reads the stream's head once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name. STREAM FULL: O(K + G * (P log C + C log C)) for K entries shown and P pending entries per group
-  - compat: differs: answers field for field as valkey 9.1 does; against Redis 8.10, XINFO STREAM lacks the six idmp-* / pids-* / iids-* fields of an XADD option kevy does not have, radix-tree-keys and radix-tree-nodes are counted as if the stream were held in 100-entry nodes (there is no radix tree), and where the two disagree on 'lag' and 'entries-read' — an ENTRIESREAD above entries-added, a group before the first entry with a deletion behind it — kevy answers as valkey does
+  - compat: differs: answers field for field as valkey 9.1 does; against Redis 8.10, XINFO STREAM lacks the six idmp-* / pids-* / iids-* fields of an XADD option kevy does not have, radix-tree-keys and radix-tree-nodes are the nodes and tree nodes valkey's layout would hold for the same history (kevy keeps no radix tree), and where the two disagree on 'lag' and 'entries-read' — an ENTRIESREAD above entries-added, a group before the first entry with a deletion behind it — kevy answers as valkey does
 - `XLEN key` [readonly] — Return the number of entries in a stream.
   - complexity: O(1)
   - compat: full
 - `XPENDING key group [[IDLE min-idle-time] start end count [consumer]]` [readonly] — Inspect pending entries of a consumer group (summary or extended form).
   - complexity: summary: O(P*C + C log C) — the per-consumer tally is a linear find per PEL row, then sorted by name. extended: O(log P + K)
-  - compat: full
+  - compat: differs: answers as valkey 9.1 does, except that a delivery count stops at 9223372036854775807 where valkey's wraps round to a negative number
 - `XRANGE key start end [COUNT count]` [readonly] — Return stream entries within an ID range.
   - complexity: O(log N + M) — a B-tree range descent, COUNT applied lazily
   - compat: full
 - `XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id [id ...]` [readonly,blocking] — Read new entries from one or more streams, optionally blocking.
   - complexity: O(S * (log N + M)) over S streams; '$' is O(1); the park is O(1)
-  - compat: differs: the '+' last-id form is not parsed — only explicit IDs and '$' are accepted
+  - compat: differs: answers as valkey 9.1 does; Redis 8.10's unbalanced-streams error also names '+' as an accepted ID
 - `XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]` [write,blocking] — Read stream entries as a consumer-group member, optionally blocking.
-  - complexity: '>' form: O(log N + U + M) — COUNT does NOT bound the scan, the entire undelivered tail is materialised first. Replay form: O(log P + K)
-  - compat: differs: COUNT is parsed but does not bound the '>' scan
+  - complexity: '>' form: O(log N + M log P) for M entries handed out. History form: O(log P + K log N) for K entries handed back again
+  - compat: full
 - `XREVRANGE key end start [COUNT count]` [readonly] — Return stream entries within an ID range, in reverse order.
   - complexity: O(log N + M)
   - compat: full
 - `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
   - complexity: O(log N)
   - compat: full
-- `XTRIM key MAXLEN|MINID [=|~] threshold` [write] — Trim a stream by length or minimum ID.
+- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]` [write] — Trim a stream by length or minimum ID.
   - complexity: O(R log N + N*F) for R evicted entries
-  - compat: differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
 
 ### geo
 

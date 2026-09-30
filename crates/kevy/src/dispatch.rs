@@ -137,6 +137,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         encode_error(out, oom_reply(store));
         return;
     }
+    let mark = out.len();
     let handled = (proto_v3
         && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
         || dispatch_conn(ctx, cmd, store, args, out)
@@ -150,6 +151,9 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     if !handled {
         crate::cmd::unhandled_verb(out, name, args.len());
         return;
+    }
+    if proto_v3 {
+        kevy_verbs::cmd::stream_resp3(cmd, out, mark);
     }
     // Post-write: trim back under `maxmemory` per the active policy. Gated on
     // both `maxmemory > 0` (the F3 hoist) and `is_grow` so the default unlimited
@@ -246,6 +250,8 @@ fn exec_shared<A: ArgvView + ?Sized>(
             | Effect::RecordClaim(_)
             | Effect::RecordRead(..)
             | Effect::RecordReads(_)
+            | Effect::RecordHistory(_)
+            | Effect::RecordAdd(..)
             | Effect::RecordSeen),
         ) => {
             record_deferred(e);
@@ -269,8 +275,9 @@ fn internal_record<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    let catalog = cmd == kevy_resp::ops_table::CATALOG.as_bytes();
-    if !catalog && cmd != kevy_resp::ops_table::CONSUMER_SEEN.as_bytes() {
+    use kevy_resp::ops_table::{CATALOG, CONSUMER_SEEN, PENDING};
+    let catalog = cmd == CATALOG.as_bytes();
+    if !catalog && cmd != CONSUMER_SEEN.as_bytes() && cmd != PENDING.as_bytes() {
         return false;
     }
     if !kevy_rt::applying_record() {

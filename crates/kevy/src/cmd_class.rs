@@ -32,6 +32,7 @@ fn is_server_write(cmd: &[u8]) -> bool {
             | b"SUNIONSTORE"
             | b"XINTERNAL.CATALOG"
             | b"XINTERNAL.CONSUMERSEEN"
+            | b"XINTERNAL.PENDING"
             | b"ZDIFFSTORE"
             | b"ZINTERSTORE"
             | b"ZUNIONSTORE"

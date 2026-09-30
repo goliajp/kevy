@@ -97,7 +97,13 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         Agg::Gather { op, limit, keys, got } => {
             SmallReply::from_vec(finalize_gather(op, limit, keys, got, proto))
         }
-        Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
+        Agg::XReadGather { slots } => {
+            let mut out = finalize_xread_gather(slots);
+            if proto == RespVersion::V3 {
+                kevy_verbs::cmd::stream_resp3(b"XREAD", &mut out, 0);
+            }
+            SmallReply::from_vec(out)
+        }
         Agg::Keys { acc } => SmallReply::from_vec(finalize_keys(acc)),
         Agg::RandomKey { key, .. } => {
             let mut out = Vec::new();
@@ -126,7 +132,8 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::ZStoreGather { .. }
         | Agg::GeoStore { .. }
         | Agg::ExtensionGather { .. }
-        | Agg::ScanPage { .. } => {
+        | Agg::ScanPage { .. }
+        | Agg::XReadGroupCheck { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)

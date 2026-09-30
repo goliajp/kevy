@@ -31,7 +31,7 @@ use crate::value::SmallBytes;
 /// assert_eq!((ms, seq, consumer.as_slice(), delivered_at, count), (1, 0, b"alice".as_slice(), 100, 1));
 /// # Ok::<(), kevy_store::StoreError>(())
 /// ```
-pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u32);
+pub type LoadedPelEntry = (u64, u64, Vec<u8>, u64, u64);
 
 /// One consumer group decoded into primitive tuples — the dump/load wire
 /// form shared by snapshot v4, AOF-rewrite filtering, and reshard's
@@ -184,7 +184,7 @@ impl LoadedGroup {
 
 impl StreamData {
     /// Does an entry with `id` currently exist? AOF rewrite uses this
-    /// to filter tombstone PEL rows (XCLAIM can't re-create those).
+    /// to tell the pending rows XCLAIM can put back from the ones it cannot.
     pub fn contains_entry(&self, id: StreamId) -> bool {
         self.entries.contains_key(&id)
     }

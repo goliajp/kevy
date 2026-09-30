@@ -209,12 +209,8 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
             b"BLOCK" => return Route::Local,
             b"COUNT" => {
                 // Malformed COUNT → route single so cmd_xread emits the error.
-                match args
-                    .get(i + 1)
-                    .and_then(|b| std::str::from_utf8(b).ok())
-                    .and_then(|s| s.parse::<usize>().ok())
-                {
-                    Some(c) => count = Some(c),
+                match args.get(i + 1).and_then(stream_count) {
+                    Some(c) => count = c,
                     None => return Route::Single(1),
                 }
                 i = i.saturating_add(2);
@@ -224,6 +220,17 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
         }
     }
     Route::Local
+}
+
+/// A `COUNT` as the stream commands read it: `None` when it is not an
+/// integer they take, `Some(None)` for zero or less (read everything).
+fn stream_count(b: &[u8]) -> Option<Option<usize>> {
+    let digits = b.strip_prefix(b"-").unwrap_or(b);
+    let canonical = !digits.is_empty()
+        && digits.iter().all(u8::is_ascii_digit)
+        && (digits[0] != b'0' || b == b"0");
+    let n: i64 = std::str::from_utf8(b).ok().filter(|_| canonical)?.parse().ok()?;
+    Some(usize::try_from(n).ok().filter(|n| *n > 0))
 }
 
 /// Decide the route for an `XREAD … STREAMS k1 … kn id1 … idn` tail (start =
@@ -284,12 +291,8 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
             b"COUNT" => {
                 // Malformed COUNT → single-key route so the command body
                 // emits the precise syntax error.
-                match args
-                    .get(i + 1)
-                    .and_then(|b| std::str::from_utf8(b).ok())
-                    .and_then(|s| s.parse::<usize>().ok())
-                {
-                    Some(c) => count = Some(c),
+                match args.get(i + 1).and_then(stream_count) {
+                    Some(c) => count = c,
                     None => return Route::Single(1),
                 }
                 i = i.saturating_add(2);
