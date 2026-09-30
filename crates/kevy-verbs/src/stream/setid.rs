@@ -9,48 +9,66 @@ use kevy_store::{Store, StreamId, parse_explicit_id};
 
 use crate::reply::{store_err, wrong_args};
 
+/// Every argument is read first; then, on the stream, an ID below the
+/// `MAXDELETEDID` given, below the stream's own, or below its last entry
+/// is refused, and so is an `ENTRIESADDED` below its length.
 pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if !matches!(args.len(), 3 | 5 | 7) {
+    if args.len() < 3 {
         return wrong_args(out, "xsetid");
     }
-    let last_id = match parse_id(&args[2]) {
-        Ok(id) => id,
+    let (last_id, added, deleted) = match parse(args) {
+        Ok(p) => p,
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
-    let mut entries_added: Option<u64> = None;
-    let mut max_deleted_id: Option<StreamId> = None;
+    let s = match store.stream_view(&args[1]) {
+        Ok(Some(s)) => s,
+        Ok(None) => return encode_error(out, "ERR no such key"),
+        Err(e) => return store_err(out, e),
+    };
+    let refusal = if deleted.is_some_and(|d| last_id < d) {
+        Some("ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id")
+    } else if last_id < s.max_deleted_id() {
+        Some("ERR The ID specified in XSETID is smaller than current max_deleted_entry_id")
+    } else if s.last_entry().is_some_and(|(top, _)| last_id < top) {
+        Some("ERR The ID specified in XSETID is smaller than the target stream top item")
+    } else if added.is_some_and(|n| n < s.length()) {
+        Some("ERR The entries_added specified in XSETID is smaller than the target stream length")
+    } else {
+        None
+    };
+    if let Some(msg) = refusal {
+        return encode_error(out, msg);
+    }
+    match store.xsetid(&args[1], last_id, added, deleted) {
+        Ok(()) => encode_simple_string(out, "OK"),
+        Err(e) => store_err(out, e),
+    }
+}
+
+/// `last-id [ENTRIESADDED n] [MAXDELETEDID id]`, each option as often as
+/// given, the last one kept.
+fn parse<A: ArgvView + ?Sized>(
+    args: &A,
+) -> Result<(StreamId, Option<u64>, Option<StreamId>), CmdError> {
+    let last_id = parse_id(&args[2])?;
+    let (mut added, mut deleted) = (None, None);
     let mut i = 3;
     while i < args.len() {
-        let tok = args[i].to_ascii_uppercase();
-        match tok.as_slice() {
-            b"ENTRIESADDED" => {
-                let n = std::str::from_utf8(&args[i + 1]).ok().and_then(|s| s.parse().ok());
-                let Some(n) = n else {
-                    return encode_error(out, "ERR value is not an integer or out of range");
-                };
-                entries_added = Some(n);
-            }
-            b"MAXDELETEDID" => {
-                max_deleted_id = match parse_id(&args[i + 1]) {
-                    Ok(id) => Some(id),
-                    Err(msg) => return encode_error(out, msg.as_wire()),
-                };
-            }
-            _ => return encode_error(out, "ERR syntax error"),
+        let v = args.get(i + 1).ok_or(CmdError::Wire("ERR syntax error"))?;
+        if args[i].eq_ignore_ascii_case(b"ENTRIESADDED") {
+            let n = super::opts::strict_i64(v).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
+            added = Some(
+                u64::try_from(n)
+                    .map_err(|_| CmdError::Wire("ERR entries_added must be positive"))?,
+            );
+        } else if args[i].eq_ignore_ascii_case(b"MAXDELETEDID") {
+            deleted = Some(parse_id(v)?);
+        } else {
+            return Err(CmdError::Wire("ERR syntax error"));
         }
         i += 2;
     }
-    match store.xsetid(&args[1], last_id, entries_added, max_deleted_id) {
-        Ok(()) => encode_simple_string(out, "OK"),
-        Err(kevy_store::StoreError::NoSuchKey) => {
-            encode_error(out, "ERR The XSETID command requires the key to exist.")
-        }
-        Err(kevy_store::StoreError::OutOfRange) => encode_error(
-            out,
-            "ERR The ID specified in XSETID is smaller than the target stream top item",
-        ),
-        Err(e) => store_err(out, e),
-    }
+    Ok((last_id, added, deleted))
 }
 
 fn parse_id(s: &[u8]) -> Result<StreamId, CmdError> {

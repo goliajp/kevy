@@ -3,6 +3,8 @@
 //! `AutoclaimResult` return type alongside the methods that produce it.
 
 use super::group::{ConsumerGroup, ensure_consumer};
+#[path = "autoclaim.rs"]
+mod autoclaim;
 use super::{ClaimMode, EntryBatch, PelEntry, StreamData, StreamId};
 use crate::StoreError;
 #[cfg(not(feature = "std"))]
@@ -151,7 +153,8 @@ pub struct XClaimOpts {
     /// ```
     pub idle_override_ms: Option<u64>,
     /// Override post-claim delivery_time_ms to this absolute unix-ms.
-    /// Takes precedence over `idle_override_ms` if both set.
+    /// Takes precedence over `idle_override_ms` if both set. A time after
+    /// the claim's own is taken as the claim's.
     ///
     /// ```
     /// # use kevy_store::*;
@@ -186,7 +189,7 @@ pub struct XClaimOpts {
     /// assert_eq!(g.pending_entry(StreamId::new(1, 0)).unwrap().delivery_count, 7);
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
-    pub retrycount_override: Option<u32>,
+    pub retrycount_override: Option<u64>,
     /// `FORCE`: claim even if the entry isn't in the PEL yet (creates
     /// a fresh PEL row with delivery_count=1).
     ///
@@ -227,6 +230,21 @@ pub struct XClaimOpts {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub mode: ClaimMode,
+    /// `LASTID id`: move the group's last-delivered ID up to `id`, when
+    /// it is behind.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// # s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 0)), f, MissingStream::Create, 0)?;
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// let opts = XClaimOpts::default().with_last_id(StreamId::new(7, 0));
+    /// s.xclaim(b"s", b"g", b"bob", &[], &opts, 150)?;
+    /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().last_delivered_id(), StreamId::new(7, 0));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub last_id: Option<StreamId>,
 }
 
 impl XClaimOpts {
@@ -269,8 +287,21 @@ impl XClaimOpts {
     /// assert_eq!(kevy_store::XClaimOpts::default().with_retrycount(3).retrycount_override, Some(3));
     /// ```
     #[must_use]
-    pub fn with_retrycount(mut self, n: u32) -> Self {
+    pub fn with_retrycount(mut self, n: u64) -> Self {
         self.retrycount_override = Some(n);
+        self
+    }
+
+    /// `LASTID id`: see [`XClaimOpts::last_id`].
+    ///
+    /// ```
+    /// use kevy_store::{StreamId, XClaimOpts};
+    /// let o = XClaimOpts::default().with_last_id(StreamId::new(3, 0));
+    /// assert_eq!(o.last_id, Some(StreamId::new(3, 0)));
+    /// ```
+    #[must_use]
+    pub fn with_last_id(mut self, id: StreamId) -> Self {
+        self.last_id = Some(id);
         self
     }
 
@@ -322,6 +353,11 @@ impl StreamData {
             }
             claimed.push(*id);
         }
+        if let Some(last) = opts.last_id
+            && last > g.last_delivered_id
+        {
+            g.last_delivered_id = last;
+        }
         // a claim is the consumer's contact whatever it takes, and makes it
         // active when it takes something
         if let Some(cs) = g.consumers.get_mut(new_owner) {
@@ -331,39 +367,6 @@ impl StreamData {
             }
         }
         Ok(claimed)
-    }
-
-    /// `XAUTOCLAIM key group consumer min-idle-ms start [COUNT n]
-    /// [JUSTID]`. Walks the PEL from `start`, looking at no more than
-    /// `count × 10` entries and claiming up to `count` of those idle for at
-    /// least `min_idle_ms`; the cursor is the next pending entry's id, or
-    /// `0-0` at the end of the list.
-    #[allow(clippy::too_many_arguments)]
-    pub fn autoclaim(
-        &mut self,
-        group: &[u8],
-        new_owner: &[u8],
-        min_idle_ms: u64,
-        start: StreamId,
-        count: usize,
-        mode: ClaimMode,
-        now_ms: u64,
-    ) -> Result<AutoclaimResult, StoreError> {
-        let opts = XClaimOpts::default().with_min_idle_ms(min_idle_ms).with_mode(mode);
-        let (candidates, next_cursor) = {
-            let Some(g) = self.groups.get(group) else {
-                return Err(StoreError::NoSuchKey);
-            };
-            autoclaim_scan(g, start, count, min_idle_ms, now_ms)
-        };
-        let claimed = self.claim(group, new_owner, &candidates, &opts, now_ms)?;
-        let mut deleted = Vec::new();
-        for id in &candidates {
-            if !self.entries.contains_key(id) && !claimed.contains(id) {
-                deleted.push(*id);
-            }
-        }
-        Ok(AutoclaimResult { next_cursor, claimed_ids: claimed, deleted_ids: deleted })
     }
 
     /// Field-value payload list pairing with `ids` (from
@@ -380,37 +383,11 @@ impl StreamData {
     }
 }
 
-/// The pending entries from `start` that one XAUTOCLAIM takes, and the
-/// cursor it answers: a scan of at most `count × 10` entries, idle enough or
-/// not, that stops early once `count` are taken; the cursor is the id of the
-/// next pending entry, or `0-0` when the scan reached the end — what Redis
-/// answers, so a client loop ending on `0-0` ends on the same call.
-fn autoclaim_scan(
-    g: &ConsumerGroup,
-    start: StreamId,
-    count: usize,
-    min_idle_ms: u64,
-    now_ms: u64,
-) -> (Vec<StreamId>, StreamId) {
-    let mut attempts = count.saturating_mul(10);
-    let mut taken = Vec::new();
-    let mut pel = g.pel.range(start..=StreamId::MAX);
-    while attempts > 0 && taken.len() < count {
-        let Some((id, p)) = pel.next() else { break };
-        attempts -= 1;
-        if now_ms.saturating_sub(p.delivery_time_ms) >= min_idle_ms {
-            taken.push(*id);
-        }
-    }
-    let next = pel.next().map_or(StreamId::MIN, |(id, _)| *id);
-    (taken, next)
-}
-
 /// Attempt one XCLAIM. Returns `true` if the entry was successfully
 /// transferred to `new_owner`. The `entries` ref is the stream's
 /// entry map (passed in to avoid an extra `&mut self` borrow when
 /// `claim` is called over a slice of IDs).
-fn claim_one(
+pub(super) fn claim_one(
     g: &mut ConsumerGroup,
     entries: &alloc::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
     id: StreamId,
@@ -436,12 +413,18 @@ fn claim_one(
             return false;
         }
     }
-    let new_dt = opts
-        .time_override_ms
-        .or_else(|| opts.idle_override_ms.map(|i| now_ms.saturating_sub(i)))
-        .unwrap_or(now_ms);
+    // a time past the claim's own, or an idle time reaching before the
+    // epoch, is the claim's own time
+    let new_dt = match (opts.time_override_ms, opts.idle_override_ms) {
+        (Some(t), _) => Some(t),
+        (None, Some(i)) => now_ms.checked_sub(i),
+        (None, None) => None,
+    }
+    .filter(|t| *t <= now_ms)
+    .unwrap_or(now_ms);
     let new_dc = opts.retrycount_override.unwrap_or_else(|| {
-        let base = g.pel.get(&id).map_or(0, |p| p.delivery_count);
+        // a row FORCE makes counts as delivered once already
+        let base = g.pel.get(&id).map_or(1, |p| p.delivery_count);
         match opts.mode {
             ClaimMode::JustId => base.max(1),
             ClaimMode::Deliver => base.saturating_add(1),

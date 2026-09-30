@@ -103,12 +103,10 @@ fn xinfo_stream<A: ArgvView + ?Sized>(
 fn emit_stream_head(out: &mut Vec<u8>, s: &StreamData) {
     field(out, "length");
     encode_integer(out, s.length() as i64);
-    // no radix tree here: the counts a tree of 100-entry nodes would have
-    let keys = s.length().div_ceil(100) as i64;
     field(out, "radix-tree-keys");
-    encode_integer(out, keys);
+    encode_integer(out, s.node_count() as i64);
     field(out, "radix-tree-nodes");
-    encode_integer(out, keys + 1);
+    encode_integer(out, s.radix_tree_nodes() as i64);
     field(out, "last-generated-id");
     encode_id(out, s.last_id());
     field(out, "max-deleted-entry-id");

@@ -28,15 +28,65 @@ pub(super) fn cmd_xgroup<A: ArgvView + ?Sized>(
         b"SETID" => xgroup_setid(store, args, out),
         b"CREATECONSUMER" => return xgroup_create_consumer(store, args, out),
         b"DELCONSUMER" => xgroup_del_consumer(store, args, out),
-        other => encode_error(
+        b"HELP" if args.len() == 2 => xgroup_help(out),
+        b"HELP" => wrong_args(out, "xgroup|help"),
+        _ => encode_error(
             out,
             &format!(
-                "ERR Unknown XGROUP subcommand or wrong number of arguments for '{}'",
-                String::from_utf8_lossy(other),
+                "ERR unknown subcommand '{}'. Try XGROUP HELP.",
+                String::from_utf8_lossy(&args[1]),
             ),
         ),
     }
     Effect::Write
+}
+
+fn xgroup_help(out: &mut Vec<u8>) {
+    const LINES: [&str; 17] = [
+        "XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+        "CREATE <key> <groupname> <id|$> [option]",
+        "    Create a new consumer group. Options are:",
+        "    * MKSTREAM",
+        "      Create the empty stream if it does not exist.",
+        "    * ENTRIESREAD entries_read",
+        "      Set the group's entries_read counter (internal use).",
+        "CREATECONSUMER <key> <groupname> <consumer>",
+        "    Create a new consumer in the specified group.",
+        "DELCONSUMER <key> <groupname> <consumer>",
+        "    Remove the specified consumer.",
+        "DESTROY <key> <groupname>",
+        "    Remove the specified group.",
+        "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
+        "    Set the current group ID and entries_read counter.",
+        "HELP",
+        "    Print this help.",
+    ];
+    kevy_resp::encode_array_len(out, LINES.len() as i64);
+    for line in LINES {
+        encode_simple_string(out, line);
+    }
+}
+
+/// The key must hold a stream, and — when `group` is `Some` — the group
+/// must exist; otherwise the refusal is written to `out`.
+fn has_group(store: &mut Store, key: &[u8], group: Option<&[u8]>, out: &mut Vec<u8>) -> bool {
+    match store.stream_view(key) {
+        Ok(Some(s)) => match group {
+            Some(g) if s.group(g).is_none() => {
+                super::info::no_group(out, key, g);
+                false
+            }
+            _ => true,
+        },
+        Ok(None) => {
+            encode_error(out, NO_KEY);
+            false
+        }
+        Err(e) => {
+            store_err(out, e);
+            false
+        }
+    }
 }
 
 /// The options after `CREATE key group id` / `SETID key group id`.
@@ -132,6 +182,9 @@ fn xgroup_destroy<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut V
     if args.len() != 4 {
         return wrong_args(out, "xgroup|destroy");
     }
+    if !has_group(store, &args[2], None, out) {
+        return;
+    }
     match store.xgroup_destroy(&args[2], &args[3]) {
         Ok(true) => encode_integer(out, 1),
         Ok(false) => encode_integer(out, 0),
@@ -147,11 +200,8 @@ fn xgroup_setid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec
     }
     let (key, group) = (&args[2], &args[3]);
     let Some(opts) = parse_group_opts(args, false, out) else { return };
-    match store.stream_view(key) {
-        Ok(Some(s)) if s.group(group).is_some() => {}
-        Ok(Some(_)) => return super::info::no_group(out, key, group),
-        Ok(None) => return encode_error(out, NO_KEY),
-        Err(e) => return store_err(out, e),
+    if !has_group(store, key, Some(group), out) {
+        return;
     }
     let mode = match parse_id_or_dollar(&args[4]) {
         Ok(m) => m,
@@ -179,6 +229,9 @@ fn xgroup_create_consumer<A: ArgvView + ?Sized>(
         wrong_args(out, "xgroup|createconsumer");
         return Effect::Write;
     }
+    if !has_group(store, &args[2], Some(&args[3]), out) {
+        return Effect::Write;
+    }
     match store.xgroup_create_consumer(&args[2], &args[3], &args[4], now_unix_ms()) {
         Ok(true) => {
             encode_integer(out, 1);
@@ -198,6 +251,9 @@ fn xgroup_create_consumer<A: ArgvView + ?Sized>(
 fn xgroup_del_consumer<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() != 5 {
         return wrong_args(out, "xgroup|delconsumer");
+    }
+    if !has_group(store, &args[2], Some(&args[3]), out) {
+        return;
     }
     match store.xgroup_del_consumer(&args[2], &args[3], &args[4]) {
         Ok(n) => encode_integer(out, n as i64),

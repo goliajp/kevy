@@ -132,6 +132,19 @@ pub enum StoreError {
     /// assert_eq!(s.precheck_for_write(), Err(StoreError::OutOfMemory));
     /// ```
     OutOfMemory,
+    /// A stream's last ID is the largest there is, so no entry can follow
+    /// it (XADD).
+    ///
+    /// ```
+    /// use kevy_store::{MissingStream, Store, StoreError, StreamId, XAddIdSpec};
+    /// let mut s = Store::new();
+    /// let f = || vec![(b"f".to_vec(), b"v".to_vec())];
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::MAX), f(), MissingStream::Create, 0)?;
+    /// let next = s.xadd(b"s", XAddIdSpec::AutoAll, f(), MissingStream::Create, 0);
+    /// assert_eq!(next, Err(StoreError::StreamExhausted));
+    /// # Ok::<(), StoreError>(())
+    /// ```
+    StreamExhausted,
 }
 
 impl StoreError {
@@ -151,6 +164,9 @@ impl StoreError {
             Self::NoSuchKey => "ERR no such key",
             Self::NotFloat => "ERR value is not a valid float",
             Self::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
+            Self::StreamExhausted => {
+                "ERR The stream has exhausted the last possible ID, unable to add more items"
+            }
         }
     }
 }
@@ -165,6 +181,7 @@ impl fmt::Display for StoreError {
             Self::NoSuchKey => "no such key",
             Self::NotFloat => "value is not a valid float",
             Self::OutOfMemory => "maxmemory reached and the eviction policy is noeviction",
+            Self::StreamExhausted => "the stream has exhausted the last possible ID",
         })
     }
 }
