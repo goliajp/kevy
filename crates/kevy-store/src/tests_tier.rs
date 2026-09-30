@@ -30,7 +30,7 @@ fn tiered(name: &str, budget: u64) -> (Store, kevy_tmpdir::TmpDir) {
     (s, d)
 }
 
-fn is_cold(s: &Store, key: &[u8]) -> bool {
+pub(crate) fn is_cold(s: &Store, key: &[u8]) -> bool {
     matches!(s.map.get(key).map(|e| &e.value), Some(Value::Cold(_)))
 }
 

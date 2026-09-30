@@ -295,10 +295,7 @@ fn a_sharded_row_records_its_old_fields() {
     let mut pairs: Vec<(&[u8], &[u8])> = fields.iter().map(|f| (&f[..], &b"v"[..])).collect();
     pairs.push((b"a", b"1"));
     s.hset(b"u:1", &pairs).expect("hash");
-    assert!(matches!(
-        s.map.get(b"u:1".as_slice()).map(|e| &e.value),
-        Some(crate::Value::SegHash(_))
-    ));
+    assert!(crate::tests_seg_map::is_seghash(&s, b"u:1"));
     take(&mut s);
     s.hset(b"u:1", &[(b"a", b"2")]).expect("hash");
     assert_eq!(take(&mut s), [row("u:1", Some("1"), None)]);
