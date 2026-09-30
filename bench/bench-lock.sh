@@ -14,10 +14,17 @@
 #                                     the two take the same lock
 #   Linux  /var/lock/bench.lock       flock
 #
-# KEVY_BENCH_LOCK overrides the path. A script run by another that already
-# holds the lock does not take it again: the environment says it is held.
+# Where the bench-lock tool is installed it takes the lock; otherwise
+# flock on the file above. KEVY_BENCH_LOCK overrides the path. A script
+# run by another that already holds the lock does not take it again: the
+# environment says it is held.
 if [ -z "${KEVY_BENCH_LOCK_HELD:-}" ]; then
   export KEVY_BENCH_LOCK_HELD=1
+  # a machine with the bench-lock tool: it gives a waiting benchmark
+  # priority over builds that start after it, which a bare flock does not
+  if command -v bench-lock >/dev/null 2>&1; then
+    exec bench-lock bench "$BASH" "$0" "$@"
+  fi
   case "$(uname -s)" in
     Darwin)
       _bench_lock=${KEVY_BENCH_LOCK:-/Users/Shared/bench.lock}
