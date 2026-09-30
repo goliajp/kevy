@@ -168,8 +168,8 @@ global snapshot (SCAN-class).
 - `VIEW.REBUILD` is answer-preserving (asserted in the e2e suite);
   `VIEW.VERIFY` makes drift falsifiable (members / bytes /
   order-exclusions).
-- The view catalog persists in a data-dir sidecar; materialized
-  CONTENT is derived state — rebuilt after restart, never
+- The view catalog is recorded in the log and every snapshot, and
+  replicates; materialized CONTENT is derived state — rebuilt after restart, never
   snapshotted.
 
 ## Embedded

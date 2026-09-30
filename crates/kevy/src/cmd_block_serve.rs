@@ -271,7 +271,12 @@ fn xreadgroup_ready<A: ArgvView + ?Sized>(store: &mut Store, serve_argv: &A) -> 
             let Some(key) = serve_argv.get(i + 1) else {
                 return false;
             };
-            return store.xreadgroup_has_new(key, &group).unwrap_or(false);
+            // no such key or group, or the wrong type: serving answers the
+            // error, which is what a read on this shard answers at once
+            if store.stream_group_peek(key, &group).is_none() {
+                return true;
+            }
+            return store.xreadgroup_has_new(key, &group).unwrap_or(true);
         }
         i += 1;
     }
@@ -396,10 +401,15 @@ mod ready_tests {
         // XREADGROUP: a call too short to name a group is not ready, and
         // cannot be — that guard is the first thing the arm does.
         assert!(!block_ready(&ctx, &mut s, &argv(&[b"XREADGROUP"]), BlockKind::XReadGroupBlock));
+        // A missing group is ready: serving answers NOGROUP at once, as a
+        // read on the stream's own shard does. A group with nothing new is
+        // not; one with a new entry is.
         let grouped =
             argv(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"st", b">"]);
+        assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+        kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"$"]));
         assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
-        kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"]));
+        kevy.dispatch(&mut s, &argv(&[b"XADD", b"st", b"2-1", b"f", b"v"]));
         assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
     }
 }

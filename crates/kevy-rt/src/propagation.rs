@@ -137,6 +137,12 @@ pub(crate) fn take_armed() -> bool {
     ARMED.with(|a| a.replace(false))
 }
 
+/// Whether anything is armed, leaving the flag as it is.
+#[inline]
+pub(crate) fn is_armed() -> bool {
+    ARMED.with(Cell::get)
+}
+
 /// Install a propagation override for the command currently executing.
 /// Called from the verb body, after the store mutation; consumed by
 /// the post-write housekeeping of that same command.

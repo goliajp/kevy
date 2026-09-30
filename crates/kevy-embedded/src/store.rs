@@ -130,13 +130,11 @@ impl Store {
         let bb = crate::store_wire::boot_backbone(&config)?;
         let (shards, open_report) = (bb.shards, Arc::new(bb.open_report));
         #[cfg(feature = "index")]
-        let tables = bb.tables;
+        let catalog = bb.catalog;
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         let (replica_runner, replica_source, feed) =
             crate::store_wire::wire_replication(&config, &shards)?;
         let blocker = crate::store_wire::wire_blocker(&shards);
-        #[cfg(feature = "index")]
-        let (indexes, views) = crate::store_wire::wire_registries(&shards);
         // Engine-lifetime state: `store_wire::build_guard` (fn-length rule).
         let guard = crate::store_wire::build_guard(
             &open_report,
@@ -151,7 +149,7 @@ impl Store {
             &feed,
             &config,
             #[cfg(feature = "index")]
-            &tables,
+            &catalog,
             #[cfg(feature = "persist")]
             dir_lock,
         );
@@ -163,27 +161,23 @@ impl Store {
             feed,
             blocker,
             #[cfg(feature = "index")]
-            indexes,
+            indexes: catalog.indexes.clone(),
             #[cfg(feature = "index")]
-            views,
+            views: catalog.views.clone(),
             #[cfg(feature = "index")]
-            tables,
+            tables: catalog.tables.clone(),
             open_report,
         };
         store.boot_ancillary()?;
         Ok(store)
     }
 
-    /// Post-construction bring-up: index/view boot scans and the
-    /// optional read-only RESP listener. Split from [`Self::open_inner`]
-    /// for the fn-length rule.
+    /// Post-construction bring-up: the catalog a 6.4 directory kept in
+    /// side files, and the optional read-only RESP listener. Split from
+    /// [`Self::open_inner`] for the fn-length rule.
     fn boot_ancillary(&self) -> KevyResult<()> {
-        #[cfg(feature = "index")]
-        self.idx_boot();
-        #[cfg(feature = "index")]
-        self.view_boot();
-        #[cfg(feature = "index")]
-        self.table_boot();
+        #[cfg(all(feature = "index", feature = "persist"))]
+        self.settle_sidecars()?;
         #[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
         if let Some(addr) = self.config.resp_listener {
             crate::listener::spawn(addr, self.downgrade())?;

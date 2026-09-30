@@ -96,7 +96,7 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 
 ## 一致性
 
-与每一种索引 kind 同一个信封（[indexes.md](indexes.md)）：一次写入和它引发的图更新，在所属 shard 内是原子的；跨 shard 查询归并逐 shard 的 top-k，没有全局快照（SCAN 类）。目录持久化在数据目录的 sidecar 文件里；图的**内容**是派生状态，重启后重建。
+与每一种索引 kind 同一个信封（[indexes.md](indexes.md)）：一次写入和它引发的图更新，在所属 shard 内是原子的；跨 shard 查询归并逐 shard 的 top-k，没有全局快照（SCAN 类）。目录记录在日志和每份快照里，并随复制下发；图的**内容**是派生状态，重启后重建。
 
 ## 性能
 

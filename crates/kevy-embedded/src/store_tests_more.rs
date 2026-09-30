@@ -542,7 +542,7 @@ fn idx_create_query_maintain_reopen() {
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     let st = s2.idx_stats(b"score_idx").unwrap();
     assert_eq!(st.entries, 31, "30 + copied, rebuilt from replayed data");
-    assert!(s2.idx_drop(b"score_idx"));
+    assert!(s2.idx_drop(b"score_idx").unwrap());
     assert!(
         s2.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(1), None, 10).is_err()
     );
@@ -621,7 +621,7 @@ fn view_create_query_maintain_reopen() {
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     let (page, _) = s2.view_query(b"v_top", None, 3).unwrap();
     assert_eq!(page[0].0, b"t:15".to_vec(), "reopen rebuild honest");
-    assert!(s2.view_drop(b"v_top"));
+    assert!(s2.view_drop(b"v_top").unwrap());
     assert!(s2.view_query(b"v_top", None, 1).is_err());
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);

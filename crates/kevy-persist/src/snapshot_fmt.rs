@@ -52,6 +52,10 @@ pub(crate) const OP_HFTTL: u8 = 7;
 /// Row-segment stub record: `[key][seq u32 LE][value_weight u32 LE]`.
 /// v7+ only.
 pub(crate) const OP_SEGSTUB: u8 = 8;
+/// The auxiliary frame beside the keyspace: `[parts u32 LE][bytes]…`, at
+/// most one, after `OP_EOF`, where a reader from before it stops. Any
+/// version.
+pub(crate) const OP_AUX: u8 = 9;
 
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
 /// default made SAVE ~12 % of disk bandwidth (tens of thousands of small

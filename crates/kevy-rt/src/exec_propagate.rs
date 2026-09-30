@@ -71,12 +71,13 @@ impl<C: Commands> Shard<C> {
         self.post_write_housekeeping(argv, meta);
     }
 
-    /// A blocking command that parked is not recorded by its argv, which
-    /// would do nothing when replayed, but before parking it may have
-    /// asked for a record of what it did change (a group read creates its
-    /// consumer). Record that now: left armed, the next write on this
-    /// thread would take it as its own and lose its own record.
-    pub(crate) fn record_parked<A: ArgvView + ?Sized>(&mut self, args: &A) {
+    /// Record what a command asked to be recorded, for a command that is
+    /// not recorded by its argv: a blocking command that parked (a group
+    /// read creates its consumer before it waits), or a fan-out whose
+    /// reduce changed state kept outside the store. Left armed, the next
+    /// write on this thread would take it as its own and lose its own
+    /// record.
+    pub(crate) fn record_armed<A: ArgvView + ?Sized>(&mut self, args: &A) {
         if !crate::propagation::take_armed() {
             return;
         }

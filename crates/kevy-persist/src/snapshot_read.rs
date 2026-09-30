@@ -114,9 +114,29 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
 /// ```
 pub fn load_snapshot_filtered<R: Read>(
     store: &mut Store,
-    mut r: R,
+    r: R,
     keep: impl Fn(&[u8]) -> bool,
 ) -> io::Result<()> {
+    load_snapshot_with_aux(store, r, keep).map(drop)
+}
+
+/// [`load_snapshot_filtered`], returning the auxiliary frame the snapshot
+/// carried beside the keyspace, if any (see
+/// [`crate::SnapshotSource::aux_frame`]).
+///
+/// ```
+/// let store = kevy_store::Store::new();
+/// let mut image = Vec::new();
+/// kevy_persist::write_snapshot_to(&store, &mut image)?;
+/// let mut back = kevy_store::Store::new();
+/// assert!(kevy_persist::load_snapshot_with_aux(&mut back, image.as_slice(), |_| true)?.is_none());
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn load_snapshot_with_aux<R: Read>(
+    store: &mut Store,
+    mut r: R,
+    keep: impl Fn(&[u8]) -> bool,
+) -> io::Result<Option<crate::Argv>> {
     let version = read_snapshot_header(&mut r)?;
     // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline
@@ -135,7 +155,7 @@ pub fn load_snapshot_filtered<R: Read>(
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             store.demote_to_watermark();
-            return Ok(());
+            return crate::snapshot_aux::read_trailer(&mut r);
         }
         records += 1;
         if records.is_multiple_of(crate::REPLAY_DEMOTE_INTERVAL) {

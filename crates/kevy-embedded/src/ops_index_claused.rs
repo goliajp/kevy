@@ -224,7 +224,7 @@ impl Store {
             values.iter().map(|(n, t)| kevy_index::ValueSpec::new(*n).with_type(*t)).collect();
         let spec = IndexSpec::builder(name, prefix, kind, ty).with_field(field).with_values(values);
         let spec = crate::ops_index::built(spec)?;
-        self.register_spec(spec)
+        self.catalog_change(|| self.register_spec(spec))
     }
 
     /// [`Store::idx_query`] with the stored-value clauses — the scalar

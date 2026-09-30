@@ -124,6 +124,9 @@ fn finish_dump<S: crate::SnapshotSource>(
 ) -> io::Result<crate::RewriteStats> {
     write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
     crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
+    if let Some(frame) = src.aux_frame() {
+        emit(&mut w, &frame, crate::AofFormat::V2, scratch)?;
+    }
     w.flush()?;
     let inner = w.into_inner().map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = inner.metadata().map_or(0, |m| m.len());
@@ -199,6 +202,9 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
     });
     // the per-field deadlines, as `dump_aof` writes them after the values
     let _ = write_hash_ttl_frames(&mut buf, src, fmt, &mut scratch);
+    if let Some(frame) = src.aux_frame() {
+        let _ = emit(&mut buf, &frame, fmt, &mut scratch);
+    }
     (buf, keys)
 }
 
