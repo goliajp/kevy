@@ -205,7 +205,9 @@ fn time_dependent_round_trip(shards: usize) {
     assert!(before[0].starts_with("*50\r\n"), "{}", before[0]);
     assert_eq!(before[4], ":50\r\n");
     assert!(before[2].contains("c2") && before[2].contains("c3"), "{}", before[2]);
-    assert!(!before[2].contains(&dropped), "the dropped entry left the list: {}", before[2]);
+    // the whole line: `…-1` is also how `…-10` starts
+    let row = format!("\r\n{dropped}\r\n");
+    assert!(!before[2].contains(&row), "the dropped entry left the list: {}", before[2]);
 }
 
 /// A generated ID and an idle-gated claim replay as they were answered.

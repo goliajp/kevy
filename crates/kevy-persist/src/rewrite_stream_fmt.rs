@@ -148,9 +148,12 @@ fn xclaim_argv(
     ]
 }
 
-/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM
-/// [ENTRIESREAD n]` (MKSTREAM covers groups on a virgin empty stream; the
-/// read counter when known), one `XCLAIM … TIME t RETRYCOUNT n FORCE
+/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
+/// (MKSTREAM covers groups on a virgin empty stream), `XGROUP SETID …
+/// ENTRIESREAD n` when the read counter is known (its own frame, which a
+/// 6.4 reader skips and still has the group), one `XGROUP CREATECONSUMER`
+/// per known consumer (so a 6.4 reader has the consumers the internal
+/// frames below would give it), one `XCLAIM … TIME t RETRYCOUNT n FORCE
 /// JUSTID` per live PEL row — full delivery_time/count fidelity, the same
 /// technique Redis's own AOF rewrite uses — then one internal
 /// `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per known consumer,
@@ -169,21 +172,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
 ) -> io::Result<usize> {
     let mut frames = 0usize;
     for g in s.export_groups() {
-        let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1);
-        let mut argv = vec![
-            b"XGROUP".to_vec(),
-            b"CREATE".to_vec(),
-            key.to_vec(),
-            g.name.clone(),
-            last_delivered.encode(),
-            b"MKSTREAM".to_vec(),
-        ];
-        if let Some(n) = g.entries_read {
-            argv.push(b"ENTRIESREAD".to_vec());
-            argv.push(n.to_string().into_bytes());
-        }
-        emit(w, &Argv::from(argv), fmt, scratch)?;
-        frames += 1;
+        frames += write_group_head(w, key, &g, fmt, scratch)?;
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
             let id = StreamId::new(*ms, *seq);
             let argv = if s.contains_entry(id) {
@@ -195,6 +184,36 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             frames += 1;
         }
         frames += write_consumer_times(w, key, &g, fmt, scratch)?;
+    }
+    Ok(frames)
+}
+
+/// The frames that make a group and its consumers, before its pending
+/// rows: `XGROUP CREATE`, the read counter, one `XGROUP CREATECONSUMER`
+/// per consumer.
+fn write_group_head<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    g: &kevy_store::LoadedGroup,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1).encode();
+    let named = |sub: &[u8], tail: &[&[u8]]| {
+        let mut argv = vec![b"XGROUP".to_vec(), sub.to_vec(), key.to_vec(), g.name.clone()];
+        argv.extend(tail.iter().map(|t| t.to_vec()));
+        Argv::from(argv)
+    };
+    emit(w, &named(b"CREATE", &[&last_delivered, b"MKSTREAM"]), fmt, scratch)?;
+    let mut frames = 1;
+    if let Some(n) = g.entries_read {
+        let n = n.to_string();
+        emit(w, &named(b"SETID", &[&last_delivered, b"ENTRIESREAD", n.as_bytes()]), fmt, scratch)?;
+        frames += 1;
+    }
+    for (consumer, _) in &g.consumers {
+        emit(w, &named(b"CREATECONSUMER", &[consumer]), fmt, scratch)?;
+        frames += 1;
     }
     Ok(frames)
 }
