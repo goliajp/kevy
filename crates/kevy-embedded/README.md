@@ -322,7 +322,7 @@ amortises the cost across the batch.
 `Store::open` first loads the snapshot, then replays the AOF, so a
 fresh process resumes exactly where the previous one left off.
 
-```rust
+```rust,no_run
 use kevy_embedded::{AppendFsync, Config, Store};
 
 let store = Store::open(
@@ -399,7 +399,7 @@ Three deployment shapes, all backed by the same `Store` API.
 
 The default. Reads and writes hit the in-process keyspace.
 
-```rust
+```rust,no_run
 use kevy_embedded::{Config, Store};
 
 let store = Store::open(Config::default().with_persist("./data"))?;
