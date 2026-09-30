@@ -18,12 +18,20 @@ Tracks the kevy 7.0.0 engine. No API change in this door; the vendored
   store rewrote its log and reopened.
 - **`COPY` copies a key of any type.** Since 2.0.13 only strings were
   copied; other types answered `WRONGTYPE`.
+- **Streams and geo run in the embedded engine.** The stream commands
+  (`XADD`, `XRANGE`, `XREADGROUP`, `XACK`, `XCLAIM`, `XINFO`, …) and the
+  `GEO*` commands answer through `cmd`. A `BLOCK` read is refused with
+  `ERR the embedded engine cannot block; call without BLOCK`.
+- **`SET … NX|XX EX|PX` and the `EXPIRE` family each run as one
+  operation.** Since 4.0.0 `SET NX EX` set the value and its TTL under two
+  locks.
 - **Opening is about 2.8× faster and closing returns at once.** Closing used
   to wait up to 100 ms for the background reaper.
 
 Downgrading: 6.4 does not understand the mapped log's zero tail or the
 staging file. After an app has been killed on 7.0, open and close the store
-cleanly with 7.0 before installing a 6.4 build.
+cleanly with 7.0 before installing a 6.4 build. 6.4 also opens a store
+7.0 wrote without its indexes, views and tables.
 
 ## 6.4.0
 

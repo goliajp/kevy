@@ -21,7 +21,8 @@
     "bridge.js",
     "wire.js",
     "preload.cjs",
-    "index.d.ts"
+    "index.d.ts",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.js"
