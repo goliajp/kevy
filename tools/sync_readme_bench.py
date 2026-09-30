@@ -46,10 +46,10 @@ def latest_arena():
         verb = cells[0]
         try:
             rows[verb] = {
-                "kevy": int(cells[1].replace(",", "")),
-                "redis8": int(cells[2].replace(",", "")),
-                "valkey": int(cells[3].replace(",", "")),
-                "dragonfly": int(cells[4].replace(",", "")),
+                "kevy": cell(cells[1]),
+                "redis8": cell(cells[2]),
+                "valkey": cell(cells[3]),
+                "dragonfly": cell(cells[4]),
             }
         except ValueError:
             # Say which table and which cell, rather than raising
@@ -69,6 +69,28 @@ def latest_arena():
     return date, version, names, rows
 
 
+class Cell(int):
+    """A cell's throughput. `floor` when the load generator, not the
+    engine, set it (`≥ n` in the table): the engine does at least that."""
+
+    floor = False
+
+
+def cell(text):
+    floor = text.startswith("≥")
+    c = Cell(int(text.lstrip("≥ ").replace(",", "")))
+    c.floor = floor
+    return c
+
+
+def ratio(kevy, other, fmt="{:.2f}×"):
+    """kevy / other as written: a floor when kevy's number is one, and no
+    ratio at all when the other's is, since it could do more than it did."""
+    if other.floor:
+        return None
+    return ("≥ " if kevy.floor else "") + fmt.format(kevy / other)
+
+
 def measured_against(header, date, version):
     """The version of each opponent the table was measured against, read
     from its own heading. A label taken from the current pins would put a
@@ -86,7 +108,11 @@ def measured_against(header, date, version):
 
 
 def m(n):
-    return f"{n / 1e6:.2f} M/s"
+    return ("≥ " if n.floor else "") + f"{n / 1e6:.2f} M/s"
+
+
+def bold(r):
+    return f"**{r}**" if r else "—"
 
 
 def build(date, version, names, rows):
@@ -111,16 +137,16 @@ def build(date, version, names, rows):
                 f"| {a} | kevy | valkey {names['valkey']} | {b} |\n"
                 f"|---|---:|---:|---|\n"
                 f"| `GET -c 50 -P 16` | {m(get['kevy'])} | {m(get['valkey'])} | "
-                f"**{get['kevy'] / get['valkey']:.2f}×** |\n"
+                f"{bold(ratio(get['kevy'], get['valkey']))} |\n"
                 f"| `SET -c 50 -P 16` | {m(setv['kevy'])} | {m(setv['valkey'])} | "
-                f"**{setv['kevy'] / setv['valkey']:.2f}×** |"
+                f"{bold(ratio(setv['kevy'], setv['valkey']))} |"
             ),
             "lead": (
                 f"| {c} | {d} |\n"
                 f"|---|---:|\n"
-                f"| valkey {names['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
-                f"| redis {names['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
-                f"| dragonfly {names['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
+                f"| valkey {names['valkey']} | {bold(ratio(get['kevy'], get['valkey']))} |\n"
+                f"| redis {names['redis']} | {bold(ratio(get['kevy'], get['redis8']))} |\n"
+                f"| dragonfly {names['dragonfly']} | {bold(ratio(get['kevy'], get['dragonfly']))} |"
             ),
             "rate": m(get["kevy"]),
         }
@@ -145,7 +171,11 @@ I18N = "web/src/i18n.tsx"
 
 def _m(n):
     """7,421,434 -> '7.42 M' — the landing page's shorter form."""
-    return f"{n / 1_000_000:.2f} M"
+    return ("≥ " if n.floor else "") + f"{n / 1_000_000:.2f} M"
+
+
+def _n(n):
+    return ("≥ " if n.floor else "") + f"{n:,}"
 
 
 def write_site(rows, version, names, check):
@@ -171,14 +201,28 @@ def write_site(rows, version, names, check):
         p = ROOT / rel
         text = p.read_text(encoding="utf-8")
         before = text
+        num = r'"(?:≥ )?[\d,]+"'
         for verb in order:
             r = rows[verb]
-            ratio = r["kevy"] / r["redis8"]
-            mark = "!" if ratio < 1.2 else "*"
-            new = (f'["{verb}", "{r["kevy"]:,}", "{r["redis8"]:,}", '
-                   f'"{r["valkey"]:,}", "{r["dragonfly"]:,}", "{mark}{ratio:.2f}×"]')
-            text = re.sub(rf'\["{verb}", "[\d,]+", "[\d,]+", "[\d,]+", "[\d,]+", "[!*][\d.]+×"\]',
+            mark = "!" if r["kevy"] / r["redis8"] < 1.2 else "*"
+            vs = ratio(r["kevy"], r["redis8"]) or "—"
+            new = (f'["{verb}", "{_n(r["kevy"])}", "{_n(r["redis8"])}", '
+                   f'"{_n(r["valkey"])}", "{_n(r["dragonfly"])}", "{mark}{vs}"]')
+            text = re.sub(rf'\["{verb}", {num}, {num}, {num}, {num}, "[!*](?:≥ )?(?:[\d.]+×|—)"\]',
                           new.replace("\\", "\\\\"), text)
+        # the landing page's bar chart against Redis: [verb, kevy, redis,
+        # ratio, thin]; a thin row is one under 1.2x, drawn as a warning
+        for verb in order:
+            r = rows[verb]
+            vs = ratio(r["kevy"], r["redis8"]) or "—"
+            thin = "True" if r["kevy"] / r["redis8"] < 1.2 else "False"
+
+            def bar(m, r=r, vs=vs, thin=thin):
+                q = m.group(1)
+                return f"[{q}{m.group(2)}{q}, {int(r['kevy'])}, {int(r['redis8'])}, {q}{vs}{q}, {thin}]"
+            text = re.sub(rf"\[([\"'])({verb})\1, \d+, \d+, [\"'](?:≥ )?(?:[\d.]+×|—)[\"'], (?:True|False)\]",
+                          bar, text)
+        text = re.sub(r'"them": "Redis [0-9][0-9.]*"', f'"them": "Redis {names["redis"]}"', text)
         text = re.sub(r'"kevy \d+\.\d+\.\d+"', f'"kevy {version}"', text)
         text = headings(text)
         if text != before:
@@ -194,11 +238,11 @@ def write_site(rows, version, names, check):
     for verb in ["GET", "SET", "INCR", "HSET"]:
         r = rows[verb]
         new = (f"{{ op: '{verb}', kevy: '{_m(r['kevy'])}', "
-               f"valkey: '{_m(r['valkey'])}', ratio: '{r['kevy'] / r['valkey']:.2f}×' }}")
+               f"valkey: '{_m(r['valkey'])}', ratio: '{ratio(r['kevy'], r['valkey']) or '—'}' }}")
         text = re.sub(rf"\{{ op: '{verb}', kevy: '[^']+', valkey: '[^']+', ratio: '[^']+' \}}",
                       new.replace("\\", "\\\\"), text)
-    set_ratio = f"{rows['SET']['kevy'] / rows['SET']['valkey']:.2f}×"
-    text = re.sub(r'<div className="v">[\d.]+×</div>', f'<div className="v">{set_ratio}</div>', text)
+    set_ratio = ratio(rows["SET"]["kevy"], rows["SET"]["valkey"]) or "—"
+    text = re.sub(r'<div className="v">(?:≥ )?[\d.]+×</div>', f'<div className="v">{set_ratio}</div>', text)
     if text != before:
         if check:
             bad.append(f"{APP} does not carry the {version} numbers")
@@ -208,11 +252,18 @@ def write_site(rows, version, names, check):
     # the abstract, which states both ratios to one decimal in three languages
     p = ROOT / I18N
     text = p.read_text(encoding="utf-8")
-    g = rows["GET"]["kevy"] / rows["GET"]["valkey"]
-    st = rows["SET"]["kevy"] / rows["SET"]["valkey"]
-    new_text = re.sub(r"[\d.]+× on GET, [\d.]+× on SET", f"{g:.1f}× on GET, {st:.1f}× on SET", text)
-    new_text = re.sub(r"GET 快 [\d.]+ 倍、SET 快 [\d.]+ 倍", f"GET 快 {g:.1f} 倍、SET 快 {st:.1f} 倍", new_text)
-    new_text = re.sub(r"GET は [\d.]+ 倍、SET は [\d.]+ 倍", f"GET は {g:.1f} 倍、SET は {st:.1f} 倍", new_text)
+    # a floor reads "at least" in each language; valkey is never load-bound here
+    words = {
+        "en": ("{r}× on {v}", "at least {r}× on {v}", r"(?:at least )?[\d.]+× on {v}"),
+        "zh": ("{v} 快 {r} 倍", "{v} 至少快 {r} 倍", r"{v} (?:至少)?快 [\d.]+ 倍"),
+        "ja": ("{v} は {r} 倍", "{v} は {r} 倍以上", r"{v} は [\d.]+ 倍(?:以上)?"),
+    }
+    new_text = text
+    for plain, floor, pat in words.values():
+        for verb in ("GET", "SET"):
+            k, o = rows[verb]["kevy"], rows[verb]["valkey"]
+            said = (floor if k.floor else plain).format(r=f"{k / o:.1f}", v=verb)
+            new_text = re.sub(pat.format(v=verb), said, new_text)
     if new_text != text:
         if check:
             bad.append(f"{I18N} does not carry the {version} ratios")
@@ -257,30 +308,31 @@ def patterns(name, t, date, version):
     rows = "\n".join(t["vs"].split("\n")[2:])
     lead = "\n".join(t["lead"].split("\n")[2:]).replace("\\", "\\\\")
     ver = r"[\d.]+"
+    lead_cell = r"(?:\*\*(?:≥ )?[\d.]+×\*\*|—)"
     common = [
         # matched on their own two rows so this cannot land on the lead table
         ("kevy-vs-valkey rows",
          r"\| `GET -c 50 -P 16` \|[^\n]*\n\| `SET -c 50 -P 16` \|[^\n]*", rows),
         ("four-engine lead table",
-         rf"\| valkey {ver} \| \*\*[\d.]+×\*\* \|\n\| redis {ver} \| \*\*[\d.]+×\*\* \|\n"
-         rf"\| dragonfly {ver} \| \*\*[\d.]+×\*\* \|", lead),
+         rf"\| valkey {ver} \| {lead_cell} \|\n\| redis {ver} \| {lead_cell} \|\n"
+         rf"\| dragonfly {ver} \| {lead_cell} \|", lead),
     ]
     rate = t["rate"]
     own = {
         "README.md": [
             ("dated sentence", r"re-measured \d{4}-\d{2}-\d{2} \(kevy [\d.]+\)",
              f"re-measured {date} (kevy {version})"),
-            ("quoted rate", r"(kevy at\s*)[\d.]+ M/s( against each)", rf"\g<1>{rate}\g<2>"),
+            ("quoted rate", r"(kevy at\s*)(?:≥ )?[\d.]+ M/s( against each)", rf"\g<1>{rate}\g<2>"),
         ],
         "README.zh-CN.md": [
             ("dated sentence", r"\d{4}-\d{2}-\d{2} 重测（kevy [\d.]+）",
              f"{date} 重测（kevy {version}）"),
-            ("quoted rate", r"(kevy\s*以 )[\d.]+ M/s", rf"\g<1>{rate}"),
+            ("quoted rate", r"(kevy\s*以 )(?:≥ )?[\d.]+ M/s", rf"\g<1>{rate}"),
         ],
         "README.ja.md": [
             ("dated sentence", r"を\d{4}-\d{2}-\d{2}に再測定した値（kevy [\d.]+）",
              f"を{date}に再測定した値（kevy {version}）"),
-            ("quoted rate", r"(kevyは)[\d.]+ M/s(で)", rf"\g<1>{rate}\g<2>"),
+            ("quoted rate", r"(kevyは)(?:≥ )?[\d.]+ M/s(で)", rf"\g<1>{rate}\g<2>"),
         ],
     }
     return common + own[name]

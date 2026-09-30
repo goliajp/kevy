@@ -28,33 +28,94 @@ is run again. Two tools measure the server:
   per command per function under valgrind, which does not depend on what
   else the machine is doing.
 
-## Key-value throughput — 2026-09-07 — kevy 6.3.0
+## Key-value throughput — 2026-10-01 — kevy 7.0.0
 
-`-c 50 -P 16`, one engine at a time, server on cores 0-7 and client on
-8-15. Throughput is read from each server's own command counter over a
-timed window (not from `redis-benchmark`'s printed rate), median of 5 per
-run, and the per-cell median across three full runs.
+`-c 50 -P 16`, one engine at a time. Each engine gets 4 cores (CPUs 0-3,
+4 threads, io-threads or proactor threads), their SMT siblings stay
+empty, and the load generator gets both threads of four other cores (8
+`redis-benchmark` threads). Throughput is read from each server's own
+command counter over timed windows; the table is the per-cell median of
+15 windows (3 rounds of 5). After each cell a probe window with 16 load
+threads checks the generator: where it beats the cell's best window by
+more than 2 %, the generator, not the engine, set that number, which is
+then a floor, marked ≥. Other processes used at most 2.8 % of the box in
+any window.
 
-| verb | kevy | Redis 8.10.1 | valkey 9.1.2 | Dragonfly 1.40.2 | vs Redis 8.10.1 |
+| verb | kevy | Redis 8.10.2 | valkey 9.1.2 | Dragonfly 2.0.0 | vs Redis 8.10.2 |
 |---|---:|---:|---:|---:|---:|
-| GET | 7,489,119 | 5,631,398 | 2,980,764 | 2,845,704 | 1.33x |
-| SET | 6,824,662 | 2,567,607 | 1,683,227 | 1,943,358 | 2.66x |
-| INCR | 6,753,558 | 3,294,927 | 2,279,738 | 1,953,406 | 2.05x |
-| SADD | 6,152,617 | 3,753,131 | 2,214,659 | 1,899,967 | 1.64x |
-| HSET | 4,002,580 | 2,966,288 | 1,857,532 | 1,773,498 | 1.35x |
-| LPUSH | 3,142,699 | 2,860,306 | 1,859,265 | 1,505,141 | 1.10x |
-| ZADD | 3,242,967 | 2,818,626 | 1,786,230 | 1,794,335 | 1.15x |
+| GET | 8,726,283 | 5,467,748 | 4,041,855 | ≥ 3,364,079 | 1.57x–1.60x |
+| SET | ≥ 7,409,590 | 2,861,941 | 2,011,380 | 2,019,740 | ≥ 2.47x–2.62x |
+| INCR | 7,249,946 | 3,788,318 | 2,750,827 | 2,223,491 | 1.89x–1.96x |
+| SADD | 6,919,570 | 4,204,106 | 2,728,331 | 1,911,038 | 1.63x–1.74x |
+| HSET | ≥ 5,393,670 | 3,352,393 | 2,283,589 | 1,964,211 | ≥ 1.57x–1.68x |
+| LPUSH | 4,424,738 | 3,220,774 | 2,260,722 | 1,700,519 | 1.35x–1.45x |
+| ZADD | ≥ 4,980,252 | 3,112,253 | 2,159,811 | 1,804,781 | ≥ 1.54x–1.62x |
 
-In every cell, kevy's slowest of the three runs is faster than every
-competitor's fastest run. The narrowest margins are LPUSH and ZADD against
-Redis (1.08x run-to-run worst case). The largest run-to-run spread was
-11.1 % for kevy (SADD), 13.5 % for valkey and 5.6 % for Dragonfly.
+The ratio column is a 99 % paired bootstrap interval over the windows; its
+lower bound is the claim. Against valkey 9.1.2 the lower bounds run from
+1.93x (LPUSH) to 3.53x (SET), against Dragonfly 2.0.0 from 2.34x (LPUSH)
+to 3.60x (SADD); Dragonfly's GET was held back by the load generator, so
+that one cell has no ratio. Every one of the 20 lower bounds is above 1.
+The narrowest margin is LPUSH against Redis, 1.35x.
+
+What each engine spends per command, from the same windows (`perf stat`
+on the engine; instructions in user and kernel mode, cycles, and system
+calls per command):
+
+| verb | kevy | Redis 8.10.2 | valkey 9.1.2 | Dragonfly 2.0.0 |
+|---|---:|---:|---:|---:|
+| GET | 2,162 + 1,515 · 2,159 cyc · 0.28 sys | 3,380 + 1,450 · 2,887 cyc · 0.15 sys | 4,849 + 1,359 · 4,653 cyc · 0.13 sys | 6,455 + 1,731 · 5,395 cyc · 0.29 sys |
+| SET | 3,017 + 1,734 · 2,584 cyc · 0.45 sys | 5,978 + 1,441 · 3,821 cyc · 0.15 sys | 9,599 + 1,379 · 9,316 cyc · 0.13 sys | 8,487 + 2,096 · 7,004 cyc · 0.46 sys |
+| LPUSH | 4,937 + 2,929 · 4,201 cyc · 1.41 sys | 5,699 + 1,444 · 3,685 cyc · 0.15 sys | 8,689 + 1,380 · 8,301 cyc · 0.13 sys | 9,302 + 2,553 · 8,188 cyc · 0.54 sys |
+| ZADD | 4,679 + 2,497 · 3,822 cyc · 1.08 sys | 6,053 + 1,440 · 3,925 cyc · 0.15 sys | 9,279 + 1,377 · 8,718 cyc · 0.13 sys | 9,671 + 2,301 · 7,992 cyc · 0.52 sys |
+
+Redis runs its command execution on one thread and its io-threads on the
+rest, so it keeps 2.3–3.4 of the 4 cores busy; kevy, valkey and Dragonfly
+keep all 4 busy. kevy's cycles per command are the lowest on every verb
+except LPUSH, where Redis spends 3,685 against kevy's 4,201 — kevy leads
+LPUSH on throughput by using all four cores, and it makes about ten times
+Redis's system calls per command there (1.41 against 0.15).
+
+The previous table (2026-09-07, kevy 6.3.0 against Redis 8.10.1, valkey
+9.1.2 and Dragonfly 1.40.2) gave each engine 8 cores; it is not comparable
+cell for cell with this one.
 
 Reproduce:
 
 ```sh
 cargo build --release -p kevy
 bash bench/arena.sh target/release/kevy
+```
+
+## 7.0 against 6.4.0 — 2026-10-01
+
+`bash bench/perfgate.sh compare` on the same box: the 6.4.0 release
+binary against 7.0.0, each on 4 server cores, 5 rounds with the order
+alternating, 14 workload shapes. B / A is 7.0 over 6.4.0, median of the
+rounds:
+
+| shape | ops/s | instructions / op | cycles / op |
+|---|---:|---:|---:|
+| GET | 1.052 | 0.935 | 0.951 |
+| SET | 1.080 | 0.887 | 0.926 |
+| INCR | 1.088 | 0.940 | 0.919 |
+| SADD | 1.062 | 0.921 | 0.941 |
+| HSET | 1.013 | 0.921 | 0.987 |
+| LPUSH | 1.180 | 0.849 | 0.848 |
+| ZADD | 1.101 | 0.890 | 0.911 |
+| GET through the cluster-compatible port | 1.090 | 0.887 | 0.920 |
+| SET through the cluster-compatible port | 1.052 | 0.903 | 0.951 |
+| SET across shards | 1.074 | 0.910 | 0.937 |
+| GET of one hot key | 1.227 | 0.879 | 0.839 |
+| SET of one hot key | 1.158 | 0.903 | 0.890 |
+
+Hybrid index queries answer at p95 206 µs against 232 µs (0.888), and the
+server's resident memory under the same load is lower on every shape (GET:
+371 MB against 558 MB). `ZINTERSTORE` did not saturate the server on
+either side and is left out of the table. Reproduce:
+
+```sh
+bash bench/perfgate.sh compare v6.4.0 HEAD
 ```
 
 ## Transport: TCP loopback and Unix socket — kevy 1.25 (2026-06-22)
