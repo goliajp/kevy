@@ -149,3 +149,20 @@ fn expire_decides_existence_with_the_probe_that_writes() {
     assert_eq!(run(&mut s, "PEXPIREAT k 1"), (Some(Effect::Write), b":1\r\n".to_vec()));
     assert_eq!(s.dbsize(), 0);
 }
+
+#[test]
+fn recording_a_deadline_reaps_nothing() {
+    use kevy_store::{SetCondition, Store};
+    use std::time::Duration;
+    let mut store = Store::new();
+    store.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    // the TTL runs out between the write and its record
+    std::thread::sleep(Duration::from_millis(5));
+    let f = crate::aof::deadline_frame(&store, b"k").expect("the deadline is recorded");
+    let at: u64 = std::str::from_utf8(&f[2]).unwrap().parse().unwrap();
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    assert!(u128::from(at) <= now, "recorded as the past deadline it is");
+    assert_eq!(store.dbsize(), 1, "the record removed the key");
+    assert_eq!(store.expired_keys_total(), 0, "the record counted an expiry");
+}
