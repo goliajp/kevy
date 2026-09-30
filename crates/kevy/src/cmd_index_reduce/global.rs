@@ -7,7 +7,7 @@
 use kevy_rt::ExtensionReduced;
 
 use crate::cmd_index_query::{PART_ORIG, PART_VERB, REBUILD_TAG, global_walk};
-use crate::state::RuntimeState;
+use crate::state::{CatalogChange, RuntimeState};
 
 /// The first phase of an `IDX.QUERY` on a global index: `None` unless it
 /// is a page in order that went to one partition.
@@ -84,12 +84,17 @@ pub(super) fn rebuild(
         points.extend(crate::index_runtime::read_points(c, &mut 2)?);
     }
     let splits = kevy_index::splits_from_weighted(points, state.nshards().max(1));
-    let mut cat = (*state.catalogs.index()?).clone();
-    if !cat.set_splits(name, splits) {
-        return None;
+    loop {
+        let base = state.catalog_base();
+        let mut cat = (*base.index.clone()?).clone();
+        if !cat.set_splits(name, splits.clone()) {
+            return None;
+        }
+        let change = CatalogChange { index: Some(cat), ..CatalogChange::default() };
+        if state.commit_catalogs(&base, change) {
+            return Some(b"+OK\r\n".to_vec());
+        }
     }
-    state.install_index_catalog(cat);
-    Some(b"+OK\r\n".to_vec())
 }
 
 /// Two plain hit chunks (`[status][n u32][rows…]`) as one; an empty

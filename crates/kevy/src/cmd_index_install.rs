@@ -9,7 +9,7 @@ use kevy_resp::{ArgvView, encode_error};
 use kevy_store::Store;
 
 use crate::index_runtime::{self, POINTS_PER_PARTITION};
-use crate::state::Ctx;
+use crate::state::{CatalogChange, Ctx};
 
 /// The partitioning an IDX.CREATE asked for, before its split values are
 /// encoded in the index's order.
@@ -154,13 +154,16 @@ pub(crate) fn install_new_index(
     let Ok(partitioning) = partitioning(part, sampler, &spec, ctx.state.nshards(), out) else {
         return;
     };
-    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    match cat.create_with(spec, partitioning) {
-        Ok(()) => {
-            ctx.state.install_index_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
+    loop {
+        let base = ctx.state.catalog_base();
+        let mut cat = base.index_owned();
+        if let Err(e) = cat.create_with(spec.clone(), partitioning.clone()) {
+            return encode_error(out, &e.to_wire());
         }
-        Err(e) => encode_error(out, &e.to_wire()),
+        let change = CatalogChange { index: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            return out.extend_from_slice(b"+OK\r\n");
+        }
     }
 }
 

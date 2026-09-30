@@ -58,6 +58,8 @@ struct ShardIndex {
     build: BuildState,
     /// Where this index's fields sit in the store's record of old rows.
     slots: Option<changes::Slots>,
+    /// Which build of the index this is on this shard (never 0).
+    build_id: u64,
 }
 
 /// One shard's slice of every declared index. Owned by
@@ -84,6 +86,9 @@ pub(crate) struct ShardIndexes {
     watch_gen: u64,
     /// The view catalog generation the key directories were set for.
     view_gen: u64,
+    /// The builds this shard has started, numbering each.
+    builds: u64,
+    touched: touched::Touched,
 }
 
 /// The write-path hook body (`Commands::on_write`). The caller gates
@@ -156,7 +161,10 @@ pub(crate) fn on_flush(ctx: &Ctx<'_>) {
 /// Every segment back to its declared-empty shape, every build done.
 fn reset_all(st: &mut ShardIndexes) {
     for si in &mut st.idx {
+        // a view reads the new segment by key as it read the old one
+        let key_dir = si.seg.key_dir().is_some();
         si.seg = new_scalar_seg(&si.spec);
+        si.seg.set_key_dir(key_dir);
         si.text = new_text_seg(&si.spec);
         si.ann = new_ann_seg(&si.spec);
         si.agg = (si.spec.kind() == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new);
@@ -296,15 +304,7 @@ pub(crate) fn with_segment_resolver<R>(
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(ctx, &mut st);
     let idx = &st.idx;
-    // a view probes the rows of this shard, which a global index's
-    // entries are not: it resolves to nothing, and the view refuses it
-    let resolver = |name: &[u8]| -> Option<&Segment> {
-        idx.iter()
-            .find(|si| si.spec.name() == name && matches!(si.build, BuildState::Ready))
-            .filter(|si| si.global.is_none())
-            .map(|si| &si.seg)
-    };
-    f(&resolver)
+    f(&|name: &[u8]| touched::ready(idx, name))
 }
 
 /// Two-segment variant for COMPOSE — one RefCell borrow (nesting
@@ -368,7 +368,8 @@ fn refresh(ctx: &Ctx<'_>, st: &mut ShardIndexes) {
             match st.idx.iter().position(same) {
                 Some(i) => next.push(reconcile_windows(catalogs, st.idx.swap_remove(i))),
                 None => {
-                    let mut si = fresh_shard_index(catalogs, spec);
+                    st.builds += 1;
+                    let mut si = fresh_shard_index(catalogs, spec, st.builds);
                     si.global = part
                         .is_global()
                         .then(|| global::GlobalRole::new(spec, part, (shard, n), inc));
@@ -416,6 +417,7 @@ fn set_key_dirs(catalogs: &CatalogState, st: &mut ShardIndexes) {
     for si in &mut st.idx {
         si.seg.set_key_dir(read.iter().any(|n| n.as_slice() == si.spec.name()));
     }
+    st.touched.set_on(!read.is_empty());
     st.view_gen = view_gen;
 }
 
@@ -441,7 +443,7 @@ impl ShardIndex {
 /// A just-declared index's runtime entry. Its backfill walks the
 /// domain's keys on THIS shard; live writes from now on hit the hook
 /// first and win.
-fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec) -> ShardIndex {
+fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec, build_id: u64) -> ShardIndex {
     ShardIndex {
         agg: (spec.kind() == kevy_index::IndexKind::Agg).then(kevy_index::AggSegment::new),
         text: new_text_seg(spec),
@@ -453,6 +455,7 @@ fn fresh_shard_index(catalogs: &CatalogState, spec: &IndexSpec) -> ShardIndex {
         spec: spec.clone(),
         build: BuildState::Backfilling(KeyWalk::new(spec.prefix())),
         slots: None,
+        build_id,
     }
 }
 
@@ -471,7 +474,9 @@ pub(crate) use quantile::{POINTS_PER_PARTITION, put_points, quantile_points, rea
 mod global_wire;
 mod row_apply;
 use row_apply::advance_backfill;
+mod touched;
 pub(crate) use row_apply::{RowValue, row_value};
+pub(crate) use touched::{Rows, with_rows};
 mod changes;
 mod seg_new;
 mod tidy;

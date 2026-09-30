@@ -8,7 +8,7 @@
 use kevy_index::{AUTODECLARE_AFTER, AdviseEntry, AdviseShape};
 
 use crate::cmd_index_query::{ST_NOFIELD, ST_NOINDEX};
-use crate::state::{CatalogState, RuntimeState};
+use crate::state::{CatalogBase, CatalogChange, CatalogState, RuntimeState};
 
 /// The whole refusal side: observe the family, then let the auto
 /// loop act on the fresh count. One call from the reduce.
@@ -69,35 +69,41 @@ fn maybe_autodeclare(state: &RuntimeState, name: &[u8], shape: AdviseShape, coun
         Some(d) => d,
         None => return,
     };
-    let Some(tcat) = state.catalogs.table() else { return };
-    let Some(mut spec) = tcat.get(&name[..dot]).cloned() else { return };
-    if spec.autodeclare == 0 {
-        return;
-    }
     let entry = AdviseEntry::new(name, shape, count);
-    let Some(ledger) = spec.apply_auto(&entry) else { return };
-    let Ok(compiled) = spec.compile() else { return };
-    let mut new_tcat = (*tcat).clone();
-    new_tcat.drop_table(&spec.name);
-    if new_tcat.create(spec).is_err() {
-        return;
+    loop {
+        let base = state.catalog_base();
+        let Some(change) = autodeclared(&base, &name[..dot], &entry) else { return };
+        if state.commit_catalogs(&base, change) {
+            return;
+        }
     }
-    let mut icat = state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+}
+
+/// The catalogs with the path `entry` asks for declared on table
+/// `table`; `None` when there is nothing to declare.
+fn autodeclared(base: &CatalogBase, table: &[u8], entry: &AdviseEntry) -> Option<CatalogChange> {
+    let mut spec = base.table.as_deref()?.get(table).cloned()?;
+    if spec.autodeclare == 0 {
+        return None;
+    }
+    let ledger = spec.apply_auto(entry)?;
+    let compiled = spec.compile().ok()?;
+    let mut new_tcat = base.table_owned();
+    new_tcat.drop_table(&spec.name);
+    new_tcat.create(spec).ok()?;
+    let mut icat = base.index_owned();
     // `path` = a whole new compiled index; `path#field` = a changed
     // one, rebuilt (drop + create) so the VALUES payloads backfill.
     let path = match ledger.iter().position(|&b| b == b'#') {
         Some(p) => &ledger[..p],
         None => &ledger[..],
     };
-    let Some(ispec) = compiled.into_iter().find(|s| s.name() == path) else { return };
+    let ispec = compiled.into_iter().find(|s| s.name() == path)?;
     // a path rebuilt for its new VALUES keeps how it was spread
     let part = icat.partitioning(path).clone();
     icat.drop_index(path);
-    if icat.create_with(ispec, part).is_err() {
-        return;
-    }
-    state.install_index_catalog(icat);
-    state.install_table_catalog(new_tcat);
+    icat.create_with(ispec, part).ok()?;
+    Some(CatalogChange { index: Some(icat), table: Some(new_tcat), view: None })
 }
 
 /// The declaration family a NOINDEX refusal asked for, read from the

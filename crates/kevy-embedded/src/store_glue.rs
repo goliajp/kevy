@@ -110,7 +110,7 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()>
 /// relative TTL set a moment ago replays to the same instant. Nothing is
 /// recorded when the key has no deadline.
 pub(crate) fn commit_deadline(inner: &mut Inner, key: &[u8]) -> KevyResult<()> {
-    let Some(f) = kevy_verbs::aof::deadline_frame(&mut inner.store, key) else {
+    let Some(f) = kevy_verbs::aof::deadline_frame(&inner.store, key) else {
         return Ok(());
     };
     let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();

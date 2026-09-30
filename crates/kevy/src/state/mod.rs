@@ -21,7 +21,7 @@ mod replication;
 mod scope;
 mod shard;
 
-pub(crate) use catalogs::CatalogState;
+pub(crate) use catalogs::{CatalogBase, CatalogChange, CatalogState};
 pub(crate) use election::ElectionState;
 pub(crate) use obs::{ObsState, ReplShardView, ShardStats, Totals};
 pub(crate) use progress::ReplicaProgress;
