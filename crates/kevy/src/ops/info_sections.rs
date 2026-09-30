@@ -298,11 +298,12 @@ pub(super) fn info_cluster(cfg: &Config, b: &mut String) {
 /// one line per module in Redis's `module:name=…` shape so existing
 /// tools parse it. kevy's modules are built in, not loaded — the section
 /// answers "what can this server do", not "what was dlopen'd": `alloc`
-/// reports the compiled-in allocator, `tiering` its runtime state, and
+/// reports the allocator the process runs on (linking kevy-alloc does not
+/// make it that), `tiering` its runtime state, and
 /// the command surfaces report present-by-construction.
 pub(super) fn info_modules(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Modules\r\n");
-    b.push_str(if cfg!(feature = "kevy-alloc") {
+    b.push_str(if crate::defrag_tick::active() {
         "module:name=alloc,impl=kevy-alloc\r\n"
     } else {
         "module:name=alloc,impl=system\r\n"
