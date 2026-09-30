@@ -114,17 +114,71 @@ pub struct LoadedGroup {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub pel: Vec<LoadedPelEntry>,
+    /// The group's read counter (`XINFO`'s `entries-read`), `None` when
+    /// unknown.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// assert_eq!(lg.entries_read, Some(2));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub entries_read: Option<u64>,
+    /// `(name, last_active_ms)` per consumer that has ever been handed an
+    /// entry; a consumer not listed never has.
+    ///
+    /// ```
+    /// # use kevy_store::*;
+    /// # let mut s = Store::new();
+    /// # for t in [1, 2] {
+    /// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    /// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+    /// # }
+    /// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+    /// s.xgroup_create_consumer(b"s", b"g", b"bob", 150)?;
+    /// let lg = &s.stream_view(b"s")?.unwrap().export_groups()[0];
+    /// assert_eq!(lg.active, [(b"alice".to_vec(), 100)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub active: Vec<(Vec<u8>, u64)>,
 }
 
 impl LoadedGroup {
-    /// A group in exchange form, as a loader decodes it.
+    /// A group in exchange form, as a loader decodes it, with an unknown
+    /// read counter and no consumer ever handed an entry.
     pub fn new(
         name: Vec<u8>,
         last_delivered: (u64, u64),
         consumers: Vec<(Vec<u8>, u64)>,
         pel: Vec<LoadedPelEntry>,
     ) -> Self {
-        Self { name, last_delivered, consumers, pel }
+        Self { name, last_delivered, consumers, pel, entries_read: None, active: Vec::new() }
+    }
+
+    /// The same group with its read counter and its consumers' last
+    /// active times.
+    ///
+    /// ```
+    /// use kevy_store::{LoadedGroup, StreamData};
+    /// let g = LoadedGroup::new(b"g".to_vec(), (1, 0), vec![(b"c".to_vec(), 5)], Vec::new())
+    ///     .with_reads(Some(1), vec![(b"c".to_vec(), 4)]);
+    /// let mut s = StreamData::default();
+    /// s.import_groups(vec![g.clone()]);
+    /// assert_eq!(s.export_groups(), [g]);
+    /// ```
+    #[must_use]
+    pub fn with_reads(mut self, entries_read: Option<u64>, active: Vec<(Vec<u8>, u64)>) -> Self {
+        self.entries_read = entries_read;
+        self.active = active;
+        self
     }
 }
 
@@ -154,6 +208,12 @@ impl StreamData {
                         (id.ms, id.seq, p.consumer.to_vec(), p.delivery_time_ms, p.delivery_count)
                     })
                     .collect(),
+                entries_read: g.entries_read,
+                active: g
+                    .consumers
+                    .iter()
+                    .filter_map(|(c, cs)| cs.last_active_ms.map(|at| (c.to_vec(), at)))
+                    .collect(),
             })
             .collect()
     }
@@ -166,24 +226,14 @@ impl StreamData {
         for lg in groups {
             let mut consumers: KevyMap<SmallBytes, Box<ConsumerState>> = KevyMap::default();
             for (name, last_seen_ms) in lg.consumers {
-                let name = SmallBytes::from_vec(name);
-                consumers.insert(
-                    name.clone(),
-                    Box::new(ConsumerState { name, last_seen_ms, pel_count: 0 }),
-                );
+                let state = ConsumerState::new(&name, last_seen_ms);
+                consumers.insert(SmallBytes::from_vec(name), state);
             }
             let mut pel: BTreeMap<StreamId, PelEntry> = BTreeMap::new();
             for (ms, seq, consumer, delivery_time_ms, delivery_count) in lg.pel {
                 let consumer = SmallBytes::from_vec(consumer);
                 if consumers.get(consumer.as_slice()).is_none() {
-                    consumers.insert(
-                        consumer.clone(),
-                        Box::new(ConsumerState {
-                            name: consumer.clone(),
-                            last_seen_ms: 0,
-                            pel_count: 0,
-                        }),
-                    );
+                    consumers.insert(consumer.clone(), ConsumerState::new(consumer.as_slice(), 0));
                 }
                 if let Some(cs) = consumers.get_mut(consumer.as_slice()) {
                     cs.pel_count += 1;
@@ -193,12 +243,18 @@ impl StreamData {
                     PelEntry { consumer, delivery_time_ms, delivery_count },
                 );
             }
+            for (name, at) in lg.active {
+                if let Some(cs) = consumers.get_mut(name.as_slice()) {
+                    cs.last_active_ms = Some(at);
+                }
+            }
             self.groups.insert(
                 SmallBytes::from_vec(lg.name),
                 Box::new(ConsumerGroup {
                     last_delivered_id: StreamId::new(lg.last_delivered.0, lg.last_delivered.1),
                     pel,
                     consumers,
+                    entries_read: lg.entries_read,
                 }),
             );
         }

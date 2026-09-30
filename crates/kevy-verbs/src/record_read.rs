@@ -10,19 +10,22 @@
 //!   consumer 0 id… TIME t RETRYCOUNT n FORCE JUSTID` per `(delivery time,
 //!   delivery count)` they hold, the frame a claim is recorded with.
 //!   `FORCE` makes the rows, which the replay has not yet made;
-//! * how far it moved the group: `XGROUP SETID key group <last-delivered>`.
+//! * how far it moved the group and the read counter it left:
+//!   `XGROUP SETID key group <last-delivered> ENTRIESREAD <n|-1>`.
 //!
-//! With `NOACK` no pending entries are made, so only the `SETID` frame is
+//! With `NOACK` no pending entries are made, so no `XCLAIM` frame is
 //! recorded. A read of history (an explicit ID) changes no pending entry
 //! and moves nothing.
 //!
 //! A read is the consumer's latest contact with the group, and creates the
 //! consumer if missing. A stream the read delivered from, or made the
-//! consumer on, has its frames start with `XINTERNAL.CONSUMERSEEN key group
-//! consumer t`, `t` that contact: the frames after it find the consumer
-//! and leave its time be. A read that delivered nothing and made no
-//! consumer is not recorded at all, so a consumer that only polls comes
-//! back from a restart with the contact of its last recorded read.
+//! consumer on, has its frames end with `XINTERNAL.CONSUMERSEEN key group
+//! consumer t [a]`, `t` that contact and `a` the last time the consumer
+//! was handed an entry: the claim frames before it stamp the consumer with
+//! the replay's clock, and it sets both times back. A read that delivered
+//! nothing and made no consumer is not recorded at all, so a consumer that
+//! only polls comes back from a restart with the contact of its last
+//! recorded read.
 
 use std::ops::Bound;
 
@@ -56,17 +59,20 @@ pub(crate) fn read_frames<A: ArgvView + ?Sized>(
                 let ids: Vec<StreamId> = g.pending_range(span).map(|(id, _)| id).collect();
                 claims = taken_frames(store, key, group, consumer, &ids);
             }
-            let mut setid = Argv::with_capacity(5, 0);
-            for part in [&b"XGROUP"[..], b"SETID", key, group, &last.encode()] {
+            let read = g.entries_read().map_or_else(|| "-1".to_owned(), |n| n.to_string());
+            let mut setid = Argv::with_capacity(7, 0);
+            for part in [&b"XGROUP"[..], b"SETID", key, group, &last.encode(), b"ENTRIESREAD"] {
                 setid.push(part);
             }
+            setid.push(read.as_bytes());
             moved = Some(setid);
         }
-        if moved.is_some() || *consumer_was == Consumer::Created {
-            frames.extend(seen_frame(store, key, group, consumer));
-        }
+        let seen = moved.is_some() || *consumer_was == Consumer::Created;
         frames.extend(moved);
         frames.extend(claims);
+        if seen {
+            frames.extend(seen_frame(store, key, group, consumer));
+        }
     }
     frames
 }

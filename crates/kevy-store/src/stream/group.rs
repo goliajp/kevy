@@ -46,12 +46,35 @@ pub struct ConsumerGroup {
     pub(crate) pel: BTreeMap<StreamId, PelEntry>,
     /// Consumers known to this group (by name).
     pub(crate) consumers: KevyMap<SmallBytes, Box<ConsumerState>>,
+    /// The read counter, `XINFO`'s `entries-read`: how many of the
+    /// entries ever added the group has read past. `None` when unknown.
+    pub(crate) entries_read: Option<u64>,
 }
 
 impl ConsumerGroup {
     /// Highest ID delivered by this group — for `XINFO GROUPS`.
     pub fn last_delivered_id(&self) -> StreamId {
         self.last_delivered_id
+    }
+    /// `XINFO GROUPS`' `entries-read`: how many of the entries ever added
+    /// the group has read past, `None` when a deletion or a jump of its
+    /// position (`XGROUP SETID`) made that unknown.
+    ///
+    /// ```
+    /// use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, StreamId, Store, XAddIdSpec};
+    /// let mut s = Store::new();
+    /// for ms in 1..=3 {
+    ///     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+    ///     s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(ms, 0)), f, MissingStream::Create, 0)?;
+    /// }
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+    /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().entries_read(), None);
+    /// s.xreadgroup(b"s", b"g", b"c", ReadGroupId::New, Some(2), AckMode::Pending, 10)?;
+    /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().entries_read(), Some(2));
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn entries_read(&self) -> Option<u64> {
+        self.entries_read
     }
     /// Total pending entries — `XINFO GROUPS`'s `pending`.
     pub fn pending_count(&self) -> usize {
@@ -93,6 +116,7 @@ impl Default for ConsumerGroup {
             last_delivered_id: StreamId::MIN,
             pel: BTreeMap::new(),
             consumers: KevyMap::default(),
+            entries_read: None,
         }
     }
 }
@@ -115,6 +139,7 @@ impl StreamData {
                 last_delivered_id,
                 pel: BTreeMap::new(),
                 consumers: KevyMap::default(),
+                entries_read: None,
             }),
         );
         Ok(true)
@@ -125,8 +150,8 @@ impl StreamData {
         self.groups.remove(name).is_some()
     }
 
-    /// `XGROUP SETID key group <id|$>`. Returns `false` if the group
-    /// doesn't exist.
+    /// `XGROUP SETID key group <id|$>`, which leaves the read counter
+    /// unknown. Returns `false` if the group doesn't exist.
     pub fn group_setid(&mut self, name: &[u8], mode: GroupCreateMode) -> bool {
         let Some(g) = self.groups.get_mut(name) else {
             return false;
@@ -135,6 +160,7 @@ impl StreamData {
             GroupCreateMode::AtId(id) => id,
             GroupCreateMode::AtCurrent => self.last_id,
         };
+        g.entries_read = None;
         true
     }
 
@@ -161,14 +187,30 @@ impl StreamData {
             cs.last_seen_ms = seen_ms;
             return false;
         }
-        g.consumers.insert(
-            SmallBytes::from_slice(consumer),
-            Box::new(ConsumerState {
-                name: SmallBytes::from_slice(consumer),
-                last_seen_ms: seen_ms,
-                pel_count: 0,
-            }),
-        );
+        g.consumers.insert(SmallBytes::from_slice(consumer), ConsumerState::new(consumer, seen_ms));
+        true
+    }
+
+    /// Set a consumer's last active time (`None` = never), the consumer
+    /// made when missing with its last contact at the same time. `false`
+    /// if the group is missing.
+    pub fn group_consumer_active(
+        &mut self,
+        group: &[u8],
+        consumer: &[u8],
+        active_ms: Option<u64>,
+    ) -> bool {
+        let Some(g) = self.groups.get_mut(group) else {
+            return false;
+        };
+        if g.consumers.get(consumer).is_none() {
+            let seen = active_ms.unwrap_or(0);
+            g.consumers
+                .insert(SmallBytes::from_slice(consumer), ConsumerState::new(consumer, seen));
+        }
+        if let Some(cs) = g.consumers.get_mut(consumer) {
+            cs.last_active_ms = active_ms;
+        }
         true
     }
 
@@ -182,14 +224,7 @@ impl StreamData {
         if g.consumers.contains_key(consumer) {
             return false;
         }
-        g.consumers.insert(
-            SmallBytes::from_slice(consumer),
-            Box::new(ConsumerState {
-                name: SmallBytes::from_slice(consumer),
-                last_seen_ms: now_ms,
-                pel_count: 0,
-            }),
-        );
+        g.consumers.insert(SmallBytes::from_slice(consumer), ConsumerState::new(consumer, now_ms));
         true
     }
 
@@ -223,32 +258,34 @@ impl StreamData {
             return Err(StoreError::NoSuchKey);
         };
         let consumer_smb = SmallBytes::from_slice(consumer);
-        ensure_consumer(g, &consumer_smb, now_ms);
-        if let Some(cs) = g.consumers.get_mut(consumer_smb.as_slice()) {
-            cs.last_seen_ms = now_ms;
-        }
+        seen_consumer(g, &consumer_smb, now_ms);
         match last_seen_arg {
             ReadGroupId::New => {
                 let start = g.last_delivered_id.next();
-                let entries: Vec<(StreamId, &[(SmallBytes, SmallBytes)])> = self
+                let take: Vec<(StreamId, &[(SmallBytes, SmallBytes)])> = self
                     .entries
                     .range(start..=StreamId::MAX)
                     .map(|(id, fv)| (*id, fv.as_slice()))
+                    .take(count.unwrap_or(usize::MAX))
                     .collect();
-                let take = match count {
-                    Some(n) => entries.into_iter().take(n).collect::<Vec<_>>(),
-                    None => entries,
-                };
-                if take.is_empty() {
+                let Some(&(to, _)) = take.last() else {
                     return Ok(Vec::new());
-                }
+                };
                 if ack == AckMode::Pending {
                     record_deliveries(g, &consumer_smb, &take, now_ms);
+                    if let Some(cs) = g.consumers.get_mut(consumer_smb.as_slice()) {
+                        cs.last_active_ms = Some(now_ms);
+                    }
                 }
-                let g_mut = self.groups.get_mut(group).expect("present");
-                if let Some((last_id, _)) = take.last() {
-                    g_mut.last_delivered_id = *last_id;
-                }
+                let tally = super::lag::Tally::of(
+                    &self.entries,
+                    self.entries_added,
+                    self.max_deleted_id,
+                    self.last_id,
+                );
+                let n = take.len() as u64;
+                g.entries_read = tally.after_read(g.last_delivered_id, g.entries_read, n, to);
+                g.last_delivered_id = to;
                 Ok(super::clone_entries(take))
             }
             ReadGroupId::ReplayAfter(after) => {
@@ -306,12 +343,17 @@ fn replay_pel_entries(
         .collect()
 }
 
+/// Make the named consumer if missing, and note `now_ms` as its contact.
+fn seen_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: u64) {
+    ensure_consumer(g, name, now_ms);
+    if let Some(cs) = g.consumers.get_mut(name.as_slice()) {
+        cs.last_seen_ms = now_ms;
+    }
+}
+
 pub(super) fn ensure_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: u64) {
     if g.consumers.get(name.as_slice()).is_none() {
-        g.consumers.insert(
-            name.clone(),
-            Box::new(ConsumerState { name: name.clone(), last_seen_ms: now_ms, pel_count: 0 }),
-        );
+        g.consumers.insert(name.clone(), ConsumerState::new(name.as_slice(), now_ms));
     }
 }
 

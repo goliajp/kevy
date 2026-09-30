@@ -140,11 +140,14 @@ fn pel(store: &mut Store) -> Vec<(String, Vec<u8>, u64, u32)> {
         .collect()
 }
 
-/// `(consumer, last contact, pending)` of `group` on `key`, by name.
-fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, usize)> {
+/// `(consumer, last contact, last active, pending)` of `group` on `key`,
+/// by name.
+fn consumers(store: &Store, key: &[u8], group: &[u8]) -> Vec<(Vec<u8>, u64, Option<u64>, usize)> {
     let g = store.stream_group_peek(key, group).expect("the group");
-    let mut out: Vec<_> =
-        g.consumers().map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count())).collect();
+    let mut out: Vec<_> = g
+        .consumers()
+        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.last_active_ms(), c.pending_count()))
+        .collect();
     out.sort();
     out
 }
@@ -336,7 +339,9 @@ fn a_dropped_entry_is_recorded_as_a_drop() {
     let (e, reply) = run(&mut s, "XCLAIM s g a 0 1-1 JUSTID");
     assert_eq!(reply, "*0\r\n");
     let rec = records(&mut s, "XCLAIM s g a 0 1-1 JUSTID", e);
-    assert_eq!(rec, vec!["XCLAIM s g a 0 1-1 JUSTID".to_string()]);
+    assert_eq!(rec.len(), 2, "{rec:?}");
+    assert_eq!(rec[0], "XCLAIM s g a 0 1-1 JUSTID");
+    assert!(rec[1].starts_with("XINTERNAL.CONSUMERSEEN s g a "), "the claim's contact: {rec:?}");
 }
 
 /// A known consumer's read that delivers from one stream and not the
@@ -353,7 +358,7 @@ fn a_known_consumer_records_only_the_stream_that_delivered() {
     let (e, _) = run(&mut s, read);
     let rec = records(&mut s, read, e);
     assert!(rec.iter().all(|f| !f.split(' ').any(|t| t == "b")), "{rec:?}");
-    assert!(rec.iter().any(|f| f == "XGROUP SETID a g 2-1"), "{rec:?}");
+    assert!(rec.iter().any(|f| f == "XGROUP SETID a g 2-1 ENTRIESREAD 2"), "{rec:?}");
 }
 
 /// An argv that is not a well-formed group read records nothing.

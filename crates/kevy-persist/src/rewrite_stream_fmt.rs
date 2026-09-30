@@ -91,13 +91,15 @@ pub(crate) fn write_stream_id_fixup<W: Write>(
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
     }
-    // What replaying the commands emitted so far yields. The only no-key
-    // case left is the virgin empty stream (groups-only) — its scalars
-    // are all zero by construction, so skipping XSETID there is exact.
+    // What replaying the commands emitted so far yields: a trim leaves the
+    // highest deleted ID alone, so the MAXLEN 0 trick leaves it at 0-0.
+    // The only no-key case left is the virgin empty stream (groups-only)
+    // — its scalars are all zero by construction, so skipping XSETID
+    // there is exact.
     let natural = if len > 0 {
         (s.last_entry().map_or(StreamId::MIN, |(id, _)| id), len, StreamId::MIN)
     } else {
-        (last, u64::from(last != StreamId::MIN), last)
+        (last, u64::from(last != StreamId::MIN), StreamId::MIN)
     };
     if natural != (last, added, mxd) {
         let argv = vec![
@@ -146,16 +148,17 @@ fn xclaim_argv(
     ]
 }
 
-/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
-/// (MKSTREAM covers groups on a virgin empty stream), one internal
-/// `XINTERNAL.CONSUMERSEEN key group consumer t` per known consumer, which
-/// makes it with its last contact with the group,
-/// then one `XCLAIM … TIME t RETRYCOUNT n FORCE JUSTID` per live PEL row —
-/// full delivery_time/count fidelity, the same technique Redis's own AOF
-/// rewrite uses. Tombstone PEL rows (entry XDEL'd while
-/// pending) are skipped: XCLAIM purges rather than re-creates those, so
-/// only the snapshot path preserves them (accepted trade-off — no RESP
-/// verb can recreate a PEL row for a deleted entry).
+/// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM
+/// [ENTRIESREAD n]` (MKSTREAM covers groups on a virgin empty stream; the
+/// read counter when known), one `XCLAIM … TIME t RETRYCOUNT n FORCE
+/// JUSTID` per live PEL row — full delivery_time/count fidelity, the same
+/// technique Redis's own AOF rewrite uses — then one internal
+/// `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per known consumer,
+/// which makes it with its last contact and its last active time, after
+/// the claims that stamp it with the replay's clock. Tombstone PEL rows
+/// (entry XDEL'd while pending) are skipped: XCLAIM purges rather than
+/// re-creates those, so only the snapshot path preserves them (accepted
+/// trade-off — no RESP verb can recreate a PEL row for a deleted entry).
 pub(crate) fn write_stream_group_commands<W: Write>(
     w: &mut W,
     key: &[u8],
@@ -166,7 +169,7 @@ pub(crate) fn write_stream_group_commands<W: Write>(
     let mut frames = 0usize;
     for g in s.export_groups() {
         let last_delivered = StreamId::new(g.last_delivered.0, g.last_delivered.1);
-        let argv = vec![
+        let mut argv = vec![
             b"XGROUP".to_vec(),
             b"CREATE".to_vec(),
             key.to_vec(),
@@ -174,19 +177,12 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             last_delivered.encode(),
             b"MKSTREAM".to_vec(),
         ];
+        if let Some(n) = g.entries_read {
+            argv.push(b"ENTRIESREAD".to_vec());
+            argv.push(n.to_string().into_bytes());
+        }
         emit(w, &Argv::from(argv), fmt, scratch)?;
         frames += 1;
-        for (consumer, last_seen_ms) in &g.consumers {
-            let argv = vec![
-                kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
-                key.to_vec(),
-                g.name.clone(),
-                consumer.clone(),
-                last_seen_ms.to_string().into_bytes(),
-            ];
-            emit(w, &Argv::from(argv), fmt, scratch)?;
-            frames += 1;
-        }
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
             let id = StreamId::new(*ms, *seq);
             if !s.contains_entry(id) {
@@ -196,6 +192,34 @@ pub(crate) fn write_stream_group_commands<W: Write>(
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }
+        frames += write_consumer_times(w, key, &g, fmt, scratch)?;
     }
     Ok(frames)
+}
+
+/// One `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per consumer of
+/// `g`: its last contact, and its last active time when it has one.
+fn write_consumer_times<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    g: &kevy_store::LoadedGroup,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let mut active: Vec<&(Vec<u8>, u64)> = g.active.iter().collect();
+    active.sort_unstable();
+    for (consumer, last_seen_ms) in &g.consumers {
+        let mut argv = vec![
+            kevy_resp::ops_table::CONSUMER_SEEN.as_bytes().to_vec(),
+            key.to_vec(),
+            g.name.clone(),
+            consumer.clone(),
+            last_seen_ms.to_string().into_bytes(),
+        ];
+        if let Ok(i) = active.binary_search_by(|(name, _)| name.as_slice().cmp(consumer)) {
+            argv.push(active[i].1.to_string().into_bytes());
+        }
+        emit(w, &Argv::from(argv), fmt, scratch)?;
+    }
+    Ok(g.consumers.len())
 }

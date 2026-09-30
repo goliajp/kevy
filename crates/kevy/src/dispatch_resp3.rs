@@ -187,6 +187,11 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             crate::ops::client::cmd_client(args, out, RespVersion::V3);
             true
         }
+        // every XINFO reply that lists named fields is a map under RESP3
+        b"XINFO" => {
+            kevy_verbs::cmd::xinfo(store, args, out, RespVersion::V3);
+            true
+        }
         _ => false,
     }
 }

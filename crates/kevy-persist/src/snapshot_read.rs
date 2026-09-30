@@ -155,7 +155,7 @@ pub fn load_snapshot_with_aux<R: Read>(
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             store.demote_to_watermark();
-            return crate::snapshot_aux::read_trailer(&mut r);
+            return crate::snapshot_aux::read_trailer(&mut r, store, &keep);
         }
         records += 1;
         if records.is_multiple_of(crate::REPLAY_DEMOTE_INTERVAL) {

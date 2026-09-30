@@ -27,6 +27,13 @@ CASES = [
     ("SMEMBERS",     [b"SMEMBERS", b"s2"],                        [[b"SADD", b"s2", b"m1"]]),
     ("GEOPOS",       [b"GEOPOS", b"g", b"P"],                     [[b"GEOADD", b"g", b"13.361389", b"38.115556", b"P"]]),
     ("XRANGE",       [b"XRANGE", b"st", b"-", b"+"],              [[b"XADD", b"st", b"*", b"k", b"v"]]),
+    # XINFO STREAM is left out: Redis 8.10 lists six fields for an XADD
+    # option kevy does not have, so its map is longer than kevy's
+    ("XINFO GROUPS", [b"XINFO", b"GROUPS", b"xg"],                [[b"XADD", b"xg", b"1-1", b"k", b"v"],
+                                                                   [b"XGROUP", b"CREATE", b"xg", b"g", b"0"]]),
+    ("XINFO CONSUMERS", [b"XINFO", b"CONSUMERS", b"xc", b"g"],    [[b"XADD", b"xc", b"1-1", b"k", b"v"],
+                                                                   [b"XGROUP", b"CREATE", b"xc", b"g", b"0"],
+                                                                   [b"XGROUP", b"CREATECONSUMER", b"xc", b"g", b"c"]]),
 ]
 
 

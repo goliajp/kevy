@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 
 use kevy_store::Value;
 
-use crate::snapshot_fmt::{OP_AUX, read_bytes, read_u32, write_bytes};
+use crate::snapshot_fmt::{OP_AUX, OP_GROUP_READS, read_bytes, read_u32, write_bytes};
 use crate::{Argv, SnapshotSource};
 
 /// A [`SnapshotSource`] with an auxiliary frame beside another source's
@@ -76,16 +76,27 @@ pub(crate) fn write_aux<W: Write>(w: &mut W, frame: &Argv) -> io::Result<()> {
     Ok(())
 }
 
-/// What follows `OP_EOF`: the aux frame, or nothing. Bytes after it that
-/// are not an aux record are left unread, as a reader from before the
-/// record leaves them.
-pub(crate) fn read_trailer<R: Read>(r: &mut R) -> io::Result<Option<Argv>> {
-    let mut op = [0u8; 1];
-    match r.read_exact(&mut op) {
-        Ok(()) if op[0] == OP_AUX => read_aux(r).map(Some),
-        Ok(()) => Ok(None),
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
-        Err(e) => Err(e),
+/// What follows `OP_EOF`: the aux frame, or nothing, then the group read
+/// records, each applied to `store` as it is read. Bytes after them that
+/// are neither are left unread, as a reader from before the records
+/// leaves them.
+pub(crate) fn read_trailer<R: Read>(
+    r: &mut R,
+    store: &mut kevy_store::Store,
+    keep: &impl Fn(&[u8]) -> bool,
+) -> io::Result<Option<Argv>> {
+    let mut aux = None;
+    loop {
+        let mut op = [0u8; 1];
+        match r.read_exact(&mut op) {
+            Ok(()) if op[0] == OP_AUX && aux.is_none() => aux = Some(read_aux(r)?),
+            Ok(()) if op[0] == OP_GROUP_READS => {
+                crate::snapshot_group_reads::read_and_apply(r, store, keep)?;
+            }
+            Ok(()) => return Ok(aux),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(aux),
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -197,18 +208,20 @@ mod tests {
     /// error, and so is a read that fails for any reason but the end.
     #[test]
     fn what_follows_the_end_is_a_frame_nothing_or_an_error() {
-        assert_eq!(read_trailer(&mut &[0x42u8][..]).unwrap(), None);
-        assert_eq!(read_trailer(&mut &[][..]).unwrap(), None);
+        let mut s = Store::new();
+        let all = |_: &[u8]| true;
+        assert_eq!(read_trailer(&mut &[0x42u8][..], &mut s, &all).unwrap(), None);
+        assert_eq!(read_trailer(&mut &[][..], &mut s, &all).unwrap(), None);
         let cut_count = [OP_AUX, 1, 0];
-        let err = read_trailer(&mut &cut_count[..]).unwrap_err();
+        let err = read_trailer(&mut &cut_count[..], &mut s, &all).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
         let cut_part = [OP_AUX, 1, 0, 0, 0, 9, 0, 0, 0, b'x'];
-        let err = read_trailer(&mut &cut_part[..]).unwrap_err();
+        let err = read_trailer(&mut &cut_part[..], &mut s, &all).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
         // reading a directory fails with something other than the end
         let dir = kevy_tmpdir::TmpDir::new("aux-trailer-dir");
         let mut not_a_file = std::fs::File::open(dir.path()).unwrap();
-        let err = read_trailer(&mut not_a_file).unwrap_err();
+        let err = read_trailer(&mut not_a_file, &mut s, &all).unwrap_err();
         assert_ne!(err.kind(), io::ErrorKind::UnexpectedEof, "{err}");
     }
 }
