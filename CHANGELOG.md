@@ -50,10 +50,18 @@
   with `-READONLY You can't write against a read only replica.` The
   side files are no longer written. A 6.4 data directory opens with its
   catalog: the first start reads the side files once, records the
-  catalog in the log, and removes them. No shard serves a client until
-  every shard has restored, so a query cannot land before the catalog
-  it depends on. A 6.4 binary cannot read the catalog back from a 7.0
-  directory; see [the upgrade guide](docs/upgrading-6.4-to-7.0.md).
+  catalog in the log, and removes them; a side file that does not parse
+  stays where it is. No shard serves a client until every shard has
+  restored, so a query cannot land before the catalog it depends on.
+  The embedded store keeps its catalog the same way, and the two
+  interoperate: an embedded replica takes a server primary's catalog and
+  a server replica an embedded writer's. An embedded replica refuses
+  every catalog method with `KevyError::ReadOnly`, and a closed store
+  with `KevyError::Closed`; `idx_drop`, `view_drop` and `table_drop` now
+  return `KevyResult<bool>`. The frame sits after the snapshot's end
+  marker, where 6.4.0 stops reading, so 6.4.0 still loads a 7.0 snapshot;
+  it opens a 7.0 directory with every key and no catalog (see [the
+  upgrade guide](docs/upgrading-6.4-to-7.0.md)).
 
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server

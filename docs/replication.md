@@ -211,6 +211,7 @@ Replication is **asynchronous by default**. The primary commits and replies befo
 | Sizing the backlog | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`. Oversize is harmless; undersize falls back to snapshot ship. |
 | What fails over | Writes to the new primary, automatically when `kevy-elect` is configured, by hand otherwise. Existing `kevy-cluster-rw` clients re-route writes once they learn the new primary; in-flight writes during the gap fail loudly. |
 | What does not fail over | Cross-DC traffic, gossip-discovered peers, online resharding, AUTH/TLS — kevy does not ship any of these. Single-DC only. |
+| Indexes, views, tables | The primary's catalog replicates like its keys: a replica gets it in its full sync and every change on the stream, and restarts with it. A read-only replica refuses `IDX.CREATE` / `DROP` / `REBUILD`, `VIEW.CREATE` / `DROP` / `REBUILD` and `TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP` with `-READONLY`; declare on the primary. |
 | Chain replication | Not on the wire. A replica's apply path will not re-emit downstream; a misconfiguration is rejected defensively. |
 | Minority writes during partition | Bounded, then lost. A quorum primary that cannot see a strict majority fences its own writes (`-NOREPLICAS primary lost quorum; writes fenced`) within one lease window, so the silent-absorption window is ~5 s, and every write inside it fails loudly. A partitioned minority cannot promote; when the partition heals it demotes, its un-replicated forked suffix is discarded, and it resyncs to the majority's history via snapshot. |
 
@@ -245,9 +246,9 @@ Do nothing. The primary detects that the replica's requested offset is no longer
 ## Embedded-as-primary (v3.2)
 
 An embedded application can be the PRIMARY, with a kevy server as its
-replica — read scaling and a full query surface (the replica declares
-its own indexes/views/aggregates over the replicated data) for an
-in-process store:
+replica — read scaling and a full query surface (the indexes, views
+and tables the application declares reach the replica and answer
+there over the replicated data) for an in-process store:
 
 ```rust
 // the application (primary)
@@ -283,6 +284,7 @@ offset) cursors, prefix filters, at-least-once). Unifying them would
 tie app-facing CDC semantics to the replica protocol.
 
 Gate: `bench/repligate.sh` — true two-process: snapshot ship to a
-fresh replica, quiesced digest stability, restart re-sync, and
-replica-local `IDX.CREATE`/`IDX.QUERY` over replicated data.
+fresh replica, quiesced digest stability, restart re-sync, the
+primary's index answering `IDX.QUERY` on the replica, and the replica
+refusing an `IDX.CREATE` of its own.
 

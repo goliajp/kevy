@@ -224,6 +224,19 @@ fn a_promoted_replica_goes_on_from_its_primarys_catalog() {
     replica.stop();
 }
 
+/// A sidecar that does not parse is not taken for an empty catalog: it
+/// stays where it is.
+#[test]
+fn a_sidecar_that_does_not_parse_stays() {
+    let dir = TmpDir::new("catalog-bad-sidecar");
+    let bad = dir.path().join("index-catalog.meta");
+    std::fs::write(&bad, b"not a catalog").unwrap();
+    let node = Node::primary(2, &dir);
+    assert_eq!(names(&call(&mut node.wire(), "IDX.LIST")), Vec::<String>::new());
+    node.stop();
+    assert_eq!(std::fs::read(&bad).unwrap(), b"not a catalog");
+}
+
 /// A directory 6.4.0 wrote (its catalog in sidecar files) opens with its
 /// catalog: read once, recorded in the log, and the sidecars removed, so
 /// the next start takes the catalog from the log alone.

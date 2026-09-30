@@ -369,6 +369,10 @@ fn finish_snapshot(
 }
 
 fn apply_frame(shards: &Shards, argv: &Argv) {
+    if crate::shard_restore::is_catalog(argv) {
+        adopt_catalog(shards, Some(argv), false);
+        return;
+    }
     let n = shards.len();
     let idx = route_shard(argv, n);
     let shard = &shards[idx];
@@ -387,11 +391,28 @@ fn apply_frame(shards: &Shards, argv: &Argv) {
 /// the link).
 fn load_snapshot_into_shards(shards: &Shards, payload: &[u8]) -> bool {
     let n = shards.len();
-    shards.iter().enumerate().all(|(i, shard)| {
+    let mut aux = None;
+    let loaded = shards.iter().enumerate().all(|(i, shard)| {
         let mut g = lock_write(shard);
         let cursor = std::io::Cursor::new(payload);
-        kevy_persist::load_snapshot_filtered(&mut g.store, cursor, |k| shard_idx(k, n) == i).is_ok()
-    })
+        let keep = |k: &[u8]| shard_idx(k, n) == i;
+        kevy_persist::load_snapshot_with_aux(&mut g.store, cursor, keep).map(|a| aux = a).is_ok()
+    });
+    if loaded {
+        adopt_catalog(shards, aux.as_ref(), true);
+    }
+    loaded
+}
+
+/// Hand a catalog frame from the primary to the registries every shard
+/// shares; a full sync's `None` empties the catalog.
+fn adopt_catalog(shards: &Shards, frame: Option<&Argv>, full_sync: bool) {
+    #[cfg(feature = "index")]
+    if let Some(regs) = shards.first().and_then(|s| lock_write(s).catalog.clone()) {
+        regs.adopt(frame, full_sync);
+    }
+    #[cfg(not(feature = "index"))]
+    let _ = (shards, frame, full_sync);
 }
 
 /// Route a mutation argv to its destination shard. argv[0] is the

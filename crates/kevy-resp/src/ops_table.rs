@@ -196,7 +196,7 @@ pub const CONSUMER_SEEN: &str = "XINTERNAL.CONSUMERSEEN";
 /// ```
 /// use kevy_resp::ops_table::{CATALOG, spec, surface};
 /// let row = spec(CATALOG).unwrap();
-/// assert!(row.write && row.surfaces & surface::SERVER == 0, "never served");
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
 /// ```
 pub const CATALOG: &str = "XINTERNAL.CATALOG";
 
@@ -345,7 +345,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("XTRIM",        WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
     // internal: applied from a record, refused from a client
     op(CONSUMER_SEEN,  WR, NG,   None,            None,    REPLAY),
-    op(CATALOG,        WR, NG,   None,            None,    0),
+    op(CATALOG,        WR, NG,   None,            None,    REPLAY),
     // ---- geo (zset-backed; embedded replay as streams) ----------------
     op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER | REPLAY),
     op("GEODIST",      RD, NG,   None,            None,    SERVER),

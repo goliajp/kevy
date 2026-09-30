@@ -16,7 +16,7 @@ range|unique [MAXMEM <bytes>]`
 - **TYPE** 是一次标量强制转换：字段缺失或解析失败的行被**排除**（逐索引计数——`IDX.VERIFY` / `IDX.LIST` 会报 `coerce_failures`；这是声明式的围栏，不是运行期错误）。
 - **KIND range** 服务 `RANGE min max` 扫描；**unique** 在此之上再加一道重复围栏（见下文）。
 - **MAXMEM** 给索引的内存封顶：一次越过预算的构建会声明式地失败（查询回答 `-INDEXOVERBUDGET`），而不是无边界地涨下去。
-- 最多 64 个索引。目录（catalog）持久化在数据目录的 sidecar 文件里；索引**内容**是派生状态——它从不进快照、也不写 AOF，重启后在后台重建（未就绪期间查询回答 `-INDEXBUILDING`；数据可用性从不等索引）。
+- 最多 64 个索引。目录（catalog）记录在日志和每份快照里，并随复制下发；索引**内容**是派生状态——它从不进快照、也不写 AOF，重启后在后台重建（未就绪期间查询回答 `-INDEXBUILDING`；数据可用性从不等索引）。
 
 ## 查询
 

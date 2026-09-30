@@ -44,7 +44,8 @@ impl Store {
             .with_fields(fields)
             .with_positions(matches!(positions, TokenPositions::Record))
             .with_values(values);
-        self.register_spec(crate::ops_index::built(spec)?)
+        let spec = crate::ops_index::built(spec)?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
     /// Corpus-wide BM25 statistics for one query, over its field scope.
