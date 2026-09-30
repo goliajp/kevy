@@ -62,7 +62,7 @@ pub(crate) fn keep_newest(held: &mut Option<Argv>, frame: Argv) {
 /// The catalog frame a snapshot or a rewritten log of this shard carries.
 pub(crate) fn catalog_aux(inner: &crate::store::Inner) -> Option<Argv> {
     #[cfg(feature = "index")]
-    return inner.catalog.as_ref().and_then(|c| c.aux());
+    return inner.catalog.as_ref().map(|c| c.aux());
     #[cfg(not(feature = "index"))]
     {
         let _ = inner;
