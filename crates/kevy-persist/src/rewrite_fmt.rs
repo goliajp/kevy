@@ -197,7 +197,14 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
     let mut scratch = Vec::new();
     let mut keys = 0u64;
     src.for_each_entry(|key, value, ttl_ms| {
-        let _ = write_value_as_commands(&mut buf, key, value, ttl_ms, fmt, &mut scratch);
+        let _ = crate::rewrite_frames::write_value_into_vec(
+            &mut buf,
+            key,
+            value,
+            ttl_ms,
+            fmt,
+            &mut scratch,
+        );
         keys += 1;
     });
     // the per-field deadlines, as `dump_aof` writes them after the values
