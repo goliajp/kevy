@@ -33,6 +33,10 @@ path = "src/lib.rs"
 name = "kevy"
 path = "src/main.rs"
 
+[[example]]
+name = "tidy_steps"
+required-features = ["harness-repack-trace"]
+
 [features]
 default = []
 # Route the whole process through kevy-alloc (v5 experiment). Off by
