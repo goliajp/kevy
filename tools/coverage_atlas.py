@@ -42,6 +42,9 @@ import subprocess
 import sys
 import tomllib
 
+from coverage_regions import demangle, merge_regions, reconcile, refuse, symbol_of
+from coverage_source import cfg_test_ranges, enclosing_cfg, gated_modules, source_line
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CORPUS = ROOT / "suite/corpus.toml"
 REGISTER = ROOT / "suite/dead-paths.toml"
@@ -52,15 +55,8 @@ OUT_SET = ROOT / "bench/DEAD-SET.json"
 # against this, not against the dead set it may be absent from this time.
 OUT_PRESENT = ROOT / "target/reports/DEAD-PRESENT.json"
 
-CODE_REGION = 0
 PANIC = re.compile(r"\b(unreachable!|panic!|todo!|unimplemented!|abort\(|\.expect\(|\.unwrap\(\))")
-CFG = re.compile(r"#\[cfg\(([^\]]*)\)\]")
 MIN_FILES = 100
-
-
-def refuse(msg):
-    print(f"atlas: REFUSED — {msg}", file=sys.stderr)
-    sys.exit(2)
 
 
 def host_platform():
@@ -91,300 +87,6 @@ def corpus():
               f"smaller on both sides and cannot be compared with one from "
               f"{enforcing}.")
     return c
-
-
-def merge_regions(data, scope):
-    """(file, l1, c1, l2, c2) -> (summed count, owning symbols).
-
-    Regions arrive per instantiation; llvm's file summary counts source
-    locations. Summing across instantiations is what reconciles the two.
-    """
-    counts = collections.defaultdict(int)
-    owners = collections.defaultdict(set)
-    for fn in data["functions"]:
-        names = fn["filenames"]
-        for r in fn["regions"]:
-            if r[7] != CODE_REGION:
-                continue
-            src = names[r[5]] if r[5] < len(names) else names[0]
-            if src not in scope:
-                continue
-            key = (src, r[0], r[1], r[2], r[3])
-            counts[key] += r[4]
-            owners[key].add(fn["name"])
-    return counts, owners
-
-
-def reconcile(data, counts):
-    """Verify the enumeration against llvm, and report the definitional gap.
-
-    llvm's per-file `summary.regions.count` is computed by something other
-    than this script, so agreement on it is a real witness: across the
-    workspace all 599 files agree and the global total matches exactly
-    (160,062). The same region set is being enumerated.
-
-    The *covered* verdict differs, and the difference is a definition
-    rather than a defect. A span inside a generic can be reached by one
-    instantiation and not another; llvm's merged model keeps those apart
-    and counts the unexercised copy as an uncovered region, while summing
-    across instantiations calls the span covered. For "how thoroughly is
-    every instantiation exercised", llvm's reading is the right one. For
-    "which source can I delete, or must I write a test for" — the question
-    this atlas exists to answer — summing is: the line ran, so it is not
-    dead and cannot be removed. Measured 2026-08-27, the two readings
-    differ on 822 of 160,062 regions, 2.8% of the dead set.
-
-    Three other reconstructions were tried and each disagreed with llvm's
-    summary *and* with the others — segments (493 of 599 files off), LCOV
-    DA records (81,235 unique lines against a declared LF of 83,962, with
-    no duplicate records to explain the gap), and per-name merging. The
-    summary comes from a merged model the export formats do not fully
-    expose. Demanding equality with it would make this gate unusable
-    without making it more correct, so the enumeration is enforced and the
-    verdict gap is reported.
-    """
-    mine = collections.Counter()
-    mine_zero = collections.Counter()
-    for (src, *_), n in counts.items():
-        mine[src] += 1
-        if n == 0:
-            mine_zero[src] += 1
-    llvm_dead = 0
-    for f in data["files"]:
-        s = f["summary"]["regions"]
-        got, want = mine[f["filename"]], s["count"]
-        if got != want:
-            refuse(
-                f"enumeration mismatch for {f['filename']}: "
-                f"parsed {got} regions, llvm maps {want}"
-            )
-        llvm_dead += s["count"] - s["covered"]
-    return llvm_dead
-
-
-def demangle(names):
-    """rustfilt is an external tool, like llvm-cov itself. Required, because
-    a baseline whose identities depend on whether a tool was installed is
-    not a baseline."""
-    names = sorted(names)
-    if not names:
-        return {}
-    try:
-        out = subprocess.run(["rustfilt"], input="\n".join(names),
-                             capture_output=True, text=True, check=True).stdout
-    except (OSError, subprocess.CalledProcessError):
-        refuse("rustfilt not available; install with `cargo install rustfilt`")
-    got = out.splitlines()
-    if len(got) != len(names):
-        refuse(f"rustfilt returned {len(got)} lines for {len(names)} names")
-    return dict(zip(names, got))
-
-
-def _split_angle(s):
-    """Split `<inner>rest` at the matching `>`. Returns (inner, rest).
-
-    Nesting-aware, which a regex is not: `<Foo<Bar>>::m` has to close on the
-    second `>`, not the first.
-
-    >>> _split_angle("<Foo>::m")
-    ('Foo', '::m')
-    >>> _split_angle("<Foo<Bar, Baz>>::m")
-    ('Foo<Bar, Baz>', '::m')
-    """
-    depth = 0
-    for i, ch in enumerate(s):
-        if ch == "<":
-            depth += 1
-        elif ch == ">":
-            depth -= 1
-            if depth == 0:
-                return s[1:i], s[i + 1:]
-    return s, ""
-
-
-def _drop_generic_args(s):
-    """Drop every `<...>` group, honouring nesting.
-
-    >>> _drop_generic_args("alloc::vec::Vec<u8>::push")
-    'alloc::vec::Vec::push'
-    >>> _drop_generic_args("a::B<C<D>, E>::f")
-    'a::B::f'
-    """
-    out, depth = [], 0
-    for ch in s:
-        if ch == "<":
-            depth += 1
-        elif ch == ">":
-            depth -= 1
-        elif depth == 0:
-            out.append(ch)
-    return "".join(out)
-
-
-def symbol_of(demangled):
-    """Strip the closure/instantiation tail and the hash, and canonicalise
-    a qualified path to the type that owns the method.
-
-    This used to be three regexes, the last of which was `<[^<>]*>` -> "".
-    On a generic instantiation that does what it should. On a trait impl —
-    `<Type as Trait>::method`, which is what every derived `Debug` demangles
-    to — the `<...>` **is** the type, so the identity collapsed to the bare
-    method name and one identity absorbed every crate's copy of it. `::fmt`
-    held 241 dead regions across at least twelve crates, so a regression in
-    one crate's `Debug` was cancelled by an improvement in another's and the
-    ratchet never saw either. Worse, whether it collapsed was arbitrary: the
-    pattern cannot match nested angle brackets, so a type that happened to
-    carry a generic parameter survived and a plain one did not.
-
-    >>> symbol_of("kevy_time::eval")
-    'kevy_time::eval'
-    >>> symbol_of("<kevy_replicate::state::ReplState as core::fmt::Debug>::fmt")
-    'kevy_replicate::state::ReplState::fmt'
-    >>> symbol_of("<kevy_elect::vote::Ballot as core::fmt::Debug>::fmt")
-    'kevy_elect::vote::Ballot::fmt'
-    >>> symbol_of("<kevy_uring::ring::IoUring>::submit_and_wait")
-    'kevy_uring::ring::IoUring::submit_and_wait'
-    >>> symbol_of("<kevy_map::map::KevyMap<alloc::vec::Vec, u64>>::probe_by_borrow_slow")
-    'kevy_map::map::KevyMap::probe_by_borrow_slow'
-    >>> symbol_of("kevy::dispatch::dispatch_with_proto::{closure#0}")
-    'kevy::dispatch::dispatch_with_proto'
-    >>> symbol_of("<kevy_seg::builder::Builder>::push::hab12cd34ef567890")
-    'kevy_seg::builder::Builder::push'
-
-    The two crates above are distinct identities now, which is the point.
-    """
-    s = re.sub(r"::\{closure#\d+\}", "", demangled)
-    s = re.sub(r"::h[0-9a-f]{16}$", "", s)
-    if s.startswith("<"):
-        inner, rest = _split_angle(s)
-        # `<Type as Trait>::m` -> `Type::m`; `<Type>::m` -> `Type::m`.
-        owner = inner.split(" as ", 1)[0]
-        s = owner + rest
-    return _drop_generic_args(s)
-
-
-def source_line(path, lineno, cache):
-    if path not in cache:
-        p = pathlib.Path(path)
-        cache[path] = p.read_text(errors="replace").splitlines() if p.exists() else []
-    lines = cache[path]
-    return lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
-
-
-def enclosing_cfg(path, lineno, cache):
-    """Nearest #[cfg(...)] above the region, as evidence — not a verdict."""
-    if path not in cache:
-        p = pathlib.Path(path)
-        cache[path] = p.read_text(errors="replace").splitlines() if p.exists() else []
-    lines = cache[path]
-    for i in range(min(lineno, len(lines)) - 1, max(0, lineno - 60), -1):
-        m = CFG.search(lines[i])
-        if m:
-            return m.group(1)
-    return None
-
-
-# Tokens that must not be counted as braces: a `{` inside a string literal
-# or a comment closes nothing. The assertion message that exposed this bug
-# was literally `"polar {} vs middle {}"`.
-SKIP = re.compile(r"""
-      (?P<line_comment>//[^\n]*)
-    | (?P<block_comment>/\*.*?\*/)
-    | (?P<string>"(?:\\.|[^"\\])*")
-    | (?P<rawstring>r\#*"(?:.|\n)*?"\#*)
-    | (?P<char>'(?:\\.|[^'\\])')
-""", re.VERBOSE | re.DOTALL)
-
-CFGTEST = re.compile(r"#\[cfg\(test\)\]")
-
-
-def cfg_test_ranges(path, cache):
-    """Line ranges under `#[cfg(test)]`, which are not product code.
-
-    Test code sits in the same file and therefore in the same coverage
-    export, and its never-executed regions are the arguments to assertion
-    messages that only evaluate when an assertion fails. Leaving them in
-    means **writing a test grows the dead set** — the gate fires on the
-    improvement it exists to encourage. Found by writing two tests for
-    kevy-geo: the two regions they covered left the set, and four new ones
-    arrived from their own assert! messages.
-
-    Integration tests under `crates/*/tests/` never had this problem —
-    llvm-cov does not report them as files at all (0 of 599).
-
-    Braces inside strings and comments are blanked first. The assertion
-    message that exposed this bug was literally `"polar {} vs middle {}"`,
-    and a naive counter would have closed the block on it.
-    """
-    if path in cache:
-        return cache[path]
-    try:
-        text = pathlib.Path(path).read_text(errors="replace")
-    except OSError:
-        cache[path] = []
-        return cache[path]
-
-    blanked = SKIP.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
-    lines = blanked.splitlines()
-    ranges, i = [], 0
-    while i < len(lines):
-        if not CFGTEST.search(lines[i]):
-            i += 1
-            continue
-        depth, j, opened = 0, i, False
-        while j < len(lines):
-            for ch in lines[j]:
-                if ch == "{":
-                    depth += 1
-                    opened = True
-                elif ch == "}":
-                    depth -= 1
-            if opened and depth <= 0:
-                break
-            j += 1
-        ranges.append((i + 1, min(j + 1, len(lines))))
-        i = j + 1
-    cache[path] = ranges
-    return ranges
-
-
-MODCFG = re.compile(r"^\s*#\[cfg\(([^\]]*)\)\]\s*$")
-MODDECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
-
-
-def gated_modules(root):
-    """Files whose whole module is behind a #[cfg(...)].
-
-    The per-region scan looks 60 lines up for an attribute and therefore
-    cannot see the commonest gating there is: `#[cfg(target_os = "linux")]
-    mod uring_reactor;` in lib.rs, which switches off an entire file from
-    somewhere else entirely. Without this, every io_uring region on a mac
-    lands in `untested` — 'a test is owed' for code the host cannot even
-    compile, which is the wrong work item and a large one.
-    """
-    out = {}
-    for f in root.rglob("*.rs"):
-        try:
-            lines = f.read_text(errors="replace").splitlines()
-        except OSError:
-            continue
-        pending = None
-        for line in lines:
-            m = MODCFG.match(line)
-            if m:
-                pending = m.group(1)
-                continue
-            d = MODDECL.match(line)
-            if d and pending:
-                name = d.group(1)
-                for cand in (f.parent / f"{name}.rs", f.parent / name / "mod.rs",
-                             f.with_suffix("") / f"{name}.rs",
-                             f.with_suffix("") / name / "mod.rs"):
-                    if cand.exists():
-                        out[str(cand.resolve())] = pending
-            if not MODCFG.match(line):
-                pending = pending if d and not d.group(1) else (pending if m else None)
-    return out
 
 
 def _unstable_spec():
@@ -636,7 +338,8 @@ SYMBOL_SCHEME = "symbols/qualified-path"
 
 
 def selftest():
-    """Run this module's doctests and refuse a run that verified nothing.
+    """Run the doctests of `symbol_of` and its helpers, and refuse a run
+    that verified nothing.
 
     `python3 -m doctest` exits 0 on a file with no doctests, which is the
     failure mode this repository keeps finding: an instrument that checks
@@ -646,8 +349,9 @@ def selftest():
     identity it computes is what the whole ratchet holds.
     """
     import doctest
+    import coverage_regions
 
-    ran, failed = doctest.testmod(sys.modules[__name__], verbose=False)[::-1]
+    ran, failed = doctest.testmod(coverage_regions, verbose=False)[::-1]
     if ran < SYMBOL_DOCTEST_FLOOR:
         refuse(f"only {ran} doctest example(s), floor is {SYMBOL_DOCTEST_FLOOR} "
                "— an instrument that checks nothing must not report agreement")
