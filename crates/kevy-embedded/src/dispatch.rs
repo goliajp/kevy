@@ -16,6 +16,7 @@
 //! The read-only listener whitelist (`listener/verbs.rs`) is a
 //! separate, intentionally narrower surface and stays untouched.
 
+mod args;
 mod bitmap;
 #[cfg(feature = "index")]
 mod describe;
@@ -155,24 +156,7 @@ fn rest(argv: &[Vec<u8>], from: usize) -> Vec<&[u8]> {
     argv[from..].iter().map(Vec::as_slice).collect()
 }
 
-/// An argv as the shared command layer reads it.
-pub(crate) struct Args<'a>(pub(crate) &'a [Vec<u8>]);
-
-impl core::ops::Index<usize> for Args<'_> {
-    type Output = [u8];
-    fn index(&self, i: usize) -> &[u8] {
-        &self.0[i]
-    }
-}
-
-impl kevy_resp::ArgvView for Args<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    fn get(&self, i: usize) -> Option<&[u8]> {
-        self.0.get(i).map(Vec::as_slice)
-    }
-}
+pub(crate) use args::Args;
 
 /// Every verb the dispatcher owns an arm for — the parity tests hold
 /// this table against `op_manifest::ESTORE_OPS` (⊇) and probe each

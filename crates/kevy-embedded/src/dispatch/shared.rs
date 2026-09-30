@@ -67,7 +67,7 @@ fn run(s: &Store, v: &Verb, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if let Some(msg) = refusal(s, up, argv) {
         return kevy_resp::encode_error(out, msg);
     }
-    let args = Args(argv);
+    let args = Args::new(argv);
     let mut g = s.wshard(crate::verb_keys::shard_key(up, &args).unwrap_or_default());
     let mark = out.len();
     let effect = kevy_verbs::exec(&mut g.store, up, &args, out);
@@ -106,7 +106,7 @@ fn refusal(s: &Store, up: &[u8], argv: &[Vec<u8>]) -> Option<&'static str> {
     if !kevy_verbs::is_streams_geo(up) {
         return None;
     }
-    let args = Args(argv);
+    let args = Args::new(argv);
     if crate::verb_keys::blocks(up, &args) {
         return Some("ERR the embedded engine cannot block; call without BLOCK");
     }
@@ -138,7 +138,7 @@ fn record(g: &mut Inner, argv: &[Vec<u8>], swap: Option<(usize, &[u8])>) -> Kevy
         let parts: Vec<&[u8]> = argv.iter().enumerate().map(|(i, a)| swapped(swap, i, a)).collect();
         commit_write(g, &parts)?;
     }
-    for f in kevy_verbs::aof::ttl_followup(&g.store, &Args(argv)) {
+    for f in kevy_verbs::aof::ttl_followup(&g.store, &Args::new(argv)) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }
@@ -160,7 +160,7 @@ fn record_outcome(g: &mut Inner, argv: &[Vec<u8>], outcome: &Effect) -> KevyResu
     if !crate::store_glue::records_writes(g) {
         return record(g, argv, None);
     }
-    for f in kevy_verbs::aof::deferred_frames(&g.store, &Args(argv), outcome) {
+    for f in kevy_verbs::aof::deferred_frames(&g.store, &Args::new(argv), outcome) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }

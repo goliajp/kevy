@@ -89,7 +89,7 @@ fn cmd_scan(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 2 {
         return wrong_args(out, "scan");
     }
-    let o = match kevy_verbs::args::scan_opts(&super::Args(argv)) {
+    let o = match kevy_verbs::args::scan_opts(&super::Args::new(argv)) {
         Ok(o) => o,
         Err(e) => return encode_error(out, e.as_wire()),
     };
