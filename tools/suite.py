@@ -261,14 +261,6 @@ def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
                 # a passing measurement gate's numbers are its result
                 keep_log(tier, c["id"], r.stdout + r.stderr)
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
-            elif r.returncode == 2 and c.get("skip_is_exit_2"):
-                # Exit 2 means "I did not answer the question", not "the answer
-                # is no" — a gate that skipped an outward call and says so must
-                # not read as a failure, and must not read as a pass either.
-                # The row carries the reason, the way a NOT-RUN does.
-                why = ((r.stdout + r.stderr).strip().splitlines() or ["exit 2"])[-1]
-                results.append((c, "SKIPPED", took, why, False))
-                print(f"  ⊘ {c['id']:<22} {took:6.1f}s  SKIPPED — {why[:80]}")
             else:
                 tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
                 status = "ADVISORY" if c.get("advisory") else "FAIL"
@@ -329,7 +321,6 @@ def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
     advis = [r for r in results if r[1] == "ADVISORY"]
     passed = [r for r in results if r[1] == "PASS"]
     timeouts = [r for r in results if r[1] == "TIMEOUT"]
-    skipped = [r for r in results if r[1] == "SKIPPED"]
     carried_rows = [r for r in results if r[1] == "CARRIED"]
     same_rows = [r for r in results if r[1] == "UNCHANGED"]
     suite_unchanged.record(ROOT, results)
@@ -350,10 +341,10 @@ def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
     # answer does not follow from the status alone. A TIMEOUT row's seconds
     # is the ceiling it hit, and recording the two in one field is how
     # 120.1 s of timeout became "this gate costs two minutes" in a later
-    # decomposition. A NOT-RUN row never ran; a SKIPPED one ran only as far
-    # as refusing to answer; the two FAIL rows this runner synthesises after
-    # the tier carry no duration at all. None of those four is what the
-    # check costs, and all four used to be filed as though they were.
+    # decomposition. A NOT-RUN row never ran, and the two FAIL rows this
+    # runner synthesises after the tier carry no duration at all. None of
+    # those is what the check costs, and all used to be filed as though
+    # they were.
     if not only and not area:
         out.write_text(json.dumps(
             [{"id": c["id"], "status": s, "seconds": round(t, 1),
@@ -365,15 +356,15 @@ def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
     budget = suite["budgets"].get(tier)
     print(f"\nsuite {tier}: {len(passed)} passed, {len(fails)} failed, "
           f"{len(timeouts)} timed out, {len(advis)} advisory, "
-          f"{len(skipped)} skipped, {len(notrun)} not-run, {len(carried_rows)} carried from CI, "
+          f"{len(notrun)} not-run, {len(carried_rows)} carried from CI, "
           f"{len(same_rows)} unchanged since they passed here — "
           f"{wall:.0f}s" + (f" (budget {budget}s)" if budget else ""))
     # The tally must account for every check that was selected. It did not:
-    # a TIMEOUT and a SKIPPED were in neither the counts nor the failed list,
+    # a TIMEOUT was in neither the counts nor the failed list,
     # so `workspace-tests` hit its 5400s ceiling and 53 checks were reported
     # as "43 passed, 2 failed, 1 advisory, 5 not-run". Eleven short of the
     # truth, in a line whose whole job is to be the truth.
-    counted = (len(passed) + len(fails) + len(timeouts) + len(advis) + len(skipped)
+    counted = (len(passed) + len(fails) + len(timeouts) + len(advis)
                + len(notrun) + len(carried_rows) + len(same_rows))
     if counted != len(results):
         print(f"  ✗ the tally covers {counted} of {len(results)} checks — a status this "

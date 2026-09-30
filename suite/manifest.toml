@@ -203,20 +203,6 @@ requires = []
 proves = "workflow actions agree on one major each"
 
 [[check]]
-id = "anchor-pins"
-area = "release-pins"
-tier = "precommit"
-cmd = "python3 tools/check_competitor_anchors.py --offline"
-# --offline exits 2: it skipped the upstream question rather than answering
-# it. The online half runs daily in competitor-anchors.yml and in the
-# prerelease row below, which does not pass --offline.
-skip_is_exit_2 = true
-expected = 2
-timeout = 60
-requires = []
-proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.json"
-
-[[check]]
 id = "anchor-currency"
 area = "release-pins"
 tier = "prerelease"
@@ -224,7 +210,7 @@ cmd = "python3 tools/check_competitor_anchors.py"
 expected = 8
 timeout = 180
 requires = []
-proves = "the pinned competitors are each project's current latest stable — asked of the upstreams, not of the tree"
+proves = "every competitor version in the tree matches bench/COMPETITOR-ANCHORS.json, and each pin is its project's current latest stable — asked of the upstreams, not of the tree"
 
 [[check]]
 id = "command-coverage"
