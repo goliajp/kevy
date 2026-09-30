@@ -47,45 +47,60 @@ fn walks(t: &Tree) -> (usize, usize) {
     (fwd, back)
 }
 
+/// A key over a space wide enough for a tree of several levels, now and
+/// then one of the long or out-of-line shapes.
+fn model_key(r: &mut Rng) -> Vec<u8> {
+    match r.below(20) {
+        0 => key_for(r, 1),
+        1 => key_for(r, 2),
+        _ => [(r.below(200_000) as u32).to_be_bytes().as_slice(), b"row:tail"].concat(),
+    }
+}
+
 fn model_run(seed: u64, payloads: bool, ops: usize) {
     let mut r = Rng(seed);
     let mut t = Tree::new(Shape { payloads, vlens: false });
     let mut tidy = Tidy::default();
     let mut m: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    let (mut most, mut packed) = (0, false);
     for step in 0..ops {
-        let shape = r.below(10).min(2).max(r.below(2));
-        let key = key_for(&mut r, shape);
+        let key = model_key(&mut r);
         let payload: Vec<u8> =
             if payloads { vec![step as u8; r.below(40) as usize] } else { Vec::new() };
-        match r.below(12) {
-            0..=5 => assert_eq!(t.insert(&key, &payload), m.insert(key, payload).is_none()),
-            6..=8 => assert_eq!(t.remove(&key), m.remove(&key).is_some()),
-            9 => {
+        match r.below(10_000) {
+            0..=5_499 => assert_eq!(t.insert(&key, &payload), m.insert(key, payload).is_none()),
+            5_500..=8_499 => assert_eq!(t.remove(&key), m.remove(&key).is_some()),
+            8_500 if step > ops / 2 => {
                 t.cut_below(&Probe::new(&key), |_| {});
                 m = m.split_off(&key);
             }
             _ => {
+                let before = t.live_leaves();
                 t.tidy(&mut tidy, r.below(6) as usize);
+                packed |= t.live_leaves() < before;
             }
         }
-        if step % 7 == 0 || step == ops - 1 {
+        most = most.max(t.height);
+        if step % 97 == 0 || step == ops - 1 {
             let want: Vec<(Vec<u8>, Vec<u8>)> =
                 m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             assert_eq!(check(&t), want, "step {step}");
             ranks_agree(&t, &m, &mut r);
         }
     }
+    assert!(most >= 2 && packed, "the run reached {most} levels and emptied a leaf: {packed}");
     run_to_rest(&mut t, &mut tidy);
     check_packed(&t);
-    assert_eq!(check(&t).len(), m.len());
+    let want: Vec<(Vec<u8>, Vec<u8>)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    assert_eq!(check(&t), want);
     assert_eq!(walks(&t), (m.len(), m.len()));
     ranks_agree(&t, &m, &mut r);
 }
 
 #[test]
 fn packing_between_writes_keeps_order_counts_and_ranks() {
-    for seed in 1..=12u64 {
-        model_run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), seed % 2 == 0, 6000);
+    for seed in 1..=8u64 {
+        model_run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), seed % 2 == 0, 20_000);
     }
 }
 
@@ -111,6 +126,7 @@ fn a_rested_tree_packs_every_leaf_but_the_last_and_wakes_on_drift() {
     }
     let before = t.live_leaves();
     run_to_rest(&mut t, &mut tidy);
+    assert_eq!(check(&t).len(), 20_000);
     check_packed(&t);
     assert!(t.live_leaves() * 4 < before * 3, "{} of {before} leaves", t.live_leaves());
     assert!(!t.tidy(&mut tidy, 1_000), "a rested tree does nothing");
@@ -125,6 +141,32 @@ fn a_rested_tree_packs_every_leaf_but_the_last_and_wakes_on_drift() {
     run_to_rest(&mut t, &mut tidy);
     check_packed(&t);
     assert_eq!(check(&t).len(), 40_000);
+    // deletes hollow leaves without adding any: an eighth fewer entries
+    // wakes it too
+    let mut woke = false;
+    for &i in &ids[..6_000] {
+        t.remove(&entry(i));
+        woke |= t.tidy(&mut tidy, 0);
+    }
+    assert!(woke, "deletes that hollow the tree wake the hand");
+    run_to_rest(&mut t, &mut tidy);
+    check_packed(&t);
+    assert_eq!(check(&t).len(), 34_000);
+}
+
+#[test]
+fn a_tree_that_rested_small_still_wakes_as_it_grows() {
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
+    let mut tidy = Tidy::default();
+    t.insert(&entry(1), &[]);
+    assert!(!t.tidy(&mut tidy, 4), "one leaf rests at once");
+    let mut r = Rng(9);
+    for _ in 0..20_000 {
+        t.insert(&entry(r.below(1_000_000) as u32), &[]);
+    }
+    assert!(t.tidy(&mut tidy, 0), "a grown tree wakes the hand");
+    run_to_rest(&mut t, &mut tidy);
+    check_packed(&t);
 }
 
 #[test]
@@ -165,7 +207,7 @@ fn an_index_segment_packs_whatever_order_its_rows_came_in() {
             s.apply(format!("user:{i}").as_bytes(), None, Some(v));
         }
         let written = s.stats().approx_bytes as f64 / f64::from(n);
-        let steps = std::iter::from_fn(|| s.tidy(1).then_some(())).count();
+        let steps = run_to_rest(&mut s.tree, &mut s.tidy);
         check_packed(&s.tree);
         let packed = s.stats().approx_bytes as f64 / f64::from(n);
         eprintln!("{name:>8}: {written:.1} B/row written, {packed:.1} at rest after {steps} steps");
