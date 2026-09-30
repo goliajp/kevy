@@ -269,3 +269,6 @@ fn import(
     install(state, icat, vcat, tcat);
     record(&Argv::from(next_frame(state)))
 }
+
+#[cfg(test)]
+mod tests;

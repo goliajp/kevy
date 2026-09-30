@@ -155,4 +155,43 @@ mod tests {
         assert_eq!(page, chunk(&[b"a", b"b", b"c"]));
         assert_eq!(concat(&[], &chunk(&[b"x"])), chunk(&[b"x"]));
     }
+
+    fn argv(words: &str) -> Vec<Vec<u8>> {
+        words.split(' ').map(|w| w.as_bytes().to_vec()).collect()
+    }
+
+    #[test]
+    fn a_continuation_whose_index_is_gone_ends_the_page_with_what_it_has() {
+        let kevy = crate::KevyCommands::new();
+        let mut next = argv("IDX.PART 1 5 - IDX.QUERY g RANGE 0 9 LIMIT 5");
+        next[3] = chunk(&[]);
+        let ExtensionReduced::Reply(reply) = next_phase(kevy.state(), &next, &[chunk(&[])]) else {
+            panic!("the page ends");
+        };
+        let orig = &next[PART_ORIG..];
+        assert_eq!(reply, super::super::query::reduce_query(orig, &[chunk(&[])]));
+        let refused = crate::cmd_index_reduce::extension_reduce(
+            kevy.state(),
+            &next,
+            vec![vec![crate::cmd_index_query::ST_NOINDEX]],
+        );
+        let ExtensionReduced::Reply(refused) = refused else { panic!("a refusal ends the page") };
+        assert!(refused.starts_with(b"-"), "{}", String::from_utf8_lossy(&refused));
+    }
+
+    #[test]
+    fn a_rebuild_without_a_name_points_or_an_index_to_split_is_not_a_global_rebuild() {
+        let kevy = crate::KevyCommands::new();
+        let state = kevy.state();
+        let mut points = vec![0, REBUILD_TAG];
+        crate::index_runtime::put_points(&mut points, &[(b"5".to_vec(), 1)]);
+        assert_eq!(rebuild(state, &argv("IDX.REBUILD"), std::slice::from_ref(&points)), None);
+        let cut = vec![0, REBUILD_TAG, 1];
+        assert_eq!(rebuild(state, &argv("IDX.REBUILD g"), &[cut]), None);
+        assert_eq!(rebuild(state, &argv("IDX.REBUILD g"), std::slice::from_ref(&points)), None);
+        let mut store = kevy_store::Store::new();
+        let create = "IDX.CREATE other ON PREFIX u: FIELD age TYPE i64 KIND range";
+        kevy.dispatch(&mut store, &kevy_resp::Argv::from(argv(create)));
+        assert_eq!(rebuild(state, &argv("IDX.REBUILD g"), &[points]), None);
+    }
 }

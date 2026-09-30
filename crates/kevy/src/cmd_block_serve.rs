@@ -341,6 +341,15 @@ mod restore_tests {
         assert!(block_restore_argv(&mut s, BlockKind::Bzpopmin, b"missing").is_none());
     }
 
+    /// A key of another type answers the pop with WRONGTYPE and takes
+    /// nothing, so there is nothing to put back.
+    #[test]
+    fn a_key_of_the_wrong_type_has_nothing_to_restore() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"a" as &[u8]]).unwrap();
+        assert!(block_restore_argv(&mut s, BlockKind::Bzpopmin, b"q").is_none());
+    }
+
     /// XREAD is non-destructive and XREADGROUP moves entries to a PEL
     /// rather than consuming them; BRPOPLPUSH is served by the list-move
     /// orchestrator and recovers itself. None of them have an undo, and
@@ -411,5 +420,20 @@ mod ready_tests {
         assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
         kevy.dispatch(&mut s, &argv(&[b"XADD", b"st", b"2-1", b"f", b"v"]));
         assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+    }
+
+    /// A stream read the replay cannot be rebuilt from is replayed as
+    /// sent, so dispatch answers it with the error the client would get.
+    #[test]
+    fn a_malformed_stream_read_is_replayed_as_sent() {
+        let xread = argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"a", b"b", b"0"]);
+        assert_eq!(block_serve_argv(&xread, BlockKind::XReadBlock, b"a"), xread);
+        let xreadgroup = argv(&[b"XREADGROUP", b"COUNT", b"1", b"STREAMS", b"st", b">"]);
+        assert_eq!(block_serve_argv(&xreadgroup, BlockKind::XReadGroupBlock, b"st"), xreadgroup);
+        let well_formed = argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"a", b"b", b"1", b"2"]);
+        assert_eq!(
+            block_serve_argv(&well_formed, BlockKind::XReadBlock, b"b"),
+            argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"b", b"2"])
+        );
     }
 }

@@ -89,4 +89,13 @@ mod tests {
         let mut pos = 1;
         assert_eq!(read_points(&c[..c.len() - 1], &mut pos), None);
     }
+
+    #[test]
+    fn a_run_cut_at_any_byte_is_refused() {
+        let mut c = Vec::new();
+        put_points(&mut c, &[(b"ab".to_vec(), 3), (b"c".to_vec(), 1)]);
+        for cut in 0..c.len() {
+            assert_eq!(read_points(&c[..cut], &mut 0), None, "cut at {cut}");
+        }
+    }
 }

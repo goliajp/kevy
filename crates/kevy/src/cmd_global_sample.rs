@@ -165,6 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_cut_at_any_byte_fails_the_verb() {
+        let whole = chunk(false, &[(b"g", &[b"1"])]);
+        for cut in 0..whole.len() {
+            assert_eq!(read_chunk(&whole[..cut], &mut HashMap::new()), None, "cut at {cut}");
+        }
+        let kevy = crate::KevyCommands::new();
+        let argv: Vec<Vec<u8>> =
+            words("IDX.CREATE g ON PREFIX u: FIELD age TYPE i64 KIND range PARTITION global")
+                .into_iter()
+                .map(<[u8]>::to_vec)
+                .collect();
+        let reply = reduce(&kevy.ctx(), &argv, &[whole[..3].to_vec()]);
+        assert_eq!(reply, b"-ERR a shard's sample did not arrive whole\r\n");
+        assert!(kevy.state().catalogs.index().is_none_or(|c| c.get(b"g").is_none()));
+    }
+
+    #[test]
     fn a_shard_whose_tier_floor_is_full_refuses_the_index_for_all() {
         let cfg = std::sync::Arc::new(kevy_config::Config::default());
         let state = crate::RuntimeState::new(cfg, std::path::PathBuf::new(), 2).unwrap();

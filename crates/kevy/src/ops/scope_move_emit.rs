@@ -136,3 +136,20 @@ pub(super) fn append_resp_argv(out: &mut Vec<u8>, parts: &[&[u8]]) {
         out.extend_from_slice(b"\r\n");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_gone_by_the_time_it_is_emitted_adds_no_frame() {
+        let mut s = Store::new();
+        let (mut bulk, mut count) = (Vec::new(), 0);
+        emit_key(&mut s, b"app:gone", &mut bulk, &mut count);
+        assert_eq!((bulk.len(), count), (0, 0));
+        s.set_slice(b"app:k", b"v", None, kevy_store::SetCondition::Always);
+        emit_key(&mut s, b"app:k", &mut bulk, &mut count);
+        assert_eq!(bulk, b"*3\r\n$3\r\nSET\r\n$5\r\napp:k\r\n$1\r\nv\r\n");
+        assert_eq!(count, 1);
+    }
+}

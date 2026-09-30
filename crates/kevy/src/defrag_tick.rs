@@ -171,5 +171,68 @@ mod tests {
         assert_eq!(budget(held / 8, held), TICK_BUDGET_MAX);
         let mid = budget(held * 3 / 64, held);
         assert!(mid > TICK_BUDGET && mid < TICK_BUDGET_MAX, "{mid:?}");
+        assert_eq!(budget(1, 0), TICK_BUDGET_MAX, "no live bytes: any free space gets the most");
+        assert_eq!(budget(0, 0), TICK_BUDGET);
+    }
+
+    fn pace() -> Pace {
+        PACE.with(Cell::get)
+    }
+
+    fn store_with_one_value() -> Store {
+        let mut s = Store::new();
+        s.set_slice(b"k", &[7u8; 64], None, kevy_store::SetCondition::Always);
+        s
+    }
+
+    #[test]
+    fn a_pass_below_the_band_does_not_touch_the_table() {
+        PACE.with(|c| c.set(Pace { moved_this_lap: 3, ..Pace::default() }));
+        let mut s = store_with_one_value();
+        s.set_defrag_hint(Some(|_, _, _| true));
+        run(&mut s, 0, 1 << 30);
+        let p = pace();
+        assert!(!p.running);
+        assert_eq!(p.moved_this_lap, 0, "an idle tick forgets a half-done lap");
+    }
+
+    #[test]
+    fn a_lap_that_moves_nothing_parks_the_pass_at_the_free_space_it_saw() {
+        PACE.with(|c| c.set(Pace::default()));
+        let mut s = store_with_one_value();
+        s.set_defrag_hint(Some(|_, _, _| false));
+        let free = 64 << 20;
+        run(&mut s, free, 1 << 30);
+        let p = pace();
+        assert!(!p.running, "a dry lap ends the pass");
+        assert_eq!(p.parked_at, free);
+        run(&mut s, free, 1 << 30);
+        assert!(!pace().running, "and it stays parked until the free space grows");
+    }
+
+    #[test]
+    fn a_pass_that_keeps_moving_runs_until_its_tick_budget_is_spent() {
+        PACE.with(|c| c.set(Pace::default()));
+        // a table wider than one step, so steps end mid-lap as well
+        let mut s = store_with_one_value();
+        for i in 0..2_000u32 {
+            s.set_slice(&i.to_be_bytes(), &[1u8; 64], None, kevy_store::SetCondition::Always);
+        }
+        s.set_defrag_hint(Some(|_, _, _| true));
+        let started = Instant::now();
+        run(&mut s, 64 << 20, 1 << 30);
+        assert!(started.elapsed() >= TICK_BUDGET, "stopped before its budget");
+        let p = pace();
+        assert!(p.running, "a lap that moved something keeps the pass going");
+        assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&[7u8; 64][..]), "moving keeps the value");
+    }
+
+    // with the feature on, lib tests run under the system allocator, where
+    // the flag would hand shards a hint about memory kevy-alloc does not own
+    #[cfg(not(feature = "kevy-alloc"))]
+    #[test]
+    fn declaring_kevy_alloc_global_sets_the_flag_shards_read() {
+        kevy_alloc_is_global();
+        assert!(ACTIVE.load(Relaxed));
     }
 }

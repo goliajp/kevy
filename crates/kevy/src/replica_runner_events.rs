@@ -296,4 +296,17 @@ mod tests {
         assert!(event_to_apply(ping, &mut off).is_none());
         assert_eq!(off, 5, "a heartbeat must not move the offset");
     }
+
+    #[test]
+    fn an_event_with_nothing_to_apply_sends_nothing() {
+        let (tx, rx) = kevy_rt::replica_inbox_pair();
+        drop(rx);
+        let mut loading = LoadingGuard::new(Arc::new(ReplicaProgress::default()));
+        let mut off = 5;
+        let ping = ReplicaEvent::Ping(kevy_replicate::feed::FeedPosition::new(1, 9));
+        assert_eq!(forward_event(ping, &mut off, &mut loading, &tx), Ok(()), "no send tried");
+        let begin = ReplicaEvent::SnapshotBegin;
+        assert_eq!(forward_event(begin, &mut off, &mut loading, &tx), Err(()), "a send is tried");
+        assert_eq!(off, 5);
+    }
 }

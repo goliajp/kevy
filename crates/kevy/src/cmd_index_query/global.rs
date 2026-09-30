@@ -254,4 +254,29 @@ mod tests {
         let (w, _) = walk(&c.catalogs, &argv("IDX.QUERY g RANGE 300 200")).unwrap();
         assert_eq!((w.first, w.last), (1, 1), "an empty range still names one partition");
     }
+
+    #[test]
+    fn an_argv_the_shards_refuse_themselves_goes_to_every_shard() {
+        let c = catalogs(4);
+        let t = |a: &[Vec<u8>]| targets(&c.catalogs, 4, a);
+        assert_eq!(t(&[]), None);
+        for words in ["IDX.PART", "IDX.PART x - - IDX.QUERY g", "IDX.PART 1", "IDX.QUERY"] {
+            assert_eq!(t(&argv(words)), None, "{words}");
+        }
+        assert_eq!(t(&[b"IDX.PART".to_vec(), b"\xff".to_vec()]), None);
+        for words in ["IDX.QUERY g BOGUS", "IDX.QUERY g RANGE x 9", "IDX.VERIFY g"] {
+            assert_eq!(walk(&c.catalogs, &argv(words)), None, "{words}");
+        }
+    }
+
+    #[test]
+    fn a_continuation_or_rebuild_the_owner_cannot_read_is_refused() {
+        let kevy = crate::KevyCommands::with_state(std::sync::Arc::new(catalogs(1)));
+        let mut store = Store::new();
+        for words in ["IDX.PART 0 many - IDX.QUERY g RANGE 0 9", "IDX.PART 0 5 - IDX.QUERY g BOGUS"]
+        {
+            assert_eq!(op_part(&kevy.ctx(), &mut store, &argv(words)), [ST_BADARGS], "{words}");
+        }
+        assert_eq!(op_rebuild(&kevy.ctx(), &mut store, b"nosuch"), [super::super::ST_NOINDEX]);
+    }
 }
