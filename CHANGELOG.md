@@ -15,6 +15,26 @@
   every row its indexes take in, including rows a snapshot load, an
   expiry or a resync changed without a command.
 
+- **An index packs its leaves in the background, so its size no longer
+  depends on the order its rows were written in.** A write splits a full
+  leaf in two and merges a leaf only once it is under a quarter full and
+  fits into a neighbour within three-quarters, so writes alone left
+  leaves anywhere from one entry to full: the same 20,000 rows took 14.5
+  bytes a row written in order and 23.8 as 100 interleaved ascending
+  runs, and a million rows took 39 after deleting half of them at
+  random. The shard tick, and an embedded store's reaper tick, now walk
+  each index's leaves and pour the next leaf's first entries into the
+  one before while they fit, dropping a leaf that empties: at most half a
+  millisecond a tick, four leaves between clock reads. Once a pass moves
+  nothing an index rests, with every leaf but its last too full to take
+  the next leaf's first entry, until it has an eighth more leaves or an
+  eighth fewer entries. The 20,000 rows then take 15.5 bytes a row in a
+  local index and 14.6 in a global one whatever order they came in, and
+  1.25 million random writes pack from 21.6 to 15.1 in 49 ms of one core.
+  Writes and lookups are unchanged: counted in instructions against the
+  previous build, inserts, deletes and lookups each differ by 0.3% or
+  less. With `[expiry] hz = 0` there is no shard tick and nothing packs.
+
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. Since

@@ -1,6 +1,7 @@
 //! Windowed and indexed reads over rows.
 
 mod idx_advise;
+mod index_repack;
 mod partition_local_only;
 mod scalar_values_clauses;
 mod window_narrow;
