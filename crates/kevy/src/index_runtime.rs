@@ -139,7 +139,7 @@ pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
             freeze_text_batches(st, table, keys, dir);
         }
     }
-    tidy::tick(st);
+    tidy::run(st);
 }
 
 /// Σ approximate heap bytes of this shard's index segments, every
