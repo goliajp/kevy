@@ -67,6 +67,7 @@
 # Exit codes: 0 = ran (full: all SLAs met), 1 = assertion/SLA failure,
 # 2 = refused (root / dirty box / missing tools).
 set -u
+. "$(dirname "$0")/bench-lock.sh"   # hold the machine's bench lock for the whole run
 HERE=$(cd "$(dirname "$0")" && pwd)
 PY="$HERE/capacity_envelope.py"
 SCALE=${CAPACITY_SCALE:-full}
