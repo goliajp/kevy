@@ -30,16 +30,8 @@ pub(super) fn cmd_xclaim<A: ArgvView + ?Sized>(
         return Effect::Write;
     }
     let (key, group) = (&args[1], &args[2]);
-    match store.stream_view(key) {
-        Ok(Some(s)) if s.group(group).is_some() => {}
-        Ok(_) => {
-            no_key_or_group(out, key, group);
-            return Effect::Write;
-        }
-        Err(e) => {
-            store_err(out, e);
-            return Effect::Write;
-        }
+    if !group_found(store, key, group, out) {
+        return Effect::Write;
     }
     let Some(min_idle) = min_idle(&args[4], "XCLAIM", out) else { return Effect::Write };
     let (ids, opts) = match parse_xclaim_tail(args, min_idle) {
@@ -88,16 +80,8 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
         }
     };
     let (key, group) = (&args[1], &args[2]);
-    match store.stream_view(key) {
-        Ok(Some(s)) if s.group(group).is_some() => {}
-        Ok(_) => {
-            no_key_or_group(out, key, group);
-            return Effect::Write;
-        }
-        Err(e) => {
-            store_err(out, e);
-            return Effect::Write;
-        }
+    if !group_found(store, key, group, out) {
+        return Effect::Write;
     }
     let before = Before::read(store, args, &[]);
     let now = now_unix_ms();
@@ -112,6 +96,22 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
     emit_autoclaim_reply(out, cursor, &payloads, &deleted, mode);
     let taken: Vec<StreamId> = payloads.iter().map(|(id, _)| *id).collect();
     claim_effect(&before, store, args, taken, deleted)
+}
+
+/// Whether `key` holds a stream with `group`; the refusal written to
+/// `out` when not.
+fn group_found(store: &mut Store, key: &[u8], group: &[u8], out: &mut Vec<u8>) -> bool {
+    match store.stream_view(key) {
+        Ok(Some(s)) if s.group(group).is_some() => true,
+        Ok(_) => {
+            no_key_or_group(out, key, group);
+            false
+        }
+        Err(e) => {
+            store_err(out, e);
+            false
+        }
+    }
 }
 
 /// `min-idle-time`, a negative one taken as 0, or the refusal written to

@@ -239,14 +239,6 @@ impl StreamData {
         removed
     }
 
-    /// XTRIM MAXLEN — keep the most recent `n` entries, exactly. A trim
-    /// takes entries from the head, so it leaves `max_deleted_id` alone:
-    /// that marks a hole XDEL made among the entries, which a trim never
-    /// does.
-    pub(crate) fn trim_maxlen(&mut self, n: usize) -> usize {
-        self.trim(TrimTo::MaxLen(n as u64), false, 0)
-    }
-
     /// Approximate heap footprint for `Value::weight`. Walks the entry
     /// list once; cheap relative to the size of the stream itself.
     pub fn weight(&self) -> u64 {
@@ -262,12 +254,6 @@ impl StreamData {
             .sum();
         (self.entries.len() as u64).saturating_mul(BTREE_SLOT_BYTES) + entry_sum
     }
-
-    /// XTRIM MINID — drop every entry with ID < `floor`, exactly. Like
-    /// [`Self::trim_maxlen`], it leaves `max_deleted_id` alone.
-    pub(crate) fn trim_minid(&mut self, floor: StreamId) -> usize {
-        self.trim(TrimTo::MinId(floor), false, 0)
-    }
 }
 
 mod claim;
@@ -277,12 +263,13 @@ mod load;
 mod modes;
 mod nodes;
 mod pending;
+mod restore;
 mod store;
 pub use claim::{AutoclaimResult, XClaimOpts};
 pub use group::{ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 pub use load::{LoadedGroup, LoadedPelEntry};
 pub use modes::{AckMode, ClaimMode, MissingStream};
-pub use nodes::{APPROX_TRIM_LIMIT, TrimTo};
+pub use nodes::{APPROX_TRIM_LIMIT, TrimMode, TrimTo};
 pub use pending::{PendingExtended, PendingExtendedRow, PendingSummary};
 pub use store::{EntryBatch, GroupBatch};
 

@@ -3,16 +3,14 @@
 //! bounds of an ID interval, `(` making one exclusive.
 
 use kevy_resp::{ArgvView, CmdError};
-use kevy_store::{APPROX_TRIM_LIMIT, StreamId, TrimTo, parse_range_end, parse_range_start};
+use kevy_store::{
+    APPROX_TRIM_LIMIT, StreamId, TrimMode, TrimTo, parse_range_end, parse_range_start,
+};
 
 pub(super) const BAD_ID: &str = "ERR Invalid stream ID specified as stream command argument";
 
-/// A decimal `i64` with no `+`, no leading zero and no `-0`.
-///
-/// ```ignore
-/// assert_eq!(strict_i64(b"-7"), Some(-7));
-/// assert_eq!(strict_i64(b"07"), None);
-/// ```
+/// A decimal `i64` with no `+`, no leading zero and no `-0`: `-7` reads
+/// as -7, while `07`, `+7` and `-0` are refused.
 pub(super) fn strict_i64(b: &[u8]) -> Option<i64> {
     let digits = b.strip_prefix(b"-").unwrap_or(b);
     let ok = !digits.is_empty()
@@ -29,9 +27,7 @@ pub(super) fn strict_i64(b: &[u8]) -> Option<i64> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Trim {
     pub(super) to: TrimTo,
-    pub(super) approx: bool,
-    /// Entries an approximate trim may remove, 0 for no limit.
-    pub(super) limit: usize,
+    pub(super) mode: TrimMode,
 }
 
 /// `MAXLEN|MINID [=|~] threshold` and `LIMIT n`, met in any order.
@@ -50,9 +46,12 @@ impl TrimParser {
         i: usize,
     ) -> Result<Option<usize>, CmdError> {
         let tok = &args[i];
+        // an option is one only when a value follows it
+        let Some(next) = args.get(i + 1) else {
+            return Ok(None);
+        };
         if tok.eq_ignore_ascii_case(b"LIMIT") {
-            let n = args.get(i + 1).ok_or(CmdError::Wire("ERR syntax error"))?;
-            let n = strict_i64(n).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
+            let n = strict_i64(next).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
             let n = usize::try_from(n)
                 .map_err(|_| CmdError::Wire("ERR The LIMIT argument must be >= 0."))?;
             self.limit = Some(n);
@@ -68,12 +67,10 @@ impl TrimParser {
             ));
         }
         // a modifier is one only when a threshold follows it
-        let modifier = args.get(i + 1).filter(|m| *m == b"=" || *m == b"~");
-        let (approx, at) = match modifier {
-            Some(m) if i + 2 < args.len() => (m == b"~", i + 2),
-            _ => (false, i + 1),
+        let (approx, v, taken) = match args.get(i + 2) {
+            Some(v) if next == b"=" || next == b"~" => (next == b"~", v, 3),
+            _ => (false, next, 2),
         };
-        let v = args.get(at).ok_or(CmdError::Wire("ERR syntax error"))?;
         let to = if maxlen {
             let n = strict_i64(v).ok_or(CmdError::Wire(crate::reply::ERR_NOT_INT))?;
             let n = u64::try_from(n)
@@ -83,7 +80,7 @@ impl TrimParser {
             TrimTo::MinId(kevy_store::parse_explicit_id(v).map_err(|_| CmdError::Wire(BAD_ID))?)
         };
         self.trim = Some((to, approx));
-        Ok(Some(at + 1 - i))
+        Ok(Some(taken))
     }
 
     /// The trim, once every option is in.
@@ -97,8 +94,12 @@ impl TrimParser {
             )),
             (None, None) => Ok(None),
             (Some((to, approx)), limit) => {
-                let limit = if approx { limit.unwrap_or(APPROX_TRIM_LIMIT) } else { 0 };
-                Ok(Some(Trim { to, approx, limit }))
+                let mode = if approx {
+                    TrimMode::Approximate { limit: limit.unwrap_or(APPROX_TRIM_LIMIT) }
+                } else {
+                    TrimMode::Exact
+                };
+                Ok(Some(Trim { to, mode }))
             }
         }
     }

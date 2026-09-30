@@ -1,6 +1,9 @@
 //! `XAUTOCLAIM`: walk the pending list from a cursor, claiming what has
 //! been idle long enough and dropping what the stream no longer holds.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+
 use super::{AutoclaimResult, XClaimOpts, claim_one};
 use crate::StoreError;
 use crate::stream::{ClaimMode, StreamData, StreamId};
@@ -51,8 +54,7 @@ impl StreamData {
         let (mut claimed, mut deleted) = (Vec::new(), Vec::new());
         let mut at = start;
         let mut next_cursor = StreamId::MIN;
-        loop {
-            let Some((&id, p)) = g.pel.range(at..).next() else { break };
+        while let Some((&id, p)) = g.pel.range(at..).next() {
             if attempts == 0 || claimed.len() + deleted.len() >= count {
                 next_cursor = id;
                 break;

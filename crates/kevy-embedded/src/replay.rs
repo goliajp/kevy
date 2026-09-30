@@ -45,9 +45,9 @@ fn apply_view<A: kevy_resp::ArgvView + ?Sized>(store: &mut Store, args: &A) {
         let mut out = r.borrow_mut();
         out.clear();
         // an internal record frame is applied here, never from a client.
-        // The only one is a stream record, which `serves_family` refused
-        // above in a build without streams; the cfg keeps the stream code
-        // it reaches out of that build as well.
+        // Both are stream records, which `serves_family` refused above in
+        // a build without streams; the cfg keeps the stream code they
+        // reach out of that build as well.
         #[cfg(feature = "streams-geo")]
         if kevy_verbs::aof::apply_internal(store, args, &mut out) {
             return;
@@ -69,12 +69,12 @@ fn serves_family(verb: &[u8]) -> bool {
 /// internal record verbs.
 #[cfg(test)]
 pub(crate) fn replay_verbs() -> Vec<&'static str> {
-    let internal = kevy_resp::ops_table::CONSUMER_SEEN;
+    let internal = [kevy_resp::ops_table::CONSUMER_SEEN, kevy_resp::ops_table::PENDING];
     kevy_verbs::VERBS
         .iter()
         .filter(|v| v.write)
         .map(|v| v.name)
-        .chain([internal])
+        .chain(internal)
         .filter(|name| serves_family(name.as_bytes()))
         .collect()
 }

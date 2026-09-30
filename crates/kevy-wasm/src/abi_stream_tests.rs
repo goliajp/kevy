@@ -35,7 +35,9 @@ fn feed(h: u32, log: &[u8]) -> i32 {
 }
 
 /// A stream with a group, one delivery acknowledged, one claimed by a
-/// second consumer, a third consumer that has read nothing, and a geo set.
+/// second consumer, one handed out again by a history read and then
+/// deleted while pending, a third consumer that has read nothing, and a
+/// geo set.
 fn populate(h: u32) {
     for (id, v) in [("1-1", "a"), ("2-1", "b"), ("3-1", "c")] {
         assert_eq!(
@@ -52,6 +54,9 @@ fn populate(h: u32) {
     assert_eq!(cmd(h, &[b"XACK", b"s", b"g", b"1-1"]), ":1\r\n");
     let claimed = cmd(h, &[b"XAUTOCLAIM", b"s", b"g", b"bob", b"0", b"0", b"COUNT", b"1"]);
     assert!(claimed.contains("2-1"), "{claimed}");
+    let history = cmd(h, &[b"XREADGROUP", b"GROUP", b"g", b"alice", b"STREAMS", b"s", b"0"]);
+    assert!(history.starts_with("*1\r\n") && history.contains("3-1"), "{history}");
+    assert_eq!(cmd(h, &[b"XDEL", b"s", b"3-1"]), ":1\r\n");
     assert_eq!(cmd(h, &[b"XGROUP", b"CREATECONSUMER", b"s", b"g", b"carol"]), ":1\r\n");
     let geo = cmd(
         h,
@@ -93,14 +98,20 @@ fn stream_and_geo_verbs_answer() {
     let h = kevy_open(0);
     populate(h);
     let s = state(h);
-    assert_eq!(s[1], ":4\r\n");
+    assert_eq!(s[1], ":3\r\n");
     assert!(s[2].starts_with("*4\r\n:2\r\n$3\r\n2-1\r\n$3\r\n3-1\r\n"), "two pending: {}", s[2]);
     assert_eq!(s[3], "*3", "alice, bob and carol");
     let km: f64 = s[4].lines().nth(1).unwrap().parse().unwrap();
     assert!((390.0..410.0).contains(&km), "tokyo to osaka is about 400 km, got {km}");
     assert_eq!(s[5], "*2\r\n$5\r\ntokyo\r\n$5\r\nosaka\r\n");
-    let read = cmd(h, &[b"XREAD", b"COUNT", b"1", b"STREAMS", b"s", b"2-1"]);
-    assert!(read.contains("3-1") && !read.contains("2-1\r\n*"), "{read}");
+    // alice's deleted entry is still pending, delivered twice
+    let full: Vec<&str> = s[6].split("\r\n").collect();
+    let row = full.windows(5).any(|w| w[0] == "3-1" && w[2] == "alice" && w[4] == ":2");
+    assert!(row, "{}", s[6]);
+    let history = cmd(h, &[b"XREADGROUP", b"GROUP", b"g", b"alice", b"STREAMS", b"s", b"0"]);
+    assert_eq!(history, "*1\r\n*2\r\n$1\r\ns\r\n*1\r\n*2\r\n$3\r\n3-1\r\n*-1\r\n");
+    let read = cmd(h, &[b"XREAD", b"COUNT", b"1", b"STREAMS", b"s", b"1-1"]);
+    assert!(read.contains("2-1") && !read.contains("1-1\r\n*"), "{read}");
     kevy_close(h);
 }
 

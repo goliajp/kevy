@@ -299,6 +299,43 @@ fn xreadgroup_multistream_missing_group_errors() {
     assert!(reply.starts_with(b"-NOGROUP"), "{:?}", String::from_utf8_lossy(&reply));
 }
 
+/// A read across shards that one of its streams refuses reads none of
+/// them: every stream is checked first, and the refusal is the first one
+/// in request order.
+#[test]
+fn xreadgroup_multistream_refused_by_one_stream_reads_none() {
+    let shard = |k: &[u8]| kevy_rt::shard_of_key(k, 4, kevy_persist::Routing::KevyHash);
+    assert_ne!(shard(b"ha"), shard(b"hb"), "the streams must be on different shards");
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let mut call = |parts: &[&str]| {
+        let parts: Vec<&[u8]> = parts.iter().map(|p| p.as_bytes()).collect();
+        c.write_all(&req(&parts)).unwrap();
+        String::from_utf8(read_reply(&mut c)).unwrap()
+    };
+    for st in ["ha", "hb"] {
+        assert_eq!(call(&["XADD", st, "1-0", "f", "v"]), "$3\r\n1-0\r\n");
+    }
+    assert_eq!(call(&["XGROUP", "CREATE", "ha", "g", "0"]), "+OK\r\n");
+    let nogroup =
+        "-NOGROUP No such key 'hb' or consumer group 'g' in XREADGROUP with GROUP option\r\n";
+    let read = ["XREADGROUP", "GROUP", "g", "alice", "STREAMS", "ha", "hb", ">", ">"];
+    assert_eq!(call(&read), nogroup);
+    // the bad ID on ha comes after hb's missing group in request order
+    let read = ["XREADGROUP", "GROUP", "g", "alice", "STREAMS", "hb", "ha", ">", "x"];
+    assert_eq!(call(&read), nogroup);
+    assert_eq!(call(&["XGROUP", "CREATE", "hb", "g", "0"]), "+OK\r\n");
+    let read = ["XREADGROUP", "GROUP", "g", "alice", "STREAMS", "ha", "hb", ">", "x"];
+    assert_eq!(call(&read), "-ERR Invalid stream ID specified as stream command argument\r\n");
+    let untouched = "*1\r\n*12\r\n$4\r\nname\r\n$1\r\ng\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n$17\r\nlast-delivered-id\r\n$3\r\n0-0\r\n$12\r\nentries-read\r\n$-1\r\n$3\r\nlag\r\n:1\r\n";
+    assert_eq!(call(&["XINFO", "GROUPS", "ha"]), untouched, "a refused read read ha");
+    assert_eq!(call(&["XINFO", "GROUPS", "hb"]), untouched, "a refused read read hb");
+    // and once both check out, both are read
+    let read = ["XREADGROUP", "GROUP", "g", "alice", "STREAMS", "ha", "hb", ">", ">"];
+    assert!(call(&read).starts_with("*2\r\n"));
+}
+
 #[test]
 fn xreadgroup_gather_pel_survives_aof_restart() {
     let _s = serial();

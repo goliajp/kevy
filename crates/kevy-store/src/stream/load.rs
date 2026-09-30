@@ -184,7 +184,7 @@ impl LoadedGroup {
 
 impl StreamData {
     /// Does an entry with `id` currently exist? AOF rewrite uses this
-    /// to filter tombstone PEL rows (XCLAIM can't re-create those).
+    /// to tell the pending rows XCLAIM can put back from the ones it cannot.
     pub fn contains_entry(&self, id: StreamId) -> bool {
         self.entries.contains_key(&id)
     }

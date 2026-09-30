@@ -218,40 +218,17 @@ impl Store {
 
     /// `XTRIM key MAXLEN n`. Returns number removed.
     pub fn xtrim_maxlen(&mut self, key: &[u8], maxlen: u64) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_maxlen(maxlen as usize);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MaxLen(maxlen), super::TrimMode::Exact)
     }
 
     /// `XTRIM key MINID id`. Returns number removed.
     pub fn xtrim_minid(&mut self, key: &[u8], minid: StreamId) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_minid(minid);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MinId(minid), super::TrimMode::Exact)
     }
 
     /// `XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]`. Returns
-    /// `NoSuchKey` for a missing key (dispatch maps it to Redis's
-    /// "requires the key to exist" wording), `OutOfRange` when `last_id`
-    /// is below the stream's top entry.
+    /// `NoSuchKey` for a missing key (answered as `ERR no such key`),
+    /// `OutOfRange` when `last_id` is below the stream's top entry.
     pub fn xsetid(
         &mut self,
         key: &[u8],

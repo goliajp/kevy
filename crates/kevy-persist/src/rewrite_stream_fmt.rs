@@ -155,10 +155,11 @@ fn xclaim_argv(
 /// technique Redis's own AOF rewrite uses — then one internal
 /// `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per known consumer,
 /// which makes it with its last contact and its last active time, after
-/// the claims that stamp it with the replay's clock. Tombstone PEL rows
-/// (entry XDEL'd while pending) are skipped: XCLAIM purges rather than
-/// re-creates those, so only the snapshot path preserves them (accepted
-/// trade-off — no RESP verb can recreate a PEL row for a deleted entry).
+/// the claims that stamp it with the replay's clock. A pending row whose
+/// entry is gone (deleted or trimmed while pending) is put back by an
+/// internal `XINTERNAL.PENDING key group consumer t n id` instead: no
+/// client command makes such a row again, and a history read and
+/// `XAUTOCLAIM` still answer it.
 pub(crate) fn write_stream_group_commands<W: Write>(
     w: &mut W,
     key: &[u8],
@@ -185,16 +186,37 @@ pub(crate) fn write_stream_group_commands<W: Write>(
         frames += 1;
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
             let id = StreamId::new(*ms, *seq);
-            if !s.contains_entry(id) {
-                continue;
-            }
-            let argv = xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count);
+            let argv = if s.contains_entry(id) {
+                xclaim_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count)
+            } else {
+                pending_argv(key, &g.name, consumer, id, *delivery_time_ms, *delivery_count)
+            };
             emit(w, &Argv::from(argv), fmt, scratch)?;
             frames += 1;
         }
         frames += write_consumer_times(w, key, &g, fmt, scratch)?;
     }
     Ok(frames)
+}
+
+/// The internal frame that puts back a pending row whose entry is gone.
+fn pending_argv(
+    key: &[u8],
+    group: &[u8],
+    consumer: &[u8],
+    id: StreamId,
+    delivery_time_ms: u64,
+    delivery_count: u64,
+) -> Vec<Vec<u8>> {
+    vec![
+        kevy_resp::ops_table::PENDING.as_bytes().to_vec(),
+        key.to_vec(),
+        group.to_vec(),
+        consumer.to_vec(),
+        delivery_time_ms.to_string().into_bytes(),
+        delivery_count.to_string().into_bytes(),
+        id.encode(),
+    ]
 }
 
 /// One `XINTERNAL.CONSUMERSEEN key group consumer t [a]` per consumer of
