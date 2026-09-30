@@ -138,7 +138,7 @@ fn record(g: &mut Inner, argv: &[Vec<u8>], swap: Option<(usize, &[u8])>) -> Kevy
         let parts: Vec<&[u8]> = argv.iter().enumerate().map(|(i, a)| swapped(swap, i, a)).collect();
         commit_write(g, &parts)?;
     }
-    for f in kevy_verbs::aof::ttl_followup(&mut g.store, &Args(argv)) {
+    for f in kevy_verbs::aof::ttl_followup(&g.store, &Args(argv)) {
         let parts: Vec<&[u8]> = (0..f.len()).map(|i| &f[i]).collect();
         commit_write(g, &parts)?;
     }

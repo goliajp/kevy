@@ -13,7 +13,7 @@
 //! resumes exclusively past it. `"0"` = start / exhausted (SCAN
 //! convention).
 
-use crate::state::Ctx;
+use crate::state::{CatalogChange, Ctx};
 use kevy_index::{IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 
@@ -446,10 +446,16 @@ pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &
     if args.len() != 2 {
         return encode_error(out, "ERR usage: IDX.DROP name");
     }
-    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    let hit = cat.drop_index(&args[1]);
-    if hit {
-        ctx.state.install_index_catalog(cat);
-    }
+    let hit = loop {
+        let base = ctx.state.catalog_base();
+        let mut cat = base.index_owned();
+        if !cat.drop_index(&args[1]) {
+            break false;
+        }
+        let change = CatalogChange { index: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            break true;
+        }
+    };
     encode_integer(out, i64::from(hit));
 }

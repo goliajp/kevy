@@ -16,14 +16,19 @@ struct ViewState {
     spec: ViewSpec,
     /// `Some` for materialized views.
     mat: Option<MaterializedSet>,
-    /// Local rebuild scheduled (initial build / top-K underflow).
+    /// Local rebuild scheduled (initial build / top-K underflow / an
+    /// index it reads was built again).
     needs_rebuild: bool,
+    /// The build of each index it reads (`reads` order) it was derived from.
+    builds: Vec<u64>,
 }
 
 /// One shard's view states. Owned by `crate::state::ShardCtx`.
 #[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     generation: u64,
+    /// The index-list generation `ViewState::builds` were checked at.
+    index_gen: u64,
     views: Vec<ViewState>,
     /// `reserved_bytes` generation cache — see
     /// `ShardIndexes::stats_dirty`; same contract, view half.
@@ -34,28 +39,58 @@ pub(crate) struct ShardViews {
     referenced: Vec<Vec<u8>>,
 }
 
-/// Write hook — call AFTER `index_runtime::on_write` so segment
-/// probes see the fresh row.
+/// Write hook — call AFTER `index_runtime::on_write`, whose drain lists
+/// the rows the views take in.
 #[inline]
-pub(crate) fn on_write(ctx: &Ctx<'_>, key: &[u8]) {
+pub(crate) fn on_write(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.views.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st);
-    // Probe each referenced index ONCE for this key, then evaluate
-    // every view against the same value table (bounds compares
-    // only — no per-view re-hashing; this took the measured write
-    // tax from 44% to the clamp band).
-    let st = &mut *st;
-    let referenced = &st.referenced;
-    crate::index_runtime::with_segment_resolver(ctx, |seg| {
-        let vals: Vec<(&[u8], Option<kevy_index::IndexValue>)> = referenced
-            .iter()
-            .map(|n| (n.as_slice(), seg(n).and_then(|s| s.key_dir()?.get(key))))
-            .collect();
-        let lookup = |name: &[u8]| -> Option<kevy_index::IndexValue> {
-            vals.iter().find(|(n, _)| *n == name).and_then(|(_, v)| v.clone())
+    catch_up(ctx, &mut st);
+}
+
+/// Take in every row this shard's indexes took in since the last call,
+/// and mark a view whose indexes were built again for a rebuild.
+fn catch_up(ctx: &Ctx<'_>, st: &mut ShardViews) {
+    refresh(&ctx.state.catalogs, st);
+    crate::index_runtime::with_rows(ctx, |rows| {
+        if st.index_gen != rows.generation() {
+            for vs in st.views.iter_mut().filter(|vs| vs.mat.is_some()) {
+                let builds: Vec<u64> = reads(&vs.spec).iter().map(|n| rows.build_of(n)).collect();
+                if vs.builds != builds {
+                    vs.needs_rebuild = true;
+                    vs.builds = builds;
+                }
+            }
+            st.index_gen = rows.generation();
+        }
+        if rows.wiped() {
+            for vs in &mut st.views {
+                if let Some(m) = &mut vs.mat {
+                    m.clear();
+                }
+            }
+        }
+        take_in(st, rows);
+    });
+}
+
+/// Re-evaluate each listed row against every materialized view: probe each
+/// referenced index once per row, then compare bounds per view.
+fn take_in(st: &mut ShardViews, rows: &crate::index_runtime::Rows<'_>) {
+    let mut vals: Vec<Option<IndexValue>> = Vec::with_capacity(st.referenced.len());
+    for key in rows.keys() {
+        vals.clear();
+        vals.extend(
+            st.referenced.iter().map(|n| rows.ready(n).and_then(|s| s.key_dir()?.get(key))),
+        );
+        let referenced = &st.referenced;
+        let lookup = |name: &[u8]| -> Option<IndexValue> {
+            referenced.iter().position(|n| n == name).and_then(|i| vals[i].clone())
         };
         for vs in &mut st.views {
             let Some(mat) = &mut vs.mat else { continue };
+            if vs.needs_rebuild {
+                continue;
+            }
             st.stats_dirty = true;
             let membership = if vs.spec.tree.contains_values(&lookup) {
                 Membership::Member(lookup(&vs.spec.order_by))
@@ -66,16 +101,19 @@ pub(crate) fn on_write(ctx: &Ctx<'_>, key: &[u8]) {
                 vs.needs_rebuild = true;
             }
         }
-    });
+    }
 }
 
-/// Tick hook — run scheduled local rebuilds.
+/// Tick hook — take in the rows the tick's drain listed, then run the
+/// scheduled local rebuilds whose indexes are ready.
 pub(crate) fn on_tick(ctx: &Ctx<'_>) {
     let mut st = ctx.shard.views.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st);
+    catch_up(ctx, &mut st);
     let st = &mut *st;
     for vs in &mut st.views {
-        if vs.needs_rebuild {
+        // built from an index still backfilling, the set would lack the
+        // rows the backfill has yet to reach, and no write brings them
+        if vs.needs_rebuild && !referenced_index_building(ctx, &vs.spec) {
             rebuild_local(ctx, vs);
             st.stats_dirty = true;
         }
@@ -127,7 +165,7 @@ pub(crate) fn shard_page(
     limit: usize,
 ) -> Result<Vec<(IndexValue, Vec<u8>)>, CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st);
+    catch_up(ctx, &mut st);
     let st = &mut *st;
     let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
     if referenced_index_building(ctx, &vs.spec) {
@@ -155,7 +193,7 @@ pub(crate) fn shard_page(
 /// building) — virtual views report a fresh evaluation's cardinality.
 pub(crate) fn shard_stats(ctx: &Ctx<'_>, name: &[u8]) -> Result<(u64, u64, u64, bool), CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
-    refresh(&ctx.state.catalogs, &mut st);
+    catch_up(ctx, &mut st);
     let st = &mut *st;
     let vs = st.views.iter_mut().find(|v| v.spec.name == name).ok_or("ERR no such view")?;
     match &vs.mat {
@@ -198,13 +236,16 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardViews) {
                         }
                         _ => None,
                     };
-                    next.push(ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat });
+                    let (needs_rebuild, builds) = (mat.is_some(), Vec::new());
+                    next.push(ViewState { spec: spec.clone(), mat, needs_rebuild, builds });
                 }
             }
         }
     }
     st.views = next;
     st.generation = generation;
+    // a new view records the builds it reads at the next catch-up
+    st.index_gen = u64::MAX;
     let mut referenced: Vec<Vec<u8>> = Vec::new();
     for vs in &st.views {
         if vs.mat.is_none() {
@@ -286,7 +327,15 @@ fn rebuild_local(ctx: &Ctx<'_>, vs: &mut ViewState) {
 /// order index) is still backfilling — the resolver hides Building
 /// segments, and an empty leaf would silently misreport membership.
 fn referenced_index_building(ctx: &Ctx<'_>, spec: &ViewSpec) -> bool {
+    reads(spec).iter().any(|n| crate::index_runtime::segment_building(ctx, n))
+}
+
+/// The indexes a view reads: its order index, then its leaves.
+fn reads(spec: &ViewSpec) -> Vec<Vec<u8>> {
     let mut names: Vec<Vec<u8>> = vec![spec.order_by.clone()];
     spec.tree.each_leaf(&mut |l| names.push(l.index.clone()));
-    names.iter().any(|n| crate::index_runtime::segment_building(ctx, n))
+    names
 }
+
+#[cfg(test)]
+mod tests;

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A materialized view holds every row its indexes hold.** Since 3.0.0
+  a shard built a materialized view on its next tick even while an index
+  the view reads was still backfilling: the view was built from the rows
+  the backfill had reached, and the rest never entered it. A view
+  declared right after its index over more than 2,048 rows on a shard
+  answered `VIEW.QUERY` with part of its members for good, until a
+  `VIEW.REBUILD`. An index a view reads, dropped and declared again, was
+  not followed either: a write while it rebuilt took the written row out
+  of the view. A view is now built only once every index it reads is
+  ready, again whenever one of them is built again, and it takes in
+  every row its indexes take in, including rows a snapshot load, an
+  expiry or a resync changed without a command.
+
 - **An index packs its leaves in the background, so its size no longer
   depends on the order its rows were written in.** A write splits a full
   leaf in two and merges a leaf only once it is under a quarter full and
@@ -22,6 +35,7 @@
   previous build, inserts, deletes and lookups each differ by 0.3% or
   less. With `[expiry] hz = 0` there is no shard tick and nothing packs.
 
+||||||| 48c39923d
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. Since
@@ -82,6 +96,20 @@
   marker, where 6.4.0 stops reading, so 6.4.0 still loads a 7.0 snapshot;
   it opens a 7.0 directory with every key and no catalog (see [the
   upgrade guide](docs/upgrading-6.4-to-7.0.md)).
+
+- **Catalog commands run at the same time no longer undo each other.**
+  An `IDX.CREATE`, `VIEW.CREATE`, `TABLE.DECLARE` or any other catalog
+  command copied the catalog, changed the copy and installed it, and the
+  server runs a command on the shard its connection lives on. Two
+  connections on different shards could copy the same catalog, and the
+  second install dropped the first command's change, which had already
+  answered `OK`; a view over an index declared a moment before then
+  answered that the index was unknown. With four connections declaring
+  at once a test lost between 14 and 71 of the declared names on every
+  run. A change now installs only onto the catalog it was computed from
+  and is computed again otherwise, and the version it is recorded under
+  moves together with the catalog it records, so a restart and a
+  replica keep every change.
 
 - **`kevy-cluster-rw` sends every write to the primary.** Its own list of
   write commands had drifted from the server's: 21 commands the server
