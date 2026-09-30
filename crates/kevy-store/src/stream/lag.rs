@@ -282,4 +282,57 @@ mod tests {
         assert_eq!(t.lag(StreamId::MIN, None), Some(0));
         assert_eq!(t.lag(id(9), None), None);
     }
+
+    #[test]
+    fn an_emptied_stream_knows_the_counter_only_past_its_last_deletion() {
+        // three added, all gone, the highest deletion at 2
+        let t = tally(&[], 3, 2, 3);
+        assert_eq!(t.lag(id(1), None), None, "before the last deletion");
+        assert_eq!(t.lag(id(2), None), Some(0), "at it: everything is gone and read");
+    }
+
+    /// The store-level setters answer a missing key, a key of another type,
+    /// a missing group and a consumer that does not exist yet.
+    #[test]
+    fn the_read_setters_answer_every_missing_thing() {
+        use crate::{GroupCreateMode, MissingStream, SetCondition, Store, XAddIdSpec};
+        let mut s = Store::new();
+        assert_eq!(s.xgroup_set_entries_read(b"none", b"g", Some(1)), Ok(false));
+        assert_eq!(s.xgroup_consumer_active(b"none", b"g", b"c", Some(1)), Ok(false));
+        s.set(b"str", b"v".to_vec(), None, SetCondition::Always);
+        assert!(s.xgroup_set_entries_read(b"str", b"g", Some(1)).is_err());
+        assert!(s.xgroup_consumer_active(b"str", b"g", b"c", Some(1)).is_err());
+        let f = vec![(b"f".to_vec(), b"v".to_vec())];
+        s.xadd(b"s", XAddIdSpec::Explicit(id(1)), f, MissingStream::Create, 0).unwrap();
+        assert_eq!(s.xgroup_set_entries_read(b"s", b"g", Some(1)), Ok(false), "no group");
+        assert_eq!(s.xgroup_consumer_active(b"s", b"g", b"c", Some(1)), Ok(false), "no group");
+        let g = GroupCreateMode::AtId(StreamId::MIN);
+        s.xgroup_create(b"s", b"g", g, MissingStream::Refuse).unwrap();
+        assert_eq!(s.xgroup_consumer_active(b"s", b"g", b"new", Some(7)), Ok(true));
+        let group = s.stream_group_peek(b"s", b"g").unwrap();
+        let (_, made) = group.consumers().find(|(n, _)| *n == b"new").unwrap();
+        assert_eq!(made.last_active_ms(), Some(7), "made, with the time it was active");
+    }
+
+    /// A group rebuilt from its loaded form keeps its counter and active
+    /// times; a PEL entry names a consumer the list left out, which is
+    /// made, and an active time for a consumer that is not there is dropped.
+    #[test]
+    fn a_loaded_group_carries_its_reads() {
+        use crate::{LoadedGroup, StreamData};
+        let pel = vec![(1, 0, b"only-in-pel".to_vec(), 5, 1)];
+        let g = LoadedGroup::new(b"g".to_vec(), (1, 0), vec![(b"c".to_vec(), 5)], pel)
+            .with_reads(Some(1), vec![(b"c".to_vec(), 4), (b"gone".to_vec(), 3)]);
+        let mut s = StreamData::default();
+        s.import_groups(vec![g]);
+        let group = s.group(b"g").unwrap();
+        assert_eq!(group.entries_read(), Some(1));
+        let active: Vec<_> =
+            group.consumers().map(|(n, c)| (n.to_vec(), c.last_active_ms())).collect();
+        assert!(active.contains(&(b"c".to_vec(), Some(4))), "{active:?}");
+        assert!(active.contains(&(b"only-in-pel".to_vec(), None)), "{active:?}");
+        assert!(!active.iter().any(|(n, _)| n == b"gone"), "{active:?}");
+        let empty = crate::ConsumerGroup::default();
+        assert_eq!((empty.entries_read(), empty.consumers().count()), (None, 0));
+    }
 }

@@ -118,4 +118,12 @@ fn frames_applied_from_a_log_or_a_primary() {
     s.apply_frame(&frame(&[b"DEL", b"ix:2", b"ix:3"]));
     s.apply_frame(&frame(&[b"HSET", b"ix:fresh", b"n", b"-4"]));
     check(&s, "applied frames");
+    // a catalog frame that does not decode is skipped: the catalog and
+    // its indexes stay as they were
+    let catalog = kevy_resp::ops_table::CATALOG.as_bytes();
+    s.apply_frame(&frame(&[catalog, b"not-a-lineage", b"1", b"", b"", b""]));
+    check(&s, "a malformed catalog frame");
+    // and one older than the catalog the store recorded is not taken
+    s.apply_frame(&frame(&[catalog, b"1", b"1", b"", b"", b""]));
+    check(&s, "an older catalog frame");
 }

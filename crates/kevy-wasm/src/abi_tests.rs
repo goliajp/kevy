@@ -298,6 +298,9 @@ fn aof_v1_log_feeds_and_outbound_stays_v1() {
     // contract, plus: outbound frames follow the stored log's format so
     // the host's verbatim appends never mix formats in one log.
     let mut log = kevy_persist::AOF_MAGIC.to_vec();
+    // the record that opens a native log, carried over as bare RESP: skipped
+    // and not counted, as in a v2 log
+    log.extend_from_slice(b"*2\r\n$12\r\n\0KEVYLOGBASE\r\n$8\r\n\0\0\0\0\0\0\0\0\r\n");
     log.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n");
     let h = kevy_open(OPEN_CAPTURE_AOF);
     // SAFETY: live handle and live locals — see the module note.
