@@ -41,6 +41,7 @@
 # Exit codes: 0 = PASS (or baseline updated), 1 = FAIL/regression, 2 = refused
 # (dirty box / missing tools / bad usage).
 set -u
+. "$(dirname "$0")/bench-lock.sh"   # hold the machine's bench lock for the whole run
 
 BIN=${1:?usage: perfgate.sh <KEVY_BIN> [--update-baseline]}
 MODE=${2:-gate}

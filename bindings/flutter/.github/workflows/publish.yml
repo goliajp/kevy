@@ -1,0 +1,34 @@
+# Publishes flutter_kevy to pub.dev when the kevy release pushes a vX.Y.Z
+# tag to goliajp/kevy-flutter.
+#
+# This file is carried into goliajp/kevy-flutter by
+# scripts/mirror-flutter-package.sh in goliajp/kevy; in the kevy
+# repository it sits below bindings/flutter and never runs.
+#
+# pub.dev takes the upload on GitHub's OIDC token, which it accepts only
+# once the package's Admin tab has "Enable publishing from GitHub Actions"
+# on for this repository with tag pattern v{{version}}. Until then this run
+# fails at the upload step, and the version is published by hand from the
+# tag with `flutter pub publish`.
+name: Publish to pub.dev
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the credential that trades the OIDC token with pub.dev.
+      - uses: dart-lang/setup-dart@v1
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter pub publish --force
