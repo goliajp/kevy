@@ -42,7 +42,21 @@ use crate::rewrite_fmt::write_value_as_commands;
 pub fn value_as_v1_frames(key: &[u8], value: &Value, ttl_ms: Option<u64>) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut scratch = Vec::new();
-    let _ =
-        write_value_as_commands(&mut buf, key, value, ttl_ms, crate::AofFormat::V1, &mut scratch);
+    let _ = write_value_into_vec(&mut buf, key, value, ttl_ms, crate::AofFormat::V1, &mut scratch);
     buf
+}
+
+/// The serializer's in-memory instance, compiled once here. Generic
+/// callers (`dump_store_to_buf` is instantiated in the crate that calls
+/// it) reach it through this function rather than instantiating the
+/// writer themselves, which gave the linked program a second copy of it.
+pub(crate) fn write_value_into_vec(
+    buf: &mut Vec<u8>,
+    key: &[u8],
+    value: &Value,
+    ttl_ms: Option<u64>,
+    fmt: crate::AofFormat,
+    scratch: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    write_value_as_commands(buf, key, value, ttl_ms, fmt, scratch)
 }

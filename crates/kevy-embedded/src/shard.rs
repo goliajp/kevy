@@ -94,7 +94,7 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Built> {
 /// on-disk layout, then open each shard's live AOF.
 #[cfg(feature = "persist")]
 fn build_shards_persist(config: &Config, n: usize, mut stores: Vec<Keyspace>) -> io::Result<Built> {
-    let Some(dir) = config.data_dir.clone() else {
+    let Some(dir) = crate::store_wire::disk_dir(config).cloned() else {
         // Pure in-memory: no persistence, no AOF — and no disk for a
         // cold tier: tiering config on a mem-only store is a named
         // refusal, never a silent ignore.

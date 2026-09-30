@@ -31,10 +31,36 @@ pub(crate) struct Backbone {
 pub(crate) fn claim_dir(
     config: &crate::config::Config,
 ) -> KevyResult<Option<kevy_persist::DirLock>> {
-    Ok(match &config.data_dir {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    if config.data_dir.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "a data dir needs a filesystem, and this target has none: \
+             persist through the host (dump_aof_buf / apply_frame)",
+        )
+        .into());
+    }
+    Ok(match disk_dir(config) {
         Some(dir) => Some(kevy_persist::DirLock::acquire(dir)?),
         None => None,
     })
+}
+
+/// The data dir the open path reads and writes. A browser has no
+/// filesystem: there [`claim_dir`] refuses a configured dir, so this is
+/// always `None`, and the disk bring-up behind it is left out of the
+/// module rather than shipped to fail at run time.
+#[cfg(feature = "persist")]
+#[inline]
+pub(crate) fn disk_dir(config: &crate::config::Config) -> Option<&std::path::PathBuf> {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let dir = {
+        let _ = config;
+        None
+    };
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    let dir = config.data_dir.as_ref();
+    dir
 }
 
 /// The registries are in every shard, holding the restored catalog,
