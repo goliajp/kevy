@@ -212,3 +212,36 @@ fn the_default_claim_took_and_dropped_nothing() {
     assert!(c.is_empty());
     assert_eq!(c, Claim::new(Vec::new(), Vec::new(), Consumer::Existing));
 }
+
+#[test]
+fn a_float_argument_takes_every_infinity_spelling_and_refuses_nan() {
+    use crate::args::arg_f64;
+    for s in ["inf", "+inf", "INF", "Infinity", "+InFiNiTy", " inf "] {
+        assert_eq!(arg_f64(s.as_bytes()), Some(f64::INFINITY), "{s:?}");
+    }
+    for s in ["-inf", "-INFINITY", "-Inf"] {
+        assert_eq!(arg_f64(s.as_bytes()), Some(f64::NEG_INFINITY), "{s:?}");
+    }
+    for s in ["nan", "NaN", "+nan", "infin", "infinityx", "", "0x1", "1_0"] {
+        assert_eq!(arg_f64(s.as_bytes()), None, "{s:?}");
+    }
+    assert_eq!(arg_f64(b"\xff"), None);
+    assert_eq!(arg_f64(b" -2.5e1\t"), Some(-25.0));
+}
+
+#[test]
+fn zadd_and_set_options_match_in_any_case() {
+    let mut s = Store::new();
+    assert_eq!(run(&mut s, "ZADD z nx Ch 1 a").1, b":1\r\n");
+    assert_eq!(run(&mut s, "ZADD z xX cH 2 a").1, b":1\r\n");
+    assert_eq!(run(&mut s, "ZADD z iNcR 3 a").1, b"$1\r\n5\r\n");
+    assert!(run(&mut s, "ZADD z Nx xx 1 a").1.starts_with(b"-ERR"));
+    assert_eq!(run(&mut s, "ZADD z inf b -Inf c").1, b":2\r\n");
+    assert!(run(&mut s, "ZADD z 4 d 5").1.starts_with(b"-ERR wrong number"));
+    assert_eq!(run(&mut s, "ZADD z x d").1, b"-ERR value is not a valid float\r\n");
+    assert!(run(&mut s, "ZADD z INCR 1 a 2 b").1.starts_with(b"-ERR INCR"));
+    assert_eq!(run(&mut s, "ZRANGE z 0 -1").1, b"*3\r\n$1\r\nc\r\n$1\r\na\r\n$1\r\nb\r\n");
+    assert_eq!(run(&mut s, "SET k v nX pX 100000").1, b"+OK\r\n");
+    assert_eq!(run(&mut s, "SET k v Nx").1, b"$-1\r\n");
+    assert!(run(&mut s, "SET k v bogus").1.starts_with(b"-ERR syntax"));
+}

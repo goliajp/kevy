@@ -8,7 +8,7 @@ use kevy_resp::{
 };
 use kevy_store::{SetCondition, Store};
 
-use crate::args::{arg_f64, arg_i64};
+use crate::args::{arg_f64, arg_i64, upper_verb};
 use crate::reply::{
     ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, emit_int_result, store_err, wrong_args,
 };
@@ -138,8 +138,9 @@ pub fn set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>)
     let mut expire: Option<Duration> = None;
     let mut cond = SetCondition::Always;
     let mut i = 3;
+    let mut buf = [0u8; 32];
     while i < args.len() {
-        match args[i].to_ascii_uppercase().as_slice() {
+        match upper_verb(&args[i], &mut buf) {
             // NX and XX together is a syntax error, as in Redis
             b"NX" if cond != SetCondition::IfPresent => cond = SetCondition::IfAbsent,
             b"XX" if cond != SetCondition::IfAbsent => cond = SetCondition::IfPresent,

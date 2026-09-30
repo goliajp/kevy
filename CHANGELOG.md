@@ -900,6 +900,20 @@ defect.
   slice of names, so that every row can be handed the same one. Affected
   since 5.4.0.
 
+- **`ZADD` makes no heap allocation to read its arguments.** Each call
+  copied every option token to uppercase it, copied its score to
+  lowercase it before parsing, and put a single score and member in a
+  vector of their own: three allocations and three frees per command.
+  Options are now matched on the stack, a score goes straight to the
+  float parser (which already takes every `inf` spelling), and one pair
+  stays on the stack. Counted with callgrind on one x86_64 host, a
+  pipelined `ZADD` into a growing set costs the server 6,154 instructions
+  where 7.0 before this change spent 6,755 and 6.4.0 spent 6,881. The
+  option tokens of `SET` and the legacy `GEORADIUS ... STORE` form are
+  matched the same way, and every command that takes a float (`ZINCRBY`,
+  `ZRANGEBYSCORE`, `INCRBYFLOAT`, the `GEO` commands and the rest) skips
+  the lowercase copy.
+
 ### New features
 
 - **Global indexes: one index spread over the shards by value.** A default
