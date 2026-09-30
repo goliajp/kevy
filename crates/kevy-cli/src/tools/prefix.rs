@@ -107,3 +107,16 @@ fn exit_code(tool: Shipped, done: io::Result<bool>) -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_run_succeeds_and_a_difference_or_an_io_error_fails() {
+        assert_eq!(exit_code(Shipped::Digest, Ok(true)), ExitCode::SUCCESS);
+        assert_eq!(exit_code(Shipped::Diff, Ok(false)), ExitCode::FAILURE);
+        let reset = io::Error::other("connection reset");
+        assert_eq!(exit_code(Shipped::Digest, Err(reset)), ExitCode::FAILURE);
+    }
+}

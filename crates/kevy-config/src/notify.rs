@@ -235,4 +235,29 @@ mod tests {
         assert_eq!(e.to_string(), "unknown flag char 'Z'");
         assert_eq!("".parse::<F>().ok(), Some(F::NONE));
     }
+
+    #[test]
+    fn flags_merge_clear_and_empty_as_a_set() {
+        let mut f = F::KEYSPACE;
+        f |= F::HASH | F::LIST;
+        assert_eq!(f.to_string(), "Klh");
+        f.remove(F::HASH | F::SET);
+        assert_eq!(f, F::KEYSPACE | F::LIST);
+        assert!(!f.is_empty());
+        f.remove(f);
+        assert!(f.is_empty());
+        assert_eq!(f, F::NONE);
+    }
+
+    #[test]
+    fn debug_shows_the_letters_and_display_passes_on_a_writer_failure() {
+        assert_eq!(format!("{:?}", F::KEYEVENT | F::EXPIRED), "NotificationFlags(\"Ex\")");
+        struct Refuses;
+        impl core::fmt::Write for Refuses {
+            fn write_str(&mut self, _: &str) -> core::fmt::Result {
+                Err(core::fmt::Error)
+            }
+        }
+        assert!(core::fmt::write(&mut Refuses, format_args!("{}", F::KEYSPACE)).is_err());
+    }
 }
