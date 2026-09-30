@@ -24,7 +24,7 @@ range|unique [MAXMEM <bytes>]`
   [FIELDS f…]` → `[next-cursor, rows]`。行是跨全部 shard 按 `(value, key)` 排序的；`FIELDS` 会在每一行所属 shard 上就地补上指定的 hash 字段（不需要第二次往返），并把行切换成嵌套的 `[key, value, fname, fval…]` 形态。
 - `IDX.QUERY COMPOSE AND|OR <n1> <spec1> <n2> <spec2> …`——双索引组合，**按键排序**（两个值域不同），LIMIT / CURSOR / FIELDS 尾巴一样。AND / OR 逐 shard 求解（一个键只住在一个 shard 上，所以逐 shard 的集合代数在全局也成立）。
 - `IDX.COUNT <name> RANGE|EQ …`——不物化键，直接计数。
-- **非标量 kind 用自己的词表回答 `VERIFY`。** `KIND agg` 答 `rows / bytes / excluded / groups`；`KIND text` 答 `docs / bytes / postings / tokens`；`KIND ann` 答 `vectors / bytes / tombstones / links / rebuild_recommended`。它们都**不打印** `drift` / `missing`——审计的那个问题（"这个条目所指的行还派生这个值吗"）适用于按行键的条目，而它们的条目是组、倒排项和图节点。（这些数字曾被贴着标量标签打印：一个健康的 3 文档 text 索引答过 `coerce_failures 7, duplicates 7`——那是它的 postings 与 token 数，却穿着完整性告警的名字。）
+- **非标量 kind 用自己的词表回答 `VERIFY`。** `KIND agg` 答 `rows / bytes / excluded / groups`；`KIND text` 答 `docs / bytes / postings / tokens`；`KIND ann` 答 `vectors / bytes / tombstones / links / rebuild_recommended`。它们都**不打印** `drift` / `missing`——审计的那个问题（「这个条目所指的行还派生这个值吗」）适用于按行键的条目，而它们的条目是组、倒排项和图节点。（这些数字曾被贴着标量标签打印：一个健康的 3 文档 text 索引答过 `coerce_failures 7, duplicates 7`——那是它的 postings 与 token 数，却穿着完整性告警的名字。）
 - **这对聚合的计数值意味着什么**：运行中的累计值**在运行时从不与键空间重算**，所以它与现实是否一致，靠的是每一条写路径都维护了它——而这件事 `IDX.VERIFY` 对这个 kind **证伪不了**。替它做这件事的是测试：`index_write_path_coverage` 在每个动词之后把组的计数与真实存活的行对账。
 - `IDX.VERIFY <name>`——汇总统计：entries、bytes、coerce_failures、duplicates，外加**审计的两个方向**：`drift`（条目所指的行已经没了、不再能强制转换、或转换成了另一个值）在 `checked` 个条目上，以及 `missing`（前缀下能派生出值、却没有条目的行）。健康的索引上两者都应为零；**`missing` 是走索引自己的条目那一趟看不见的方向**。`kevy-cli --kevy doctor` 把这句话变成一个对所有已声明表的退出码，于是「应当为零」可以是一条 cron，而不是某个人记得去查的事（[table-migration.md](table-migration.md#8-让-verify-成为运维的一部分而不是迁移的一步)）。
 - `IDX.LIST`——目录，加上每个索引的状态 / 条目数 / 字节数。
@@ -53,11 +53,11 @@ range|unique [MAXMEM <bytes>]`
 
 **索引是一份稀缺的全局预算，而大多数访问路径根本不花它。** 父子导航属于链接键与 zset——`SMEMBERS order:1001:items` 不占任何索引槽，你自己维护的有序 zset 索引也不占（[cookbook §2](cookbook.md#2-一对多多对多)）。索引槽只花在链接键表达不了的东西上：
 
-- **全局值范围**——"所有超过一万的发票"，跨全部行
+- **全局值范围**——「所有超过一万的发票」，跨全部行
 - **文本检索**——`KIND text`
 - **聚合**——`KIND agg`，写时 GROUP BY
 
-一个按"每张表一条"读起来要 58 条索引的 schema，按"每种全局查询形状一条"读通常不到 20 条。如果你在逼近 64，该问的问题是：**它们里面有几条其实是披着索引外衣的父子导航。**
+一个按「每张表一条」读起来要 58 条索引的 schema，按「每种全局查询形状一条」读通常不到 20 条。如果你在逼近 64，该问的问题是：**它们里面有几条其实是披着索引外衣的父子导航。**
 
 ## 全局索引（`PARTITION global`）
 
