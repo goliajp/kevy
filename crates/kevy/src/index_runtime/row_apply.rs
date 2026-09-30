@@ -249,7 +249,7 @@ pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: us
         return;
     }
     if done {
-        // the walk filled leaves in hash order, short of full: pack them
+        // the walk filled leaves in hash order, about 69% full: pack them
         si.seg.repack();
         si.build = BuildState::Ready;
         if let Some(g) = &mut si.global {

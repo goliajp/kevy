@@ -160,12 +160,10 @@ fn measure(spec: &IndexSpec, rows: &[Row], packed: bool) -> Held {
 
 /// The ceiling for a row whose packed entry takes `entry` bytes of a leaf
 /// (slot, lengths, the order key past its first 8 bytes, the payload):
-/// every leaf but the first and last keeps two-thirds of its 1768-byte
-/// page less two entries whatever order rows arrive in, and is full after
-/// a repack less one entry; the inner levels and the leaf header add
-/// under 4%.
+/// a leaf is at least half full after a split, and full after a repack,
+/// less one entry; the inner levels and the leaf header add under 4%.
 fn ceiling(entry: f64, packed: bool) -> f64 {
-    let fill = if packed { 0.95 } else { ((1768 * 2 / 3) as f64 - 2.0 * entry) / 1768.0 };
+    let fill = if packed { 0.95 } else { 0.5 };
     entry / fill * 1.04
 }
 

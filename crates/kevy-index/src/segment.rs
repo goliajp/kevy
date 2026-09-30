@@ -95,7 +95,7 @@ impl Default for Segment {
 }
 
 impl Segment {
-    pub(crate) fn with_codec(codec: Codec) -> Segment {
+    fn with_codec(codec: Codec) -> Segment {
         Segment {
             tree: Tree::new(shape_of(&codec)),
             codec,
@@ -411,7 +411,7 @@ impl Segment {
     }
 
     /// Repack every entry into full leaves. Entries written in random
-    /// order leave leaves 0.85–0.9 full; a build ends with this, so what
+    /// order leave leaves about 69% full; a build ends with this, so what
     /// stays resident is the packed form.
     ///
     /// ```

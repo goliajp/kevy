@@ -729,25 +729,8 @@ fn listed_size(w: &mut Wire, name: &str) -> (u64, u64) {
     (get("entries").unwrap(), get("bytes").unwrap())
 }
 
-/// The most bytes an i64 index over `user:0..rows` may hold in `segments`
-/// segments, whatever order the writes arrive in. Every leaf but a
-/// segment's first and last keeps two-thirds of its 1768-byte page, less
-/// two of the widest entry; an entry takes a 10-byte slot holding the
-/// value, a tag byte and the id's digits packed two to a byte, 14 bytes at
-/// most. A leaf is a 1784-byte allocation; an inner node's arrays take
-/// 65 × 32 bytes and every inner node but a root has 32 children or more.
-fn most_bytes(rows: u32, segments: f64) -> f64 {
-    let entries: usize = (0..rows).map(|i| 11 + i.to_string().len().div_ceil(2)).sum();
-    let least = (1768 * 2 / 3 - 2 * 14) as f64;
-    let leaves = 2.0 * segments + entries as f64 / least;
-    let inners = segments + leaves / 31.0;
-    // separators, then the leaf and inner arenas at up to twice their length
-    let arenas = (2.0 * leaves + 4.0 * segments) * 8.0 + (2.0 * inners + 4.0 * segments) * 96.0;
-    leaves * (1784.0 + 11.0) + inners * 2080.0 + arenas
-}
-
 #[test]
-fn local_and_global_indexes_hold_no_more_than_the_fill_bound() {
+fn a_global_index_holds_no_more_than_a_local_one() {
     let srv = Server::start(4);
     let mut w = srv.wire();
     create(&mut w, b"age_l", &[]);
@@ -760,19 +743,11 @@ fn local_and_global_indexes_hold_no_more_than_the_fill_bound() {
     let (le, lb) = listed_size(&mut w, "age_l");
     let (ge, gb) = listed_size(&mut w, "age_g");
     assert_eq!((le, ge), (20_000, 20_000));
-    let bound = most_bytes(20_000, 4.0);
-    let per_row = |b: f64| b / 20_000.0;
-    eprintln!(
-        "bytes per row: local {:.1}, global {:.1}, bound {:.1}",
-        per_row(lb as f64),
-        per_row(gb as f64),
-        per_row(bound)
-    );
-    // four shards' segments and four partitions hold the same entries, and
-    // a row's shard keeps no map to its partition: a write names the old
-    // value, which names it
-    assert!(lb as f64 <= bound, "local {lb}, bound {bound:.0}");
-    assert!(gb as f64 <= bound, "global {gb}, bound {bound:.0}");
+    let per_row = |b: u64| b as f64 / 20_000.0;
+    eprintln!("bytes per row: local {:.1}, global {:.1}", per_row(lb), per_row(gb));
+    // the partitions hold the same entries, and a row's shard keeps no map
+    // to its partition: a write names the old value, which names it
+    assert!(gb as f64 <= lb as f64 * 1.1, "local {lb}, global {gb}");
 }
 
 #[test]

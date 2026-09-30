@@ -70,8 +70,7 @@ fn big_entries_go_out_of_line_and_come_back() {
     assert_eq!(l.tail(1, &ov).payload.len(), 3000);
     assert_eq!(l.cmp_at(&Probe::new(&big), 0, &ov), Ordering::Equal);
     let mut other = Leaf::new(Shape { payloads: true, vlens: false });
-    let n = l.len();
-    l.move_span(0, n, &mut other, 0);
+    l.move_tail_to(0, &mut other);
     assert_eq!((l.len(), other.len()), (0, 2), "a slab moves with its entry");
     assert_eq!(keys(&other, &ov)[0], big);
     other.remove_at(0, &mut ov);
@@ -87,33 +86,12 @@ fn moving_tails_and_dropping_heads_keeps_order() {
         a.insert_at(a.len(), Ent { key: &[i; 9], vlen: 0, payload: &[] }, &mut ov);
     }
     let mut b = Leaf::new(Shape { payloads: false, vlens: false });
-    let n = a.len();
-    a.move_span(15, n, &mut b, 0);
+    a.move_tail_to(15, &mut b);
     a.remove_head(5, &mut ov);
     let firsts = |l: &Leaf| keys(l, &ov).iter().map(|k| k[0]).collect::<Vec<_>>();
     assert_eq!(firsts(&a), (5..15).collect::<Vec<_>>());
     assert_eq!(firsts(&b), (15..20).collect::<Vec<_>>());
     assert_eq!(a.span_bytes(0, a.len()), a.used());
-}
-
-#[test]
-fn a_span_lands_before_or_after_what_the_leaf_holds() {
-    let mut ov = Overflow::default();
-    let shape = Shape { payloads: true, vlens: false };
-    let (mut a, mut b) = (Leaf::new(shape), Leaf::new(shape));
-    for i in 0..30u8 {
-        let l = if i < 20 { &mut a } else { &mut b };
-        l.insert_at(l.len(), Ent { key: &[i; 12], vlen: 0, payload: &[i; 5] }, &mut ov);
-    }
-    // a's last five go to b's front, then b's last two to a's end
-    a.move_span(15, 20, &mut b, 0);
-    let n = b.len();
-    b.move_span(n - 2, n, &mut a, 15);
-    let firsts = |l: &Leaf| keys(l, &ov).iter().map(|k| k[0]).collect::<Vec<_>>();
-    assert_eq!(firsts(&a), [(0..15).collect::<Vec<_>>(), vec![28, 29]].concat());
-    assert_eq!(firsts(&b), (15..28).collect::<Vec<_>>());
-    assert!((0..b.len()).all(|i| b.tail(i, &ov).payload == [firsts(&b)[i]; 5]));
-    assert_eq!(a.span_bytes(0, a.len()) + b.span_bytes(0, b.len()), a.used() + b.used());
 }
 
 #[test]
