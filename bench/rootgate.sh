@@ -61,7 +61,7 @@ if [ "$n_tracked" -lt 100 ]; then
 fi
 # A file name matches whole: a test fixture carrying a store's files under
 # an inert suffix (`aof-0.aof.in`) is source, the store never writes it.
-tracked=$(git ls-files | grep -E '(^|/)((aof-[0-9]+\.aof|dump-[0-9]+\.rdb|shards\.meta|feed-[0-9]+\.(gen|meta)|index-catalog\.meta)$|tier/[0-9]+/|segs-[0-9]+/)' || true)
+tracked=$(git ls-files | grep -E '(^|/)((aof-[0-9]+\.aof|dump-[0-9]+\.rdb|shards\.meta|feed-[0-9]+\.(gen|meta)|index-catalog\.meta|LOCK)$|tier/[0-9]+/|segs-[0-9]+/)' || true)
 if [ -n "$tracked" ]; then
     echo "rootgate: FAIL — runtime artifacts are tracked in git:"
     echo "$tracked" | sed 's/^/  /'
