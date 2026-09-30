@@ -6,8 +6,8 @@
 //! node's separator `j` sits between children `j` and `j + 1`: every
 //! entry under child `j` is below it and every entry under child `j + 1`
 //! is at or above it. Separators are never tightened after a delete — a
-//! stale one still separates — so the only writes to them are splits,
-//! merges and the neighbour placement in [`Tree::insert`].
+//! stale one still separates — so the only writes to them are splits
+//! and the moves between neighbouring leaves that keep leaves filled.
 
 use std::cmp::Ordering;
 
@@ -83,7 +83,7 @@ const MAX_HEIGHT: usize = 16;
 
 /// The inner nodes a descent went through and the child taken in each,
 /// kept on the stack.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Path {
     items: [(u32, usize); MAX_HEIGHT],
     len: usize,
@@ -110,10 +110,6 @@ impl Path {
 
     pub(crate) fn last(&self) -> Option<&(u32, usize)> {
         self.len.checked_sub(1).map(|i| &self.items[i])
-    }
-
-    pub(crate) fn last_mut(&mut self) -> Option<&mut (u32, usize)> {
-        self.len.checked_sub(1).map(|i| &mut self.items[i])
     }
 
     pub(crate) fn iter(&self) -> std::slice::Iter<'_, (u32, usize)> {
@@ -430,9 +426,19 @@ impl Tree {
 #[path = "seg_tree_write.rs"]
 mod write;
 
+#[path = "seg_tree_balance.rs"]
+mod balance;
+
+#[path = "seg_tree_deal.rs"]
+mod deal;
+
 #[path = "seg_tree_bulk.rs"]
 pub(crate) mod bulk;
 
 #[cfg(test)]
 #[path = "seg_tree_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "seg_fill_tests.rs"]
+mod fill_tests;

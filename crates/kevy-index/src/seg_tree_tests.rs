@@ -131,15 +131,20 @@ fn key_for(r: &mut Rng, shape: u64) -> Vec<u8> {
 
 fn run_model(seed: u64, payloads: bool, ops: usize) {
     let mut r = Rng(seed);
-    let mut t = Tree::new(Shape { payloads, vlens: false });
+    let form = Shape { payloads, vlens: false };
+    let mut t = Tree::new(form);
     let mut m: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    let mut widest = 0;
     for step in 0..ops {
         let shape = r.below(10).min(2).max(r.below(2));
         let key = key_for(&mut r, shape);
         let payload: Vec<u8> =
             if payloads { vec![step as u8; r.below(40) as usize] } else { Vec::new() };
         match r.below(10) {
-            0..=5 => assert_eq!(t.insert(&key, &payload), m.insert(key, payload).is_none()),
+            0..=5 => {
+                widest = widest.max(super::fill_tests::span(form, &key, &payload));
+                assert_eq!(t.insert(&key, &payload), m.insert(key, payload).is_none());
+            }
             6..=8 => assert_eq!(t.remove(&key), m.remove(&key).is_some()),
             _ => {
                 let mut cut = Vec::new();
@@ -155,6 +160,7 @@ fn run_model(seed: u64, payloads: bool, ops: usize) {
             let want: Vec<(Vec<u8>, Vec<u8>)> =
                 m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             assert_eq!(got, want, "step {step}");
+            super::fill_tests::check_fill(&t, widest);
             ranks_agree(&t, &m, &mut r);
         }
     }
@@ -202,7 +208,7 @@ fn ascending_and_descending_runs_pack_leaves_full() {
 }
 
 #[test]
-fn random_inserts_fill_about_ln2_and_repack_fills_them() {
+fn random_inserts_fill_leaves_past_two_thirds_and_repack_fills_them() {
     let mut r = Rng(7);
     let mut t = Tree::new(Shape { payloads: false, vlens: false });
     for _ in 0..50_000 {
@@ -210,7 +216,7 @@ fn random_inserts_fill_about_ln2_and_repack_fills_them() {
     }
     let fill = |t: &Tree| t.len as f64 * 15.0 / (t.live_leaves() * Leaf::capacity()) as f64;
     let before = fill(&t);
-    assert!((0.6..0.8).contains(&before), "random fill {before:.3}");
+    assert!(before > 0.8, "random fill {before:.3}");
     t.repack();
     check(&t);
     assert!(fill(&t) > 0.95, "repacked fill {:.3}", fill(&t));

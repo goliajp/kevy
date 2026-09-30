@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **An index's memory no longer depends on the order its writes arrive
+  in.** A full leaf split in two and nothing refilled the halves, so
+  leaves written in random order sat 0.6–0.7 full and leaves behind a
+  run of ascending writes half full, and the same rows cost from 14.5 to
+  23.8 bytes each depending on the order they came in; a global index
+  fed by several shards at once varied run to run. A full leaf now hands
+  entries to a neighbour with room, and only two full leaves split, into
+  three; a leaf that thins below two-thirds on a delete takes entries
+  from its neighbours or merges with them. Every leaf but a segment's
+  first and last now holds two-thirds of its page less two entries, so
+  an index's size has a bound set by its entries alone. Over 1.25
+  million random writes an `i64` index went from 21.6 to 16.8 bytes a row
+  and a `str` index from 29.1 to 22.8; after deleting half the rows at
+  random, 39.1 to 20.6. Writes pay for it: inserts in random order were
+  13% slower at the median on a loaded box, deletes 18%.
+
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. Since
