@@ -40,15 +40,12 @@ impl Heap {
         // Claimed-word bits count as held span-side (they pin pages
         // exactly as live slots do), but no caller holds them: they are
         // resident, allocatable bytes, which is `span_free`.
-        let mut held = 0u64;
-        for c in 0..NCLASSES {
-            held += u64::from(self.class_live[c]) * class::size_of(c) as u64;
-        }
+        let held = self.held_bytes();
         let assigned = t.assigned_spans();
         Stats {
             mapped: t.segments * SEGMENT_BYTES as u64,
             live: self.live_bytes - parked_live,
-            rounding: self.rounding_bytes - (parked - parked_live),
+            rounding: self.rounding_total(held) - (parked - parked_live),
             cache: parked,
             span_free: t.touched - held - t.returned + self.claims_unused_bytes(),
             returned: t.returned_spans * SPAN + t.returned,
@@ -60,14 +57,34 @@ impl Heap {
         }
     }
 
+    /// Slot bytes of every class this heap has handed out or claimed.
+    fn held_bytes(&self) -> u64 {
+        let mut held = 0u64;
+        for c in 0..NCLASSES {
+            held += u64::from(self.class_live[c]) * class::size_of(c) as u64;
+        }
+        held
+    }
+
+    /// Slot bytes beyond what the live allocations asked for, parked
+    /// foreign frees included.
+    ///
+    /// Derived rather than kept as a running total: every path that moves
+    /// it moves `class_live`, a claim's unused bits or `live_bytes` by the
+    /// same amount, so a counter would only repeat that arithmetic on
+    /// every allocation and free.
+    fn rounding_total(&self, held: u64) -> u64 {
+        held - self.claims_unused_bytes() - self.live_bytes
+    }
+
     /// The definition [`Self::snapshot`] is kept equal to: every span of
     /// every segment classified from its metadata, and every foreign
     /// list walked node by node.
     #[cfg(test)]
     pub(crate) fn snapshot_walked(&self) -> Stats {
         use crate::segment::{FIRST_DATA_SPAN, SPANS_PER_SEGMENT};
-        let mut st =
-            Stats { live: self.live_bytes, rounding: self.rounding_bytes, ..Stats::default() };
+        let rounding = self.rounding_total(self.held_bytes());
+        let mut st = Stats { live: self.live_bytes, rounding, ..Stats::default() };
         let mut seg = self.segments;
         while !seg.is_null() {
             // SAFETY: live header from our own list.
