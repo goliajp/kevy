@@ -90,6 +90,30 @@ fn an_existing_ring_reopens_as_it_was_left() {
     assert!(StageRing::open_existing(&temp_file("stage-none")).unwrap().is_none());
 }
 
+#[test]
+fn a_file_the_size_of_a_ring_without_its_magic_is_not_one() {
+    let path = temp_file("stage-foreign");
+    std::fs::write(&path, vec![0xa5u8; HEADER + CAP as usize]).unwrap();
+    assert!(StageRing::open_existing(&path).unwrap().is_none());
+}
+
+#[test]
+fn a_directory_is_neither_opened_nor_created_as_a_ring() {
+    let dir = kevy_tmpdir::TmpDir::new("stage-dir");
+    assert!(StageRing::open_existing(dir.path()).is_err(), "only a missing file is no ring");
+    assert!(StageRing::create(dir.path(), CAP, 1, 9).is_err());
+}
+
+#[test]
+fn a_record_is_found_only_whole_before_the_end_it_is_asked_about() {
+    let rec = record(b"a record of some length");
+    let ring = ring_with("stage-record-at", std::slice::from_ref(&rec));
+    let len = rec.len() as u64;
+    assert_eq!(ring.record_at(0, len), Some((0, len)));
+    assert_eq!(ring.record_at(0, 4), None, "not even its header before the end");
+    assert_eq!(ring.record_at(0, len - 1), None, "its header but not all of it");
+}
+
 fn ring_with(name: &str, recs: &[Vec<u8>]) -> StageRing {
     let mut ring = StageRing::create(&temp_file(name), CAP, 5, 100).unwrap();
     for r in recs {
@@ -129,6 +153,10 @@ fn recovery_discards_a_ring_that_cannot_prove_its_place() {
     let discarded = |r: Recovery| matches!(r, Recovery::Discard(_));
     assert!(discarded(recover(&ring, head, 6, 100, &[])), "another log");
     assert!(discarded(recover(&ring, head, 5, 99, &[])), "a shorter log");
+    assert_eq!(
+        recover(&ring, head, 5, 110, &[]),
+        Recovery::Discard("the log's tail was not handed over whole")
+    );
     let other = record(b"z"); // as long as the first record, different bytes
     assert!(discarded(recover(&ring, head, 5, 100 + other.len() as u64, &other)), "a foreign tail");
     let long = [recs.concat(), record(b"more")].concat();

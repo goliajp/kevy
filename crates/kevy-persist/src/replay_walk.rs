@@ -273,3 +273,21 @@ pub(crate) fn read_fully<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize
     }
     Ok(n)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A read that fails for a reason other than the end fails the walk:
+    /// on the header itself, or while checking that zeros run to the end.
+    #[test]
+    fn a_failing_read_is_an_error_not_an_end() {
+        let dir = kevy_tmpdir::TmpDir::new("walk-read-dir");
+        let not_a_file = || std::fs::File::open(dir.path()).unwrap();
+        let mut w = V2Walk::at(0);
+        assert!(next_header(&mut not_a_file(), &mut w).is_err());
+        let mut zeros_then_fail = (&[0u8; 8][..]).chain(not_a_file());
+        assert!(next_header(&mut zeros_then_fail, &mut w).is_err());
+        assert_eq!(w.zero_tail, 0, "an unread tail is not counted as zeros");
+    }
+}

@@ -222,4 +222,13 @@ mod tests {
         assert_eq!(b0.offset, 10);
         let _ = fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn a_generation_that_cannot_be_persisted_fails_the_boot() {
+        let d = tmp();
+        let missing = d.join("gone");
+        let err = boot_position(&missing, 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        let _ = fs::remove_dir_all(&d);
+    }
 }

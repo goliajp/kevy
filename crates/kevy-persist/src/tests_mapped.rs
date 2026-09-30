@@ -106,7 +106,8 @@ fn switching_to_always_goes_back_to_write_with_no_hole() {
 fn a_log_that_stages_or_speaks_v1_does_not_map() {
     let path = temp_file("mapped-staged");
     let mut log = Aof::open(&path, Fsync::EverySec).unwrap();
-    log.open_stage(&temp_file("mapped-staged-ring"), 64 * 1024, |_| {}).unwrap();
+    let ring = temp_file("mapped-staged-ring");
+    log.open_stage(&ring, 64 * 1024, crate::tests::ignore_owed).unwrap();
     assert!(!log.map_appends().unwrap());
     let v1 = temp_file("mapped-v1");
     std::fs::write(&v1, b"KEVYAOF1\n").unwrap();
