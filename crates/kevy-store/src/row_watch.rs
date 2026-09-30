@@ -287,7 +287,11 @@ impl<'a> RowChange<'a> {
     /// ```
     pub fn field(&self, rule: usize, field: usize) -> Option<&'a [u8]> {
         let it = self.item();
-        if it.was != Was::Hash || rule >= 64 || it.mask & (1 << rule) == 0 {
+        if it.was != Was::Hash
+            || rule >= 64
+            || it.mask & (1 << rule) == 0
+            || field >= self.c.widths[rule] as usize
+        {
             return None;
         }
         let before: u32 =

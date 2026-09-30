@@ -258,8 +258,8 @@ pub fn sort_groups(all: &mut [(Vec<u8>, GroupStats)], by: AggBy) {
             .then_with(|| a.0.cmp(&b.0))
         }),
         AggBy::Max => all.sort_by(|a, b| {
-            match (&b.1.max, &a.1.max) {
-                (Some(x), Some(y)) => x.cmp(y),
+            match (&a.1.max, &b.1.max) {
+                (Some(x), Some(y)) => y.cmp(x),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,

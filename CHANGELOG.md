@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **`COPY … REPLACE` and a cross-shard `RENAME` over an existing key
+  replay and replicate to the value the client saw.** The server records
+  the placed value as the commands that rebuild it, and those commands
+  add to a key rather than replace it. So a restart from the AOF, and
+  every replica, merged the value into what the destination held (a hash
+  kept its old fields, a list or set its old members), or kept the old
+  value when its type differed and answered `WRONGTYPE` from then on.
+  This has affected `COPY` since 6.0.0, on one shard or across two, and
+  a `RENAME` whose two keys live on different shards since 5.0.0. A
+  `DEL` of the destination is now recorded before the value. An AOF
+  rewrite and a snapshot were not affected: both write the value as it
+  is in memory.
+
+- **Embedded `COPY` copies a key of any type, as the server does.** Since
+  2.0.13 `Store::copy` and the embedded `COPY` verb read the source as a
+  string, so a hash, list, set, sorted set or stream source answered
+  `WRONGTYPE` and was not copied. The copy now clones the value and its
+  remaining TTL. With an AOF, a replica source or a change feed, it is
+  recorded as the commands that rebuild the value, after a `DEL` when it
+  replaced a key, so a reopen does not merge the copy into the old value.
+
+- **`kevy_index::sort_groups` ranks a group without a maximum last under
+  `AggBy::Max`.** Since 3.8.0 it put such groups first, while
+  `AggBy::Min` put a group without a minimum last and
+  `GroupStats::rank_score` scores a missing extreme lowest. Only a
+  caller of the `kevy-index` crate that ranks empty `GroupStats` saw
+  this: `IDX.QUERY … GROUPS` on the server and `Store::idx_groups` rank
+  only groups that hold a row, and every such group has a maximum.
+
 - **A materialized view holds every row its indexes hold.** Since 3.0.0
   a shard built a materialized view on its next tick even while an index
   the view reads was still backfilling: the view was built from the rows
