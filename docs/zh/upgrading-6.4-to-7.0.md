@@ -35,6 +35,7 @@ kevy-embedded = "7.0.0"
 | 把 kevy 的 crate 当 Rust 库用 | 大多数签名变了，编译器会逐处指出 | 13 |
 | 用 Go 模块，或者匹配绑定层只读错误的文本 | import `/v7`；错误文本末尾补上了句点 | 14 |
 | 用流命令、`5-` 这样的 id，或者对快要过期的键发 `EXPIRE` | 回复改成和 valkey、Redis 一致；超时的阻塞 `XREAD` 回复 `*-1` | 15 |
+| 预加载了别的分配器、设了 `MALLOC_*` 变量，或者读 `INFO modules` | 服务端改用 kevy-alloc；要系统分配器就用 `--no-default-features` 构建 | 17 |
 | 想让一次索引读取只碰更少的 shard | 把它声明成全局索引 | [索引](indexes.md#全局索引partition-global) |
 
 ---
@@ -298,6 +299,23 @@ let dropped: bool = store.idx_drop(b"by_age")?;     // a closed store or a repli
 - 嵌入式存储里：带 TTL 的键，过了截止时间后最多还能读到一个清理周期（1.11.0 起）；对字符串以外的类型做 `COPY`，回复 `WRONGTYPE`（2.0.13 起）；`SET … NX EX` 分两次加锁设置值和 TTL，两次之间崩溃会留下一个永不过期的键（4.0.0 起）；嵌入式副本会丢掉所有流和 geo 写入，而且（多于一个 shard 时）大多数键写进了读取时不会去找的 shard（1.22.0 起）。
 
 [changelog](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) 里有每一项的完整说明。
+
+## 17. 服务端改用 kevy-alloc
+
+服务端二进制现在通过 kevy 自己的分配器 `kevy-alloc` 分配内存，不再用系统分配器（Linux 上是 glibc malloc）。它把空闲的页还给操作系统，shard tick 上的整理过程把降级和删除留下的空洞压紧；它做什么、实测结果如何，见 [alloc.md](alloc.md)。不需要任何配置。从 6.4 升上来会看到这些变化：
+
+- `INFO modules` 显示 `module:name=alloc,impl=kevy-alloc`（6.4 是 `impl=system`）。
+- `INFO allocator` 有内容了：`alloc_mapped`、`alloc_live`，以及每个映射字节所属的其他各项。6.4 的发布构建里没有这一节。
+- 分层存储服务端的内存守卫读这些数字，从不 trim：`heap_trims_total` 一直是 0。
+- `LD_PRELOAD` 进来的分配器、glibc 的 `MALLOC_*` 环境变量、挂钩 malloc 的 profiler，对服务端的分配都不再起作用。
+
+要继续用系统分配器，用 `--no-default-features` 构建（`kevy-alloc` 是 `kevy` crate 唯一的默认 feature，其他什么都不变）：
+
+```sh
+cargo install kevy --version 7.0.0 --no-default-features
+```
+
+发布页的二进制和容器镜像都是默认构建，所以用系统分配器的服务端要自己从源码构建。
 
 ---
 

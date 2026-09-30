@@ -89,7 +89,7 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 **Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
 
-**The opt-in allocator.** A build with `--features kevy-alloc` swaps glibc malloc for kevy's own span allocator: ~10 % smaller steady-state RSS under churn, at a throughput cost only on saturated collection-write shards. When memory capacity is the binding constraint, it is worth the build; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measured trade.
+**The allocator.** The server runs on kevy's own span allocator, `kevy-alloc`, by default: one heap per shard, free 4 KiB pages handed back to the OS, and a compaction pass on the shard tick that packs the holes demotion and deletes leave, which is what holds a tiered server's RSS at its budget × 1.05. Against glibc it costs as many instructions per write command or fewer, and `LPUSH` and `ZADD` run about 11 % faster. `INFO modules` shows `module:name=alloc,impl=kevy-alloc`. Build with `--no-default-features` for the system allocator — for tools that hook malloc, or on a system whose pages are larger than 4 KiB, where it cannot return pages; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measurements.
 
 ### Network
 

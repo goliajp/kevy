@@ -12,11 +12,9 @@ use kevy_config::{CliOverrides, Config};
 
 /// Route every allocation in the process through `kevy-alloc`.
 ///
-/// Behind a feature and off by default. An allocator has no run-time
-/// switch — whatever it costs, it costs on every `SET`, `GET` and
-/// published message — so the decision to build with it belongs to
-/// whoever builds, and the measurement that justifies it is the
-/// two builds side by side, `bench/perfgate.sh compare HEAD HEAD+kevy-alloc`.
+/// On by default (the `kevy-alloc` feature). An allocator has no run-time
+/// switch, so a server on the system allocator is a separate build:
+/// `--no-default-features`.
 #[cfg(feature = "kevy-alloc")]
 #[global_allocator]
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;

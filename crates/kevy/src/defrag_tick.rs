@@ -57,6 +57,13 @@ pub fn kevy_alloc_is_global() {
     ACTIVE.store(true, Relaxed);
 }
 
+/// Whether kevy-alloc is this process's allocator. The feature only links
+/// it: a program using this library under its own allocator gets `false`
+/// here in a build that has the feature on.
+pub(crate) fn active() -> bool {
+    cfg!(feature = "kevy-alloc") && ACTIVE.load(Relaxed)
+}
+
 /// Give a shard's store the allocator's hint, when there is one to give.
 pub(crate) fn install(store: &mut Store) {
     #[cfg(feature = "kevy-alloc")]

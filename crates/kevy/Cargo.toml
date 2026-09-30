@@ -38,11 +38,14 @@ name = "tidy_steps"
 required-features = ["harness-repack-trace"]
 
 [features]
-default = []
-# Route the whole process through kevy-alloc (v5 experiment). Off by
-# default: the allocator is under every path with no way to disable it
-# at run time, so turning it on is a deliberate act and the A/B that
-# justifies it is `bench/perfgate.sh compare HEAD HEAD+kevy-alloc`.
+default = ["kevy-alloc"]
+# The server binary's allocator: kevy-alloc, installed as the global
+# allocator in main.rs, with the shard tick handing back empty pages and
+# packing sparse spans. Only the binary installs it; a program linking
+# this library keeps its own allocator, and the reclaim and defrag ticks
+# stay idle until `kevy_alloc_is_global()` says otherwise. An allocator
+# has no run-time switch: `--no-default-features` builds the server on
+# the system allocator (the only default feature is this one).
 kevy-alloc = ["dep:kevy-alloc"]
 # Two builds for bench/repack-tail.sh, off in every shipped build.
 # `harness-repack-off` leaves the index repack out of the shard tick, so
