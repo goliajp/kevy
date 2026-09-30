@@ -115,7 +115,7 @@ their language registries:
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
 pip install kevy                                 # Python
 dotnet add package kevy                          # C#
-go get github.com/goliajp/kevy-go/v6             # Go
+go get github.com/goliajp/kevy-go/v7             # Go
 flutter pub add flutter_kevy                     # Flutter
 npx expo install expo-kevy                       # React Native (Expo)
 npm i react-native-kevy-nitro                    # React Native (Nitro)
@@ -123,7 +123,7 @@ npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
 <dependency>                                     <!-- Java / Kotlin -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 

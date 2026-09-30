@@ -118,7 +118,7 @@ Flutter／React Native／Electronの公式パッケージは [`bindings/`](bindi
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
 pip install kevy                                 # Python
 dotnet add package kevy                          # C#
-go get github.com/goliajp/kevy-go/v6             # Go
+go get github.com/goliajp/kevy-go/v7             # Go
 flutter pub add flutter_kevy                     # Flutter
 npx expo install expo-kevy                       # React Native (Expo)
 npm i react-native-kevy-nitro                    # React Native (Nitro)
