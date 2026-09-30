@@ -320,6 +320,12 @@ check XAUTOCLAIM xa ga c2 0 0-0 COUNT 100 JUSTID
 check XAUTOCLAIM xa ga c2 0 0-0 COUNT 2 JUSTID
 check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 1 JUSTID
 check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 2 JUSTID
+# the pending summary lists consumers by name in byte order, not in the
+# order they first appear in the pending list (bob holds the oldest entry)
+for i in 1 2 3 4 5; do check XADD xo "$i-0" f v; done
+check XGROUP CREATE xo g 0
+for c in bob alice zed bob Bob; do check XREADGROUP GROUP g "$c" COUNT 1 STREAMS xo ">"; done
+check XPENDING xo g
 
 # --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
 #     too on a line, it's float formatting in the references, not a kevy gap) ---

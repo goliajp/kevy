@@ -13,7 +13,8 @@ is unchanged. What changes:
   `XAUTOCLAIM`, `XINFO`, …) and the geo commands (`GEOADD`, `GEOSEARCH`,
   `GEODIST`, …). A read with `BLOCK` answers `ERR the embedded engine cannot
   block; call without BLOCK`: a tab has one thread, and parking it would
-  freeze the page. The module is 602 KB gzipped, up from 539 KB without them.
+  freeze the page. The module is 619 KB gzipped, up from 539 KB before
+  streams, geo and the catalog replay.
 - **Writes through `cmd` persist.** Since 4.0.0 they never reached the log,
   and were lost at the next `open()` unless a compaction had run. They now
   reach it as the frames a native AOF would hold (an `XADD *` with the id it
