@@ -120,6 +120,8 @@ fn a_kept_snapshot_is_dropped_or_put_back_by_what_the_log_says() {
     save_snapshot(&store(&["new"]), &snap).unwrap();
     assert!(settle_snapshot(&snap, None).unwrap());
     assert!(!prev.exists());
+    // a log path with no log behind it is the same as no log
+    assert!(settle_snapshot(&snap, Some(&d.join("no-log.aof"))).unwrap());
     // no log, no snapshot: the kept one goes back
     std::fs::rename(&snap, &prev).unwrap();
     assert!(settle_snapshot(&snap, None).unwrap());
@@ -171,10 +173,16 @@ fn a_snapshot_that_cannot_be_read_under_a_log_naming_one_is_an_error() {
 #[test]
 fn a_reshard_refuses_a_log_whose_snapshot_is_gone() {
     let d = dir("fail-reshard");
-    log_of(&crate::layout::aof_path(&d, 0), &[base_frame(42)]);
+    // shard 0 is whole and replays; shard 1's log names a snapshot that is gone
+    let rpush = Argv::from(vec![b"RPUSH".to_vec(), b"l".to_vec(), b"a".to_vec()]);
+    log_of(&crate::layout::aof_path(&d, 0), &[rpush]);
+    log_of(&crate::layout::aof_path(&d, 1), &[base_frame(42)]);
     let mut temp = Store::new();
     let lay = crate::reshard::StdLayout;
-    assert!(crate::reshard::merge_sources(&d, 1, &lay, &mut temp, |_, _| {}).is_err());
+    let mut replayed = 0;
+    let merged = crate::reshard::merge_sources(&d, 2, &lay, &mut temp, |_, _| replayed += 1);
+    assert!(merged.is_err());
+    assert_eq!(replayed, 1, "shard 0 was read before shard 1 refused");
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -320,10 +328,8 @@ fn an_undo_that_fails_says_so() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_snapshot_that_cannot_be_renamed_into_place_puts_the_previous_back() {
+    // its own mount on every Linux host
     let other = Path::new("/dev/shm");
-    if !other.is_dir() {
-        return;
-    }
     let (d, snap, log, mut aof, s) = committed("fail-exdev");
     let r = aof.begin_view_rewrite().unwrap();
     let away = other.join(format!("kevy-exdev-{}.rdb", std::process::id()));
