@@ -189,6 +189,9 @@ def main():
     meta = out / "meta.txt"
     if meta.exists():
         print(meta.read_text().strip())
+        if "Darwin" in meta.read_text():
+            print("note: macOS has no per-thread getrusage, so fault and switch counts are the whole")
+            print("process's; the 'lost the CPU' class there includes other threads' switches")
         print()
     runs = []
     client_section(out, runs)

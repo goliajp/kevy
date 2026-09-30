@@ -53,10 +53,12 @@
 #   REPACK_IDLE_MIN=80        refuse unless the box is this % idle (Linux)
 #   REPACK_BUILD_ONLY=0       1: build the binaries and stop
 #
-# Runtime at the defaults on an 8-core box: about 13 runs of ~80 s
-# (1–2 s start, ~10 s fill, 60 s load, teardown) plus ~30 s without the
-# server: about 20 minutes. Building adds four release builds the first
-# time (this tree three ways, v6.4.0 once); they are kept under
+# Runtime at the defaults on an 8-core glibc box: 12 runs (9 compared, 3
+# traced) of about 70 s each (start, a 2–5 s fill, the 60 s load, 1.5 s
+# for the trace file, teardown), then ~40 s without the server: about 15
+# minutes. Building adds four release builds the first time (this tree
+# three ways, v6.4.0 once, the last from scratch in its own target dir);
+# they are kept under
 # target/repack-tail/bin-<tree> and reused while the tree is unchanged.
 #
 # Exit: 0 done, 1 a run failed, 2 refused (busy box, leftovers, no tag).
