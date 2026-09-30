@@ -35,7 +35,6 @@
   previous build, inserts, deletes and lookups each differ by 0.3% or
   less. With `[expiry] hz = 0` there is no shard tick and nothing packs.
 
-||||||| 48c39923d
 - **`BLPOP` and `BRPOP` pops are durable and replicated, and a read-only
   replica refuses them and `RENAME` / `RENAMENX`.** The server kept its
   own list of write commands, and these four were missing from it. Since
