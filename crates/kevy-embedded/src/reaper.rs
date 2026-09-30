@@ -38,6 +38,15 @@ pub(crate) fn spawn_reaper(
 ) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
     match config.ttl_reaper {
         TtlReaperMode::Manual => Ok((None, None)),
+        // a browser has no threads: say so at open, and leave the thread
+        // machinery out of the module
+        TtlReaperMode::Background if cfg!(all(target_arch = "wasm32", target_os = "unknown")) => {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "a background reaper needs a thread, and this target has none: \
+                 use with_ttl_reaper_manual and tick",
+            ))
+        }
         TtlReaperMode::Background => {
             let stop = Arc::new(AtomicBool::new(false));
             let handle = spawn_loop(
