@@ -152,6 +152,10 @@ impl Store {
     }
 }
 
+#[cfg(all(test, feature = "persist"))]
+#[path = "catalog_record_tests.rs"]
+mod tests;
+
 #[cfg(feature = "persist")]
 mod sidecars {
     use std::path::Path;

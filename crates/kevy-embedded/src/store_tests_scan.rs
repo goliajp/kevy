@@ -13,7 +13,7 @@ fn s() -> Store {
 #[test]
 fn scan_walks_full_keyspace_paged() {
     let s = s();
-    for i in 0..10 {
+    for i in 0..200 {
         s.set(format!("k{i}").as_bytes(), b"v").unwrap();
     }
     let mut seen: Vec<Vec<u8>> = Vec::new();
@@ -27,10 +27,12 @@ fn scan_walks_full_keyspace_paged() {
         }
         cursor = next;
         iterations += 1;
-        assert!(iterations < 100, "scan didn't terminate");
+        assert!(iterations < 1000, "scan didn't terminate");
     }
+    assert!(iterations > 1, "a small COUNT walks the keyspace in several pages");
     seen.sort();
-    let mut expected: Vec<Vec<u8>> = (0..10).map(|i| format!("k{i}").into_bytes()).collect();
+    seen.dedup();
+    let mut expected: Vec<Vec<u8>> = (0..200).map(|i| format!("k{i}").into_bytes()).collect();
     expected.sort();
     assert_eq!(seen, expected);
 }
