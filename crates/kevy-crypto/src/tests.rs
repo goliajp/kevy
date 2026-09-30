@@ -283,6 +283,13 @@ fn hmac_refuses_a_key_longer_than_a_block() {
 }
 
 #[test]
+fn blake2s_debug_prints_the_digest_length_and_never_the_key_state() {
+    let keyed = blake2s::Blake2s::new_keyed(16, b"secret");
+    assert_eq!(format!("{keyed:?}"), "Blake2s { out_len: 16, .. }");
+    assert_eq!(format!("{:?}", blake2s::Blake2s::new(32)), "Blake2s { out_len: 32, .. }");
+}
+
+#[test]
 fn auth_error_says_what_failed() {
     assert_eq!(aead::AuthError.to_string(), "authentication tag mismatch");
 }

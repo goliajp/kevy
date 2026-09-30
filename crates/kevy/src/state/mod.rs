@@ -422,4 +422,12 @@ mod tests {
         assert_eq!(c.state.config().server.threads, 4);
         assert!(!c.state.config_is_explicit());
     }
+
+    #[test]
+    fn a_config_whose_scopes_overlap_is_refused_at_construction() {
+        let mut cfg = Config::default();
+        cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("p:=w1,p:=w2").unwrap();
+        let built = RuntimeState::new(Arc::new(cfg), "", 1);
+        assert!(matches!(built, Err(OwnershipError::DuplicatePrefix { .. })), "two writers for p:");
+    }
 }

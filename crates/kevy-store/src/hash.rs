@@ -425,3 +425,23 @@ impl HsetOutcome {
         Self::Rebuilt { added }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::HsetOutcome;
+
+    #[test]
+    fn a_rebuilt_write_still_says_whether_it_added_a_field() {
+        let cases = [
+            (HsetOutcome::AddedInline, true),
+            (HsetOutcome::UpdatedInline, false),
+            (HsetOutcome::AddedHeap(8), true),
+            (HsetOutcome::UpdatedHeap(-8), false),
+            (HsetOutcome::Rebuilt { added: true }, true),
+            (HsetOutcome::Rebuilt { added: false }, false),
+        ];
+        for (outcome, want) in cases {
+            assert!(matches!(outcome.rebuilt(), HsetOutcome::Rebuilt { added } if added == want));
+        }
+    }
+}

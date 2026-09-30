@@ -254,3 +254,88 @@ fn stats_count_what_the_structures_hold() {
     assert!(full >= leaves && full > empty);
     assert!(full < leaves + 64 * 1024, "leaves dominate: {full} vs {leaves}");
 }
+
+fn s(v: &str) -> IndexValue {
+    IndexValue::Str(v.as_bytes().to_vec())
+}
+
+fn drain(mut sc: crate::Scan<'_>) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    while let Some((_, k)) = sc.next_entry() {
+        out.push(k.to_vec());
+    }
+    out
+}
+
+/// Values of another type sort as a block: every i64 below every f64
+/// below every str.
+#[test]
+fn a_bound_of_another_type_sits_past_or_before_every_entry() {
+    let nums = seeded();
+    assert_eq!(nums.count(&i(0), &s("a")), 5, "a str maximum is above every i64");
+    assert_eq!(nums.count(&s("a"), &s("z")), 0);
+    assert_eq!(drain(nums.scan_below(&s("a"))).len(), 5);
+    let from_str = Cursor::new(s("a"), b"u9".to_vec());
+    assert_eq!(drain(nums.scan(Some(&from_str), SortOrder::Desc)).len(), 5);
+
+    let mut words = Segment::new();
+    words.apply(b"w1", None, Some(s("kyoto")));
+    words.apply(b"w2", None, Some(s("osaka")));
+    assert_eq!(words.count(&i(0), &s("m")), 1, "an i64 minimum is below every str");
+    let from_num = Cursor::new(i(7), b"u1".to_vec());
+    assert!(drain(words.scan(Some(&from_num), SortOrder::Desc)).is_empty());
+
+    let mut cut = seeded();
+    assert_eq!(cut.split_off_below(&s("a")).len(), 5, "everything is below a str");
+    assert_eq!(cut.stats().entries, 0);
+}
+
+#[test]
+fn removing_under_a_value_the_segment_cannot_hold_changes_nothing() {
+    let mut seg = seeded();
+    seg.remove(b"u1", &s("30"));
+    assert_eq!(seg.stats().entries, 5);
+    assert!(seg.contains(&i(30), b"u1"));
+}
+
+#[test]
+fn a_row_that_is_not_held_has_no_stored_values() {
+    let mut seg = Segment::with_values(1);
+    seg.apply_with_values(b"k", None, Some(i(1)), &[Some(b"v")]);
+    assert_eq!(seg.stored_row(&i(1), b"k"), [Some(b"v".to_vec())]);
+    assert!(seg.stored_row(&i(1), b"other").is_empty());
+    assert!(seg.stored_row(&i(2), b"k").is_empty());
+}
+
+#[test]
+fn a_walker_decodes_its_value_once_and_has_no_column_past_the_declared() {
+    let seg = seeded();
+    let mut w = crate::seg_walk::Walker::new(&seg, seg.tree.first_pos(), false);
+    assert!(w.advance());
+    let first = w.value().clone();
+    assert_eq!((w.value(), &first), (&i(18), &i(18)));
+    let mut buf = Vec::new();
+    assert_eq!(w.column(0, &mut buf), None, "a segment without VALUES stores no column");
+}
+
+#[test]
+fn tidy_packs_a_shuffled_segment_in_steps_then_rests_with_every_row() {
+    let n = 5_000i64;
+    let mut s = Segment::new();
+    for k in 0..n {
+        s.apply(format!("k{k}").as_bytes(), None, Some(i(k * 7919 % n)));
+    }
+    let before = s.stats().approx_bytes;
+    let mut calls = 0;
+    while s.tidy(4) {
+        calls += 1;
+    }
+    assert!(calls > 1, "four leaves a call take more than one call");
+    assert!(s.stats().approx_bytes < before);
+    assert!(!s.tidy(4), "a packed segment rests");
+    assert_eq!(s.stats().entries, n as u64);
+    assert_eq!(s.count(&i(0), &i(n - 1)), n as u64);
+    let (page, _) = s.range(&i(100), &i(102), None, 10);
+    let values: Vec<&IndexValue> = page.iter().map(|(_, v)| v).collect();
+    assert_eq!(values, [&i(100), &i(101), &i(102)]);
+}

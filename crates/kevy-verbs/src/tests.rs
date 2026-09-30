@@ -166,3 +166,49 @@ fn recording_a_deadline_reaps_nothing() {
     assert_eq!(store.dbsize(), 1, "the record removed the key");
     assert_eq!(store.expired_keys_total(), 0, "the record counted an expiry");
 }
+
+#[test]
+fn hrandfield_on_a_key_of_another_type_answers_wrongtype() {
+    let mut s = Store::new();
+    run(&mut s, "SET k v");
+    let wrongtype = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+    for cmd in ["HRANDFIELD k", "HRANDFIELD k 2", "HRANDFIELD k 2 WITHVALUES"] {
+        assert_eq!(run(&mut s, cmd).1, wrongtype, "{cmd}");
+    }
+}
+
+#[test]
+fn zadd_takes_each_condition_and_refuses_the_clashing_ones() {
+    let mut s = Store::new();
+    assert_eq!(run(&mut s, "ZADD z XX 1 m").1, b":0\r\n", "XX adds no new member");
+    assert_eq!(run(&mut s, "ZADD z 5 m").1, b":1\r\n");
+    assert_eq!(run(&mut s, "ZADD z LT CH 7 m").1, b":0\r\n", "LT keeps the lower score");
+    assert_eq!(run(&mut s, "ZADD z LT CH 3 m").1, b":1\r\n");
+    assert_eq!(run(&mut s, "ZSCORE z m").1, b"$1\r\n3\r\n");
+    let clash = b"-ERR GT, LT, and/or NX options at the same time are not compatible\r\n";
+    for cmd in ["ZADD z GT LT 1 m", "ZADD z NX GT 1 m", "ZADD z NX LT 1 m"] {
+        assert_eq!(run(&mut s, cmd).1, clash, "{cmd}");
+    }
+}
+
+#[test]
+fn a_scan_refusal_displays_its_wire_text_without_the_code() {
+    use crate::args::ScanOptsError;
+    let cases = [
+        (ScanOptsError::InvalidCursor, "invalid cursor"),
+        (ScanOptsError::NotInteger, "value is not an integer or out of range"),
+        (ScanOptsError::Syntax, "syntax error"),
+    ];
+    for (e, text) in cases {
+        assert_eq!(e.to_string(), text);
+        assert_eq!(e.as_wire(), format!("ERR {text}"));
+    }
+}
+
+#[test]
+fn the_default_claim_took_and_dropped_nothing() {
+    use crate::aof::{Claim, Consumer};
+    let c = Claim::default();
+    assert!(c.is_empty());
+    assert_eq!(c, Claim::new(Vec::new(), Vec::new(), Consumer::Existing));
+}

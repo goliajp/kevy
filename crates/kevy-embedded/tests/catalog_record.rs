@@ -181,17 +181,63 @@ fn a_side_file_that_does_not_parse_stays() {
     assert_eq!(std::fs::read(dir.path().join(SIDECARS[0])).unwrap(), b"not a catalog");
 }
 
-/// A directory 6.4.0 wrote keeps its catalog in side files; the first
-/// open reads them once, records the catalog, and removes them.
+/// A side file that cannot be read at all is not taken for an empty
+/// catalog either.
 #[test]
-fn a_6_4_directory_brings_its_catalog_into_the_log() {
-    let dir = TmpDir::new("emb-catalog-from-6.4");
+fn a_side_file_that_cannot_be_read_stays() {
+    let dir = TmpDir::new("emb-catalog-unreadable-sidecar");
+    std::fs::create_dir(dir.path().join(SIDECARS[1])).unwrap();
+    let s = Store::open(config(&dir, 2)).unwrap();
+    assert!(names(&call(&s, "VIEW.LIST")).is_empty());
+    drop(s);
+    assert!(dir.path().join(SIDECARS[1]).is_dir());
+}
+
+/// A copy of a directory 6.4.0 wrote, which keeps its catalog in side
+/// files.
+fn from_6_4(label: &str) -> TmpDir {
+    let dir = TmpDir::new(label);
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/data-dir-6.4.0");
     for entry in std::fs::read_dir(&fixture).unwrap() {
         let from = entry.unwrap().path();
         let name = from.file_name().unwrap().to_str().unwrap().trim_end_matches(".in").to_string();
         std::fs::copy(&from, dir.path().join(name)).unwrap();
     }
+    dir
+}
+
+fn every_sidecar(dir: &Path) -> bool {
+    SIDECARS.iter().all(|name| dir.join(name).exists())
+}
+
+/// Without a log nothing durable holds the imported catalog, so the side
+/// files it came from stay.
+#[test]
+fn a_store_without_a_log_imports_the_side_files_and_keeps_them() {
+    let dir = from_6_4("emb-catalog-from-6.4-no-log");
+    let s = Store::open(config(&dir, 2).without_aof()).unwrap();
+    let got = catalog(&s);
+    assert!(got[0].contains("user_age") && got[1].contains("adults"), "{got:?}");
+    drop(s);
+    assert!(every_sidecar(dir.path()), "a side file went");
+}
+
+/// A replica takes its catalog from its primary, never from side files.
+#[test]
+fn a_replica_leaves_the_side_files_to_its_primary() {
+    let dir = from_6_4("emb-catalog-from-6.4-replica");
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open(config(&dir, 2).with_replica_upstream("127.0.0.1:1")).unwrap();
+    assert!(names(&call(&s, "IDX.LIST")).is_empty());
+    drop(s);
+    assert!(every_sidecar(dir.path()), "a side file went");
+}
+
+/// A directory 6.4.0 wrote keeps its catalog in side files; the first
+/// open reads them once, records the catalog, and removes them.
+#[test]
+fn a_6_4_directory_brings_its_catalog_into_the_log() {
+    let dir = from_6_4("emb-catalog-from-6.4");
     let s = Store::open(config(&dir, 2)).unwrap();
     let got = catalog(&s);
     for name in ["user_age", "user_plan", "users.email"] {

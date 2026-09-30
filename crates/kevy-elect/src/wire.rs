@@ -368,4 +368,28 @@ mod tests {
         let (msg, _) = Message::decode(&out).expect("decode");
         assert!(matches!(msg, Message::Hb { .. }));
     }
+
+    #[test]
+    fn a_malformed_array_is_refused_and_an_empty_one_is_skipped() {
+        assert_eq!(Message::decode(b"*x\r\n"), Err(DecodeError::Bad));
+        assert_eq!(
+            Message::decode(b"*0\r\n"),
+            Err(DecodeError::Truncated),
+            "nothing to decode yet"
+        );
+    }
+
+    #[test]
+    fn every_decode_error_says_what_was_wrong_with_the_frame() {
+        let cases = [
+            (DecodeError::Truncated, "election frame is incomplete"),
+            (DecodeError::Bad, "election frame is not a resp multi-bulk array"),
+            (DecodeError::WrongShape, "election frame has an unknown verb or the wrong arity"),
+            (DecodeError::BadNumeric, "election frame has a non-numeric epoch or offset"),
+            (DecodeError::BadRole, "election frame has an unknown role"),
+        ];
+        for (e, text) in cases {
+            assert_eq!(e.to_string(), text);
+        }
+    }
 }

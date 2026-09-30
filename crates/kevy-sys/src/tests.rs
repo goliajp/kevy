@@ -113,3 +113,29 @@ fn fill_random_fills_more_than_one_getentropy_chunk() {
     crate::fill_random(&mut again).unwrap();
     assert_ne!(buf, again);
 }
+
+#[test]
+fn interests_combine_with_or() {
+    let both = Interest::READ | Interest::WRITE;
+    assert!(both.is_readable() && both.is_writable());
+    let mut grown = Interest::NONE;
+    assert!(!grown.is_readable() && !grown.is_writable());
+    grown |= Interest::WRITE;
+    assert!(grown.is_writable() && !grown.is_readable());
+    grown |= Interest::READ;
+    assert!(grown.is_readable());
+}
+
+#[test]
+fn a_socket_lends_and_gives_up_its_fd() {
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+    let listener = Socket::tcp_listen([127, 0, 0, 1], 0, 16).unwrap();
+    let port = listener.local_port().unwrap();
+    let fd = listener.as_raw_fd();
+    assert_eq!(fd, listener.raw());
+    assert_eq!(listener.into_raw_fd(), fd);
+    // SAFETY: `fd` came out of a socket that gave up ownership of it, so the
+    // listener was not closed and this is now its only owner
+    let again = unsafe { Socket::from_raw_fd(fd) };
+    assert_eq!(again.local_port().unwrap(), port, "giving up the fd did not close it");
+}

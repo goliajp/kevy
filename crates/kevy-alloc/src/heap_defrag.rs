@@ -136,6 +136,16 @@ mod tests {
     }
 
     #[test]
+    fn a_direct_mapping_is_never_named_for_a_move() {
+        let mut heap = Heap::new(6);
+        let size = class::MAX_SMALL + 1;
+        let p = heap.alloc(size, 8).unwrap();
+        assert!(!heap.should_move(p.as_ptr(), size, 8));
+        // SAFETY: from this heap with this shape
+        unsafe { heap.dealloc(p, size, 8) };
+    }
+
+    #[test]
     fn another_heaps_slot_and_a_class_without_a_spare_span_stay() {
         let (mut a, b) = (Heap::new(4), Heap::new(5));
         let held: Vec<NonNull<u8>> = (0..500).map(|_| a.alloc(900, 8).unwrap()).collect();

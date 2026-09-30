@@ -110,3 +110,18 @@ fn a_past_probe_sorts_after_everything_it_prefixes() {
         assert_eq!(cmp_key(&Probe::past(probe), h, len, &rest), want, "{probe:?} vs {key:?}");
     }
 }
+
+#[test]
+fn a_probe_orders_by_its_head_before_length_or_tail() {
+    let parts = |k: &[u8]| (head_of(k), k.len(), k.get(8..).unwrap_or(&[]).to_vec());
+    for (probe, key, want) in [
+        (&b"ab"[..], &b"ac"[..], Ordering::Less),
+        (b"ac", b"abcdefghijk", Ordering::Greater),
+        (b"abcdefgh1", b"abcdefgh", Ordering::Greater),
+        (b"abcdefgh12", b"abcdefgh13", Ordering::Less),
+    ] {
+        let (h, len, rest) = parts(key);
+        assert_eq!(cmp_key(&Probe::new(probe), h, len, &rest), want, "{probe:?} vs {key:?}");
+        assert_eq!(probe.cmp(key), want, "the order of the bytes themselves");
+    }
+}

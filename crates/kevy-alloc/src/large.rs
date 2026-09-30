@@ -352,4 +352,9 @@ mod pool_tests {
             "an oversized mapping must never park"
         );
     }
+
+    #[test]
+    fn an_alignment_stricter_than_a_page_is_refused() {
+        assert!(alloc(crate::class::MAX_SMALL + 1, os::PAGE * 2).is_none());
+    }
 }

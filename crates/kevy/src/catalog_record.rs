@@ -269,3 +269,6 @@ fn import(
     };
     record(&Argv::from(frame))
 }
+
+#[cfg(test)]
+mod tests;

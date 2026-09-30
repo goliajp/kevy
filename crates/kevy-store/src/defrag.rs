@@ -247,4 +247,88 @@ mod tests {
         });
         assert_eq!(s.used_memory(), sum);
     }
+
+    fn never(_: *const u8, _: usize, _: usize) -> bool {
+        false
+    }
+
+    /// Names byte buffers only: no `Arc` block and no hash table.
+    fn bytes_only(_: *const u8, _: usize, align: usize) -> bool {
+        align == 1
+    }
+
+    fn lap(s: &mut Store) -> usize {
+        let mut moved = 0;
+        loop {
+            let step = s.defrag_step(16);
+            moved += step.moved;
+            if step.lap_done {
+                return moved;
+            }
+        }
+    }
+
+    /// One value of every kind the walk looks at, keyed by what it is.
+    fn mixed() -> Store {
+        let mut s = Store::new();
+        s.set_slice(b"str", &[b's'; 40], None, SetCondition::Always);
+        s.set_slice(b"inline", b"short", None, SetCondition::Always);
+        s.set_slice(b"int", b"42", None, SetCondition::Always);
+        s.rpush(b"list", &[b"x"]).unwrap();
+        s.hset(b"spilled", &[(b"f".as_slice(), [b'v'; 100].as_slice())]).unwrap();
+        s.hset(b"flat", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
+        let wide: Vec<(Vec<u8>, &[u8])> =
+            (0..200).map(|i| (format!("f{i}").into_bytes(), b"v".as_slice())).collect();
+        let pairs: Vec<(&[u8], &[u8])> = wide.iter().map(|(f, v)| (&f[..], *v)).collect();
+        s.hset(b"wide", &pairs).unwrap();
+        s.hset(b"row", &[(b"id".as_slice(), b"7".as_slice())]).unwrap();
+        let table: crate::packed_row::ColumnNames = vec![b"id".to_vec()].into();
+        s.pack_row(b"row", &table);
+        assert!(s.is_packed(b"row"));
+        s
+    }
+
+    #[test]
+    fn without_a_hint_or_a_table_a_step_does_nothing() {
+        let mut s = mixed();
+        assert_eq!(s.defrag_step(64), DefragStep { moved: 0, lap_done: true });
+        let mut empty = Store::new();
+        empty.set_defrag_hint(Some(always));
+        assert_eq!(empty.defrag_step(64), DefragStep { moved: 0, lap_done: true });
+    }
+
+    #[test]
+    fn a_hint_that_names_nothing_moves_nothing() {
+        let mut s = mixed();
+        let before = s.used_memory();
+        s.set_defrag_hint(Some(never));
+        assert_eq!(lap(&mut s), 0);
+        assert_eq!(s.used_memory(), before);
+    }
+
+    #[test]
+    fn a_hint_on_byte_buffers_moves_the_values_that_hold_one() {
+        let mut s = mixed();
+        s.set_defrag_hint(Some(bytes_only));
+        // the heap string, the hash with a spilled value, the packed row
+        assert_eq!(lap(&mut s), 3);
+        assert_eq!(s.get(b"str").unwrap().as_deref(), Some(&[b's'; 40][..]));
+        assert_eq!(s.hget(b"spilled", b"f").unwrap(), Some(&[b'v'; 100][..]));
+        assert_eq!(s.hget(b"row", b"id").unwrap(), Some(&b"7"[..]));
+        assert!(s.is_packed(b"row"), "a moved row keeps its form");
+        assert_eq!(s.hlen(b"wide").unwrap(), 200);
+    }
+
+    #[test]
+    fn a_walk_whose_table_shrank_starts_over() {
+        let mut s = Store::new();
+        for i in 0..300u32 {
+            s.set_slice(format!("k{i}").as_bytes(), &[b'v'; 40], None, SetCondition::Always);
+        }
+        s.set_defrag_hint(Some(always));
+        assert!(!s.defrag_step(100).lap_done);
+        drop(s.detach_entries());
+        s.set_slice(b"k", &[b'v'; 40], None, SetCondition::Always);
+        assert_eq!(s.defrag_step(64), DefragStep { moved: 1, lap_done: true });
+    }
 }

@@ -21,6 +21,8 @@
 mod radius;
 mod search;
 mod store;
+#[cfg(test)]
+mod tests;
 
 pub use store::{StoreSearchError, store_keys, store_search};
 

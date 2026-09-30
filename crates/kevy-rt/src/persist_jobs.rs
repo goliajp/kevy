@@ -155,3 +155,24 @@ pub(crate) fn spawn_serializer(
         .expect("spawn snapshot serializer thread");
     rx
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{load_snapshot_file, record_durably};
+
+    #[test]
+    fn a_shard_without_a_log_records_nothing() {
+        let frame = kevy_resp::Argv::from(vec![b"XINTERNAL.EXAMPLE".to_vec()]);
+        assert!(!record_durably(&mut None, 0, &frame));
+    }
+
+    #[test]
+    fn a_missing_snapshot_file_is_an_error() {
+        let missing = std::env::temp_dir()
+            .join(format!("kevy-rt-no-such-dir-{}", std::process::id()))
+            .join("dump-0.rdb");
+        let mut store = kevy_store::Store::new();
+        let err = load_snapshot_file(&mut store, &missing).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+}

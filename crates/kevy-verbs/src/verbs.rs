@@ -250,3 +250,17 @@ pub fn verb(upper: &[u8]) -> Option<&'static Verb> {
 pub fn is_streams_geo(upper: &[u8]) -> bool {
     upper.first() == Some(&b'X') || upper.starts_with(b"GEO")
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_verb_name_is_its_bytes_as_text() {
+        assert_eq!(super::name(b"ZADD"), "ZADD");
+    }
+
+    #[test]
+    #[should_panic(expected = "a verb name is ASCII")]
+    fn a_verb_name_that_is_not_utf8_is_refused() {
+        super::name(b"\xffGET");
+    }
+}

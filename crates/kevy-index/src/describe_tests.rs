@@ -365,3 +365,38 @@ fn a_table_without_window_describes_it_as_absent() {
     let d = describe_table(&spec);
     assert_eq!((field(&d, "window"), field(&d, "autodeclare")), (&b("-"), &b("0")));
 }
+
+#[test]
+fn neutrally_weighted_text_fields_are_spelled_without_weights() {
+    let s = IndexSpec::builder("doc", "doc:", IndexKind::Text, ValType::Str)
+        .with_fields(vec![FieldSpec::new("title"), FieldSpec::new("body")])
+        .build()
+        .unwrap();
+    let got = index_declaration(&s);
+    assert_eq!(got[5..8], words(&["FIELDS", "title", "body"]));
+    assert!(!got.contains(&b"WEIGHTS".to_vec()), "{got:?}");
+}
+
+#[test]
+fn a_global_path_sampled_from_rows_writes_global_without_split_points() {
+    let spec = declare(&[
+        "TABLE.DECLARE",
+        "u",
+        "PREFIX",
+        "u:",
+        "PK",
+        "id",
+        "COLUMN",
+        "id",
+        "i64",
+        "INDEX",
+        "id",
+        "range",
+    ]);
+    let mut cat = crate::Catalog::new();
+    for s in spec.compile().unwrap() {
+        cat.create_with(s, crate::Partitioning::Global { splits: Vec::new() }).unwrap();
+    }
+    let argv = crate::table_declaration_partitioned(&spec, &cat);
+    assert_eq!(argv[argv.len() - 4..], words(&["INDEX", "id", "range", "GLOBAL"]));
+}

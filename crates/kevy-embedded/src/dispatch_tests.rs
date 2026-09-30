@@ -294,3 +294,45 @@ fn a_closed_store_refuses_a_write_before_reading_its_arguments() {
     }
     assert_eq!(run(&s, &[b"GET", b"k"]), b"$-1\r\n");
 }
+
+/// The shared layer asks for the store's state itself, so a shutdown that
+/// lands after the dispatcher's own check still refuses the write.
+#[test]
+fn the_shared_layer_refuses_a_write_on_a_closed_store_by_itself() {
+    let s = mem_store();
+    s.shutdown().expect("shutdown");
+    let mut out = Vec::new();
+    let argv = [b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()];
+    assert!(super::shared::dispatch(&s, b"SET", &argv, &mut out));
+    assert_eq!(out, b"-ERR connection closed\r\n");
+    assert_eq!(s.get(b"k").unwrap(), None);
+}
+
+/// `FEED.READ gen offset limit [PREFIX p…]`: the frames written since the
+/// cursor, filtered by prefix, and the refusals the listener answers.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn feed_read_answers_the_frames_since_a_cursor() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).expect("open");
+    let tail = s.changes_tail().unwrap();
+    assert_eq!(run(&s, &[b"SET", b"a", b"1"]), b"+OK\r\n");
+    assert_eq!(run(&s, &[b"SET", b"b:1", b"2"]), b"+OK\r\n");
+    let (g, o) = (tail.generation.to_string(), tail.offset.to_string());
+    let (g, o) = (g.as_bytes(), o.as_bytes());
+    let next = s.changes_tail().unwrap();
+    let head = format!("*3\r\n:{}\r\n:{}\r\n", next.generation, next.offset);
+    let frame =
+        |k: &str, v: &str| format!("*3\r\n$3\r\nSET\r\n${}\r\n{k}\r\n$1\r\n{v}\r\n", k.len());
+    let both = run(&s, &[b"FEED.READ", g, o, b"10"]);
+    let want = format!("{head}*2\r\n{}{}", frame("a", "1"), frame("b:1", "2"));
+    assert_eq!(String::from_utf8_lossy(&both), want);
+    let only_b = run(&s, &[b"FEED.READ", g, o, b"10", b"PREFIX", b"b:"]);
+    assert_eq!(String::from_utf8_lossy(&only_b), format!("{head}*1\r\n{}", frame("b:1", "2")));
+
+    let usage = "-ERR FEED.READ gen offset limit [PREFIX p…]\r\n".as_bytes();
+    assert_eq!(run(&s, &[b"FEED.READ", b"x", o, b"10"]), usage);
+    assert_eq!(run(&s, &[b"FEED.READ", g, o, b"10", b"PREFIX"]), usage);
+    assert_eq!(run(&s, &[b"FEED.READ", g, o, b"10", b"WHERE", b"b:"]), usage);
+    let ahead = (next.offset + 100).to_string();
+    assert_eq!(run(&s, &[b"FEED.READ", g, ahead.as_bytes(), b"10"]), b"-ERR feed: Future\r\n");
+}

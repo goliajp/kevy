@@ -155,3 +155,41 @@ fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
         t.try_demote_after_write();
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::target_stores;
+    use crate::commands_trait_tests::Minimal;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap().as_nanos();
+        let p = std::env::temp_dir().join(format!("kevy-rt-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn target_stores_tier_under_their_share_of_the_budget() {
+        let root = scratch("reshard-targets");
+        let stores = target_stores::<Minimal>(2, Some(1 << 20), &root).unwrap();
+        assert_eq!(stores.len(), 2);
+        for (i, s) in stores.iter().enumerate() {
+            assert!(s.tier_enabled(), "target {i}");
+            assert_eq!(s.tier_stats().budget, 1 << 19);
+            assert!(root.join(format!(".reshard-{i}")).is_dir());
+        }
+        let plain = target_stores::<Minimal>(3, None, &root).unwrap();
+        assert!(plain.iter().all(|s| !s.tier_enabled()));
+        drop((stores, plain));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_tier_root_that_is_a_file_fails_the_targets() {
+        let root = scratch("reshard-targets-file");
+        let file = root.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(target_stores::<Minimal>(2, Some(1 << 20), &file).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

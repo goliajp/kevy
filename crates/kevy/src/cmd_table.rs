@@ -441,3 +441,6 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: 
     encode_bulk(out, b"spotcheck_type_mismatches");
     encode_bulk(out, spot[1].to_string().as_bytes());
 }
+
+#[cfg(test)]
+mod tests;

@@ -164,3 +164,7 @@ fn where_columns(rest: &[Vec<u8>]) -> Vec<Vec<u8>> {
     }
     cols
 }
+
+#[cfg(test)]
+#[path = "advise_tests.rs"]
+mod tests;

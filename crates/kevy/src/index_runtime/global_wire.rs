@@ -193,4 +193,30 @@ mod tests {
         trailing.push(0);
         assert_eq!(decode(&trailing), None, "bytes past the message");
     }
+
+    #[test]
+    fn a_message_cut_at_any_byte_is_refused() {
+        let deltas = [
+            Delta::Delete { key: b"k".to_vec(), value: IndexValue::I64(3) },
+            Delta::Upsert {
+                key: b"k".to_vec(),
+                old: Some(IndexValue::F64(1.5)),
+                value: IndexValue::Str(b"v".to_vec()),
+                values: vec![Some(b"x".to_vec()), None],
+            },
+            Delta::Upsert {
+                key: b"k".to_vec(),
+                old: Some(IndexValue::I64(1)),
+                value: IndexValue::F64(2.0),
+                values: vec![],
+            },
+            Delta::Built { from: 2 },
+        ];
+        for d in deltas {
+            let bytes = encode(b"idx", 9, 1, &d);
+            for cut in 0..bytes.len() {
+                assert_eq!(decode(&bytes[..cut]), None, "{d:?} cut at {cut}");
+            }
+        }
+    }
 }

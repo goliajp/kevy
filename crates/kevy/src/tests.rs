@@ -447,3 +447,22 @@ fn announce_port_base_is_none_until_set() {
     cfg.cluster.announce_port_base = 7001;
     assert_eq!(crate::announce_port_base(&cfg), Some(7001));
 }
+
+#[test]
+fn a_growing_write_past_the_tiering_budget_gets_the_guards_refusal() {
+    let mut s = Store::new();
+    s.set_memory_refusal(true);
+    for parts in [&[&b"SET"[..], b"k", b"v"][..], &[b"RPUSH", b"l", b"v"]] {
+        let want = format!("-{}\r\n", crate::mem_guard::OVER_BUDGET_ERR);
+        assert_eq!(String::from_utf8(d(&mut s, parts)).unwrap(), want);
+    }
+    assert_eq!(s.dbsize(), 0);
+}
+
+#[test]
+fn replay_resync_selects_the_resync_replay_mode() {
+    let mut cfg = kevy_config::Config::default();
+    assert_eq!(crate::replay_mode(&cfg), kevy_persist::ReplayMode::Strict);
+    cfg.persistence.replay_resync = true;
+    assert_eq!(crate::replay_mode(&cfg), kevy_persist::ReplayMode::Resync);
+}

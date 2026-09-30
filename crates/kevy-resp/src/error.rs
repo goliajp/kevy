@@ -83,3 +83,15 @@ impl From<&'static str> for CmdError {
         Self::Wire(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_malformed_frame_renders_its_reason_and_has_no_source() {
+        let e = ProtocolError::Malformed("bad bulk length");
+        assert_eq!(e.to_string(), "malformed frame: bad bulk length");
+        assert!(std::error::Error::source(&e).is_none());
+    }
+}

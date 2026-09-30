@@ -79,3 +79,25 @@ pub(super) fn sweep_hash_field_ttls(cmds: &KevyCommands, store: &mut Store) {
         cmds.on_write(store, &key);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering::Relaxed;
+
+    #[test]
+    fn the_tier_tick_hands_the_guards_refusal_to_the_store_and_takes_it_back() {
+        let d = kevy_tmpdir::TmpDir::new("tier-tick-refusal");
+        let c = KevyCommands::new();
+        let cfg = kevy_config::Config::default();
+        let mut s = Store::new();
+        s.enable_tiering(d.path(), 1 << 30).unwrap();
+        c.state().mem.refusing.store(true, Relaxed);
+        tier_tick(&c, &mut s, crate::state::VIEW_NONEMPTY, &cfg);
+        assert!(s.memory_refused(), "the guard refuses, so the shard does");
+        assert_eq!(s.tier_stats().reserved_bytes, 0, "no view holds a floor");
+        c.state().mem.refusing.store(false, Relaxed);
+        tier_tick(&c, &mut s, 0, &cfg);
+        assert!(!s.memory_refused(), "and lifts it once the guard does");
+    }
+}

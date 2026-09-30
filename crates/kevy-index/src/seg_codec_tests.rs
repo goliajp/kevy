@@ -127,6 +127,8 @@ fn widening_drops_what_a_key_breaks() {
     assert_eq!((&*w.prefix, w.digits), (&b"u:"[..], false));
     let w = c.widened_for(b"v:1");
     assert_eq!((&*w.prefix, w.digits), (&b""[..], false), "v:1 is not all digits once u: is gone");
+    let w = c.widened_for(b"77");
+    assert_eq!((&*w.prefix, w.digits), (&b""[..], true), "a bare number keeps digit keys");
 }
 
 #[test]

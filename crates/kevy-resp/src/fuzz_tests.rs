@@ -17,6 +17,15 @@ fn lcg_is_deterministic() {
 }
 
 #[test]
+fn lcg_state_is_the_seed_then_the_last_draw() {
+    let mut r = Lcg::new(7);
+    assert_eq!(r.state(), 7);
+    let v = r.next_u64();
+    assert_eq!(r.state(), v);
+    assert_ne!(Lcg::new(0).state(), 0);
+}
+
+#[test]
 fn known_valid_input_parses() {
     let r = run_one(Strategy::MutatedValid, 0);
     // Seed 0 may or may not flip in a way that breaks the frame.

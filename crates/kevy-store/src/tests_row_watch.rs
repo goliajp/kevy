@@ -209,6 +209,70 @@ fn many_rows_are_each_recorded_once() {
     assert!(seen.iter().all(|r| !r.1), "each recorded as absent, before its first write");
 }
 
+#[test]
+fn the_installed_watch_is_the_one_read_back() {
+    let mut s = Store::new();
+    assert!(s.row_watch().is_none());
+    let w = RowWatch::new().with_prefix("u:", vec![b"a".to_vec()]).with_prefix("v:", Vec::new());
+    s.set_row_watch(w.clone());
+    assert_eq!(s.row_watch(), Some(&w));
+    assert_eq!(s.row_watch().map(RowWatch::rules), Some(2));
+}
+
+#[test]
+fn installing_the_same_watch_again_keeps_what_was_recorded() {
+    let mut s = watched();
+    s.hset(b"u:1", &[(b"a", b"1")]).expect("hash");
+    s.set_row_watch(RowWatch::new().with_prefix("u:", vec![b"a".to_vec(), b"b".to_vec()]));
+    let c = s.take_row_changes(RowChanges::default());
+    assert_eq!(c.len(), 1);
+    assert!(!c.is_empty());
+}
+
+#[test]
+fn without_a_watch_a_take_hands_back_the_spare() {
+    let mut s = Store::new();
+    s.hset(b"u:1", &[(b"a", b"1")]).expect("hash");
+    let c = s.take_row_changes(RowChanges::default());
+    assert!(c.is_empty());
+    assert_eq!(c.len(), 0);
+}
+
+#[test]
+fn a_row_under_one_rule_carries_no_fields_for_the_others() {
+    let mut s = Store::new();
+    s.set_row_watch(
+        RowWatch::new()
+            .with_prefix("u:", vec![b"a".to_vec()])
+            .with_prefix("v:", vec![b"a".to_vec(), b"b".to_vec()]),
+    );
+    s.hset(b"v:1", &[(b"a", b"1"), (b"b", b"2")]).expect("hash");
+    s.take_row_changes(RowChanges::default());
+    s.hset(b"v:1", &[(b"a", b"3")]).expect("hash");
+    let c = s.take_row_changes(RowChanges::default());
+    let r = c.iter().next().expect("one row");
+    assert_eq!(r.field(0, 0), None, "not under u:");
+    assert_eq!((r.field(1, 0), r.field(1, 1)), (Some(&b"1"[..]), Some(&b"2"[..])));
+    assert_eq!(r.field(1, 9), None, "past the rule's fields");
+}
+
+#[test]
+fn a_sharded_row_records_its_old_fields() {
+    let mut s = watched();
+    let fields: Vec<Vec<u8>> =
+        (0..crate::seg_map::HS_PROMOTE + 1).map(|i| format!("f{i}").into_bytes()).collect();
+    let mut pairs: Vec<(&[u8], &[u8])> = fields.iter().map(|f| (&f[..], &b"v"[..])).collect();
+    pairs.push((b"a", b"1"));
+    s.hset(b"u:1", &pairs).expect("hash");
+    assert!(matches!(
+        s.map.get(b"u:1".as_slice()).map(|e| &e.value),
+        Some(crate::Value::SegHash(_))
+    ));
+    take(&mut s);
+    s.hset(b"u:1", &[(b"a", b"2")]).expect("hash");
+    assert_eq!(take(&mut s), [row("u:1", Some("1"), None)]);
+}
+
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod cold {
     use super::*;
