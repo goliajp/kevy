@@ -480,3 +480,7 @@ fn cross_slot_check(ctx: &Ctx<'_>, keys: &[&[u8]]) -> Option<Vec<u8>> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "cmd_lua_tests.rs"]
+mod tests;

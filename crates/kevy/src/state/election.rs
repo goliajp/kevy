@@ -334,6 +334,13 @@ mod tests {
         assert_eq!(bases, [7100, 16004, 16204]);
     }
 
+    #[test]
+    fn a_peer_is_dialed_at_its_election_address() {
+        let peers = PeerEntry::parse_list("a@10.0.0.7:6204:6004").unwrap();
+        let addr = peer_to_addr(&peers[0]);
+        assert_eq!((addr.node_id.as_str(), addr.host.as_str(), addr.port), ("a", "10.0.0.7", 6204));
+    }
+
     fn cfg_with(node_id: &str, peers: &str) -> Config {
         let mut c = Config::default();
         c.cluster.node_id = node_id.to_string();

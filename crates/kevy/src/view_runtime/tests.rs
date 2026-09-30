@@ -107,3 +107,70 @@ fn a_view_reads_its_index_after_a_flush() {
     cmds.on_write(&mut store, b"user:20");
     assert_eq!(members(&cmds, &mut store), ["user:20"]);
 }
+
+/// A FLUSHALL while no view reads the index keeps no rows for views; a
+/// view declared after it starts from the rows written since.
+#[test]
+fn a_flush_while_no_view_reads_the_index_leaves_nothing_for_a_later_view() {
+    let (cmds, mut store) = (KevyCommands::new(), Store::new());
+    let index = "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range";
+    assert_eq!(run(&cmds, &mut store, index), b"+OK\r\n");
+    age(&mut store, "user:18", 18);
+    cmds.on_shard_tick(&mut store);
+    assert_eq!(run(&cmds, &mut store, "FLUSHALL"), b"+OK\r\n");
+    cmds.on_shard_tick(&mut store);
+    age(&mut store, "user:30", 30);
+    let view = "VIEW.CREATE adults QUERY age RANGE 18 200 ORDER BY age MODE materialized";
+    assert_eq!(run(&cmds, &mut store, view), b"+OK\r\n");
+    assert_eq!(members(&cmds, &mut store), ["user:30"]);
+}
+
+/// An index declared beside the ones a view reads moves the index list,
+/// but the view's own indexes are the same builds: no rebuild.
+#[test]
+fn an_unrelated_index_does_not_rebuild_a_view() {
+    let (cmds, mut store) = (KevyCommands::new(), Store::new());
+    age(&mut store, "user:18", 18);
+    declare(&cmds, &mut store);
+    assert_eq!(members(&cmds, &mut store), ["user:18"]);
+    let other = "IDX.CREATE other ON PREFIX user: FIELD age TYPE i64 KIND range";
+    assert_eq!(run(&cmds, &mut store, other), b"+OK\r\n");
+    let (_, _, _, rebuilding) = super::shard_stats(&cmds.ctx(), b"adults").unwrap();
+    assert!(!rebuilding);
+    assert_eq!(members(&cmds, &mut store), ["user:18"]);
+}
+
+/// A flush with a virtual view beside the materialized one: the virtual
+/// view holds no set to clear and reads the index as it stands.
+#[test]
+fn a_flush_clears_a_materialized_view_beside_a_virtual_one() {
+    let (cmds, mut store) = (KevyCommands::new(), Store::new());
+    age(&mut store, "user:18", 18);
+    declare(&cmds, &mut store);
+    let virt = "VIEW.CREATE all QUERY age RANGE 0 200 ORDER BY age";
+    assert_eq!(run(&cmds, &mut store, virt), b"+OK\r\n");
+    assert_eq!(members(&cmds, &mut store), ["user:18"]);
+    assert_eq!(run(&cmds, &mut store, "FLUSHALL"), b"+OK\r\n");
+    age(&mut store, "user:40", 40);
+    cmds.on_write(&mut store, b"user:40");
+    assert_eq!(members(&cmds, &mut store), ["user:40"]);
+    let page = super::shard_page(&cmds.ctx(), b"all", None, usize::MAX).unwrap();
+    assert_eq!(page.len(), 1);
+}
+
+/// A top-K view that loses a member below K is rebuilt from its index.
+#[test]
+fn a_topk_view_that_falls_below_k_is_rebuilt() {
+    let (cmds, mut store) = (KevyCommands::new(), Store::new());
+    let index = "IDX.CREATE age ON PREFIX user: FIELD age TYPE i64 KIND range";
+    assert_eq!(run(&cmds, &mut store, index), b"+OK\r\n");
+    for a in 18..24 {
+        age(&mut store, &format!("user:{a}"), a);
+    }
+    let view = "VIEW.CREATE adults QUERY age RANGE 18 200 ORDER BY age MODE materialized TOPK 2";
+    assert_eq!(run(&cmds, &mut store, view), b"+OK\r\n");
+    assert_eq!(members(&cmds, &mut store), ["user:18", "user:19"]);
+    age(&mut store, "user:18", 5);
+    cmds.on_write(&mut store, b"user:18");
+    assert_eq!(members(&cmds, &mut store), ["user:19", "user:20"]);
+}

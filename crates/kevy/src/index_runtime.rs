@@ -481,4 +481,8 @@ mod seg_new;
 use seg_new::{new_ann_seg, new_scalar_seg, new_text_seg};
 
 #[cfg(test)]
+mod global_tests;
+#[cfg(test)]
+pub(crate) mod test_shard;
+#[cfg(test)]
 mod tests;

@@ -113,4 +113,29 @@ mod tests {
         assert_eq!(reconcile(&held, &owed), (3, 1));
         assert_eq!(reconcile(&held, &held), (0, 0));
     }
+
+    fn put(c: &mut Vec<u8>, list: &[Placed]) {
+        c.extend_from_slice(&(list.len() as u32).to_le_bytes());
+        for (k, p, h) in list {
+            c.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            c.extend_from_slice(k);
+            c.extend_from_slice(&p.to_le_bytes());
+            c.extend_from_slice(&h.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn a_chunk_cut_at_any_byte_is_not_read_as_a_global_verify() {
+        let mut c = vec![0, VERIFY_TAG];
+        for n in [2u64, 64, 0, 0] {
+            c.extend_from_slice(&n.to_le_bytes());
+        }
+        put(&mut c, &[e("a", 0, 1), e("b", 0, 2)]);
+        put(&mut c, &[e("a", 0, 1)]);
+        let whole = String::from_utf8(reduce(std::slice::from_ref(&c)).unwrap()).unwrap();
+        assert!(whole.contains("$5\r\ndrift\r\n$1\r\n1\r\n"), "{whole}");
+        for cut in 2..c.len() {
+            assert_eq!(reduce(&[c[..cut].to_vec()]), None, "cut at {cut}");
+        }
+    }
 }
