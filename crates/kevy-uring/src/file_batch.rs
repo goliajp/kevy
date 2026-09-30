@@ -197,6 +197,13 @@ mod tests {
         vec![FileRead { fd: 3, offset: 0, len: 64 }, FileRead { fd: 3, offset: 64, len: 32 }]
     }
 
+    #[test]
+    fn a_read_is_built_from_its_three_fields() {
+        let r = FileRead::new(3, 64, 32);
+        assert_eq!((r.fd, r.offset, r.len), (3, 64, 32));
+        assert_eq!(r, reads()[1]);
+    }
+
     fn cqe(user_data: u64, res: i32) -> Completion {
         Completion { user_data, res, flags: 0 }
     }

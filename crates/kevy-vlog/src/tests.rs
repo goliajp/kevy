@@ -458,3 +458,15 @@ fn compression_terms_add_up_to_the_bytes_on_disk() {
     let after = holds(&v);
     assert_ne!(after, before, "retired files took their terms with them");
 }
+
+#[test]
+fn a_pinned_file_lends_the_descriptor_it_reads_through() {
+    use std::os::fd::{AsFd, AsRawFd};
+    let d = dir("vlog-fd");
+    let mut v = Vlog::open(d.path(), DEFAULT_ROTATE_BYTES).unwrap();
+    let r = v.append(b"k", b"value").unwrap();
+    let f = v.pin(r.file_id).expect("the active file");
+    let fd = f.as_raw_fd();
+    assert!(fd >= 0);
+    assert_eq!(f.as_fd().as_raw_fd(), fd, "both views name one descriptor");
+}

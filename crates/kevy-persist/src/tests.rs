@@ -3,6 +3,9 @@ use crate::snapshot_fmt::VERSION;
 use std::borrow::Cow;
 use std::time::Duration;
 
+/// An `apply` for a staging ring whose records a test does not need.
+pub(crate) fn ignore_owed(_: &mut Argv) {}
+
 pub(crate) fn temp_file(name: &str) -> std::path::PathBuf {
     unique_file(name, "rdb")
 }
@@ -392,4 +395,44 @@ fn view_aof_round_trips_at_the_collect_instant() {
     assert_eq!(restored.hget(b"h", b"f2").unwrap(), None);
     assert_eq!(restored.hget(b"h", b"f").unwrap(), Some(b"v".as_slice()));
     let _ = std::fs::remove_file(&p);
+}
+
+/// A row sealed into a segment is not a value the rewrite re-emits as
+/// commands: the estimate leaves it out, where the rewrite writes a frame
+/// naming its segment.
+#[test]
+fn a_row_sealed_to_a_segment_is_left_out_of_the_estimate() {
+    let d = kevy_tmpdir::TmpDir::new("persist-estimate-seg");
+    let mut s = Store::new();
+    s.enable_seg_rows(d.path()).unwrap();
+    s.hset(b"user:1", &[(b"name".as_slice(), b"ada".as_slice())]).unwrap();
+    let sealed = s.seal_rows_to_seg(b"user", &[b"user:1".to_vec()]).unwrap().expect("sealed");
+    assert_eq!(s.commit_row_eviction(&sealed), 1);
+    assert_eq!(crate::estimate_rewrite_size(&s), crate::AOF2_MAGIC.len() as u64);
+    let written = dump_aof(&d.path().join("seg.aof"), &s).unwrap();
+    assert!(written.bytes > crate::AOF2_MAGIC.len() as u64, "the segment frame is written");
+}
+
+/// A shard's snapshot that carries a frame hands it to the merge like a
+/// logged command, after the keys; a snapshot that cannot be read fails it.
+#[test]
+fn a_merge_replays_a_snapshot_frame_and_fails_on_an_unreadable_one() {
+    use crate::reshard::{StdLayout, merge_sources};
+    let dir = kevy_tmpdir::TmpDir::new("persist-merge-aux");
+    let mut shard = Store::new();
+    shard.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+    let frame = Argv::from(vec![b"XINTERNAL.EXAMPLE".to_vec(), b"1".to_vec()]);
+    let src = crate::WithAux::new(&shard, Some(&frame));
+    save_snapshot(&src, &crate::layout::snapshot_path(dir.path(), 0)).unwrap();
+    let mut temp = Store::new();
+    let mut replayed = Vec::new();
+    let mut on_frame = |store: &mut Store, args: Argv| replayed.push((store.dbsize(), args));
+    let sources = merge_sources(dir.path(), 1, &StdLayout, &mut temp, &mut on_frame).unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(temp.dbsize(), 1);
+    // a second shard whose snapshot path is a directory
+    std::fs::create_dir(crate::layout::snapshot_path(dir.path(), 1)).unwrap();
+    let mut again = Store::new();
+    assert!(merge_sources(dir.path(), 2, &StdLayout, &mut again, &mut on_frame).is_err());
+    assert_eq!(replayed, [(1, frame.clone()), (1, frame)], "the frame arrives after the keys");
 }

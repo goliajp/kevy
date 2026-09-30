@@ -317,6 +317,8 @@ const _: () = {
 mod tests;
 #[cfg(test)]
 mod tests_aof;
+#[cfg(all(test, unix, not(target_arch = "wasm32")))]
+mod tests_fail;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_mapped;
 #[cfg(test)]

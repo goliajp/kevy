@@ -170,4 +170,45 @@ mod tests {
         assert_eq!(from_buf, frames);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Wherever the sink fills up, the record's write fails rather than
+    /// leaving a short record behind a success.
+    #[test]
+    fn a_frame_that_does_not_fit_its_sink_fails_to_write() {
+        let f = frame();
+        let mut whole = Vec::new();
+        write_aux(&mut whole, &f).unwrap();
+        // no room for the opcode, for the part count, for the first part
+        for room in [0, 1, 5] {
+            let mut buf = vec![0u8; room];
+            let err = write_aux(&mut buf.as_mut_slice(), &f).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::WriteZero, "room {room}");
+            assert_eq!(buf[..], whole[..room]);
+        }
+        // a snapshot whose frame outgrows its buffer meets the full sink there
+        let big = Argv::from(vec![vec![b'x'; crate::snapshot_fmt::SNAPSHOT_BUF_CAP + 1]]);
+        let (mut sink, empty) = ([0u8; 64], Store::new());
+        let src = WithAux::new(&empty, Some(&big));
+        let err = crate::write_snapshot_to(&src, sink.as_mut_slice()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+    }
+
+    /// After `OP_EOF`: another opcode is not a frame, a cut frame is an
+    /// error, and so is a read that fails for any reason but the end.
+    #[test]
+    fn what_follows_the_end_is_a_frame_nothing_or_an_error() {
+        assert_eq!(read_trailer(&mut &[0x42u8][..]).unwrap(), None);
+        assert_eq!(read_trailer(&mut &[][..]).unwrap(), None);
+        let cut_count = [OP_AUX, 1, 0];
+        let err = read_trailer(&mut &cut_count[..]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        let cut_part = [OP_AUX, 1, 0, 0, 0, 9, 0, 0, 0, b'x'];
+        let err = read_trailer(&mut &cut_part[..]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        // reading a directory fails with something other than the end
+        let dir = kevy_tmpdir::TmpDir::new("aux-trailer-dir");
+        let mut not_a_file = std::fs::File::open(dir.path()).unwrap();
+        let err = read_trailer(&mut not_a_file).unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::UnexpectedEof, "{err}");
+    }
 }
