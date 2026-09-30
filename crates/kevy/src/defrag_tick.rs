@@ -227,6 +227,19 @@ mod tests {
         assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&[7u8; 64][..]), "moving keeps the value");
     }
 
+    #[test]
+    fn a_lap_that_moved_something_starts_the_next_lap_from_nothing() {
+        PACE.with(|c| c.set(Pace { moved_this_lap: 5, ..Pace::default() }));
+        // one value: every step is a whole lap, and every lap moves it
+        let mut s = store_with_one_value();
+        s.set_defrag_hint(Some(|_, _, _| true));
+        run(&mut s, 64 << 20, 1 << 30);
+        let p = pace();
+        assert!(p.running, "a lap that moved something keeps the pass going");
+        assert_eq!(p.moved_this_lap, 0, "each finished lap starts its count over");
+        assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&[7u8; 64][..]));
+    }
+
     // with the feature on, lib tests run under the system allocator, where
     // the flag would hand shards a hint about memory kevy-alloc does not own
     #[cfg(not(feature = "kevy-alloc"))]
