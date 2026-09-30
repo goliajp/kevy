@@ -161,7 +161,9 @@ impl StageRing {
         let mut pos = h.drained;
         while let Some((start, len)) = self.record_at(pos, h.commit) {
             match run {
-                Some((s, l)) if s + l == start => run = Some((s, l + len)),
+                // a record at the front is contiguous only logically: the
+                // run before it ended at the end of the data area
+                Some((s, l)) if s + l == start && start % self.cap != 0 => run = Some((s, l + len)),
                 Some((s, l)) => {
                     each(self.logical(s, l));
                     run = Some((start, len));

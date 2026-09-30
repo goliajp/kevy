@@ -198,3 +198,57 @@ fn a_state_written_but_not_selected_is_not_the_head() {
     assert_eq!(found, head, "the half-written slot must not be read");
     assert_eq!((found.aof_len, found.drained), (140, head.commit));
 }
+
+// 64 records of 1 KiB fill the ring exactly, so the fifth record of the
+// second batch ends at the ring's end and the next one starts at the front
+#[test]
+fn a_record_ending_at_the_ring_end_does_not_run_into_the_next_one() {
+    let mut ring = StageRing::create(&temp_file("stage-exact-end"), CAP, 1, 9).unwrap();
+    let rec = |i: u8| record(&[i; 1016]);
+    for i in 0..60 {
+        assert!(push(&mut ring, &rec(i)));
+    }
+    let end = ring.for_each_pending(|_| {});
+    ring.mark_drained(end, 9, ring.head().log_id);
+    let second: Vec<Vec<u8>> = (60..68).map(rec).collect();
+    for r in &second {
+        assert!(push(&mut ring, r));
+    }
+    assert_eq!(ring.head().commit, CAP + 4 * 1024, "the fifth record starts at the front");
+    let mut runs = Vec::new();
+    ring.for_each_pending(|run| runs.push(run.to_vec()));
+    assert_eq!(runs, [second[..4].concat(), second[4..].concat()]);
+}
+
+// random record sizes across many laps, drained at random points, against a
+// queue of what was pushed; one push in four lands exactly on the ring end
+#[test]
+fn pending_runs_match_a_reference_queue_across_many_laps() {
+    let mut ring = StageRing::create(&temp_file("stage-laps"), CAP, 1, 9).unwrap();
+    let mut queue = std::collections::VecDeque::new();
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for step in 0..20_000u64 {
+        let to_end = CAP - ring.head().commit % CAP;
+        let len = match next() % 4 {
+            0 if (9..=4096).contains(&to_end) => to_end,
+            _ => 9 + next() % 3000,
+        };
+        let rec = record(&vec![step as u8; len as usize - 8]);
+        if next() % 8 == 0 || !push(&mut ring, &rec) {
+            let mut got = Vec::new();
+            let end = ring.for_each_pending(|run| got.extend_from_slice(run));
+            let want: Vec<u8> = queue.drain(..).flat_map(|r: Vec<u8>| r).collect();
+            assert_eq!(got, want, "step {step}");
+            ring.mark_drained(end, 9, ring.head().log_id);
+            continue;
+        }
+        queue.push_back(rec);
+    }
+    assert!(ring.head().commit > 100 * CAP, "the ring went round many times");
+}
