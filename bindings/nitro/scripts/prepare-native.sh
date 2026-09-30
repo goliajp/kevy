@@ -17,6 +17,8 @@ cd "$(dirname "$0")/.."
 # dual-door example app (clang: "redefinition of module 'Kevy'"). This
 # recipe used to live only in the door's wiring commit message — which is
 # exactly how the 5.0.0 regeneration re-tripped it.
+# ios/ holds nothing but the vendored engine, so a clean checkout has no such directory
+mkdir -p ios
 rm -rf ios/KevyEngine.xcframework
 cp -R ../apple/KevyKit/Artifacts/Kevy.xcframework ios/KevyEngine.xcframework
 find ios/KevyEngine.xcframework -name module.modulemap -delete
