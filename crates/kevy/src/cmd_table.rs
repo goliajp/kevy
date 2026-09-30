@@ -11,14 +11,16 @@
 //! IDX access paths (`<table>.<col>`, `<table>.<orderpath>`); the
 //! engine enforces no schema at query time and chooses no access path.
 
-use kevy_index::{Catalog, TableSpec, parse_table_declare_partitioned, spec_diff};
+use kevy_index::{
+    Catalog, GlobalPath, TableCatalog, TableSpec, parse_table_declare_partitioned, spec_diff,
+};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
 
 use crate::cmd_index_install::Sampler;
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK};
-use crate::state::{CatalogState, Ctx};
+use crate::state::{CatalogChange, CatalogState, Ctx};
 
 /// Rows the per-shard column spot check samples (bounded — VERIFY must
 /// not become a full-table sweep of the row payloads).
@@ -63,22 +65,68 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     if sampler.tier_blocked() {
         return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
     }
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    if let Err(e) = tcat.create(spec.clone()) {
-        return encode_error(out, &e.to_wire());
-    }
-    let mut icat: Catalog = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled = match spec.compile() {
-        Ok(c) => c,
-        Err(e) => return encode_error(out, &e.to_wire()),
-    };
     let n = ctx.state.nshards();
-    if let Err(e) = crate::cmd_table_global::admit(&mut icat, compiled, &globals, sampler, n) {
-        return encode_error(out, &e);
+    match change_tables(ctx, |t, i| declared_onto(t, i, &spec, &globals, sampler, n)) {
+        Ok(_) => out.extend_from_slice(b"+OK\r\n"),
+        Err(e) => encode_error(out, &e),
     }
-    ctx.state.install_index_catalog(icat);
-    ctx.state.install_table_catalog(tcat);
-    out.extend_from_slice(b"+OK\r\n");
+}
+
+/// Admit `spec` and the indexes it compiles into the table and index
+/// catalogs `tcat` and `icat`.
+fn declared_onto(
+    tcat: &mut TableCatalog,
+    icat: &mut Catalog,
+    spec: &TableSpec,
+    globals: &[GlobalPath],
+    sampler: &mut Sampler<'_>,
+    nshards: usize,
+) -> Result<bool, String> {
+    tcat.create(spec.clone()).map_err(|e| e.to_wire())?;
+    let compiled = spec.compile().map_err(|e| e.to_wire())?;
+    crate::cmd_table_global::admit(icat, compiled, globals, sampler, nshards)?;
+    Ok(true)
+}
+
+/// Drop table `name` and the indexes it compiled from `tcat` and `icat`;
+/// whether it was there.
+fn dropped_from(tcat: &mut TableCatalog, icat: &mut Catalog, name: &[u8]) -> bool {
+    let compiled: Vec<Vec<u8>> = tcat
+        .get(name)
+        .map(|s| {
+            s.compile()
+                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
+        })
+        .unwrap_or_default();
+    if !tcat.drop_table(name) {
+        return false;
+    }
+    for cname in &compiled {
+        icat.drop_index(cname);
+    }
+    true
+}
+
+/// Compute a table change with `f` from the catalogs as they stand and
+/// install it, again from the new catalogs whenever another change lands
+/// first. `Ok(false)` = `f` found nothing to change; `Err` = refused,
+/// nothing installed.
+fn change_tables(
+    ctx: &Ctx<'_>,
+    mut f: impl FnMut(&mut TableCatalog, &mut Catalog) -> Result<bool, String>,
+) -> Result<bool, String> {
+    loop {
+        let base = ctx.state.catalog_base();
+        let (mut tcat, mut icat) = (base.table_owned(), base.index_owned());
+        if !f(&mut tcat, &mut icat)? {
+            return Ok(false);
+        }
+        let change = CatalogChange { index: Some(icat), table: Some(tcat), view: None };
+        if ctx.state.commit_catalogs(&base, change) {
+            return Ok(true);
+        }
+    }
 }
 
 /// `TABLE.ENSURE …` — `TABLE.DECLARE`'s boot form (dogfood F8.2): the
@@ -129,42 +177,26 @@ pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare_partitioned(&argv) {
-        Ok((s, _)) => s,
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
+        Ok(s) => s,
         Err(e) => return encode_error(out, &e.to_wire()),
     };
     if let Err(e) = spec.compile() {
         return encode_error(out, &e.to_wire());
     }
-    let exists = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
-    if exists {
-        let mut scratch = Vec::new();
-        cmd_table_drop_by_name(ctx, &spec.name, &mut scratch);
+    if sampler.tier_blocked() {
+        return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
     }
-    cmd_table_declare(ctx, sampler, args, out);
-}
-
-/// The drop body, callable with a bare name (REPLACE's first half).
-fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled: Vec<Vec<u8>> = tcat
-        .get(name)
-        .map(|s| {
-            s.compile()
-                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
-                .unwrap_or_default() // catalog entries were admitted validated
-        })
-        .unwrap_or_default();
-    if tcat.drop_table(name) {
-        let mut icat: Catalog =
-            ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-        for cname in &compiled {
-            icat.drop_index(cname);
-        }
-        ctx.state.install_index_catalog(icat);
-        ctx.state.install_table_catalog(tcat);
+    // two installs, as the verb promises: the drop takes the old indexes
+    // away, so the declaration builds every one of them from the rows
+    let n = ctx.state.nshards();
+    let dropped = change_tables(ctx, |t, i| Ok(dropped_from(t, i, &spec.name)));
+    let replaced = dropped
+        .and_then(|_| change_tables(ctx, |t, i| declared_onto(t, i, &spec, &globals, sampler, n)));
+    match replaced {
+        Ok(_) => out.extend_from_slice(b"+OK\r\n"),
+        Err(e) => encode_error(out, &e),
     }
-    out.extend_from_slice(b"+OK\r\n");
 }
 
 /// `TABLE.DROP <name>` — drops the table AND its compiled indexes.
@@ -172,26 +204,8 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     if args.len() != 2 {
         return encode_error(out, "ERR usage: TABLE.DROP name");
     }
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled: Vec<Vec<u8>> = tcat
-        .get(&args[1])
-        .map(|s| {
-            s.compile()
-                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
-                .unwrap_or_default() // catalog entries were admitted validated
-        })
-        .unwrap_or_default();
-    let hit = tcat.drop_table(&args[1]);
-    if hit {
-        let mut icat: Catalog =
-            ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-        for name in &compiled {
-            icat.drop_index(name);
-        }
-        ctx.state.install_index_catalog(icat);
-        ctx.state.install_table_catalog(tcat);
-    }
-    encode_integer(out, i64::from(hit));
+    let hit = change_tables(ctx, |t, i| Ok(dropped_from(t, i, &args[1])));
+    encode_integer(out, i64::from(hit == Ok(true)));
 }
 
 // ---------- extension fan-out (LIST / VERIFY) ----------
