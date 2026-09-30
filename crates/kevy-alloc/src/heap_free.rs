@@ -15,24 +15,22 @@ use super::Heap;
 impl Heap {
     /// The claims-first free: when the pointer lands in the class's
     /// claimed word, recycle the bit without reading the segment header
-    /// at all. The match itself proves ownership — a claim only ever
-    /// covers this heap's own spans, and equal segment addresses mean
-    /// the same segment — so the owner check would confirm what the
-    /// compare already did. 99.86 % of collection-write frees take
+    /// at all. The match itself proves ownership — a claim's range is a
+    /// piece of one of this heap's own spans — so the owner check would
+    /// confirm what the compare already did. One unsigned compare
+    /// against the range replaces matching segment, span and word, and
+    /// because the range stops at the span's end the offset is one the
+    /// reciprocal divides exactly. 99.86 % of collection-write frees take
     /// this path (branch-rate probe, hset storm), and the header read
     /// was the fast path's single foreign cache line.
     #[inline]
-    fn try_free_claimed(&mut self, seg: NonNull<Segment>, ptr: NonNull<u8>, c: usize) -> bool {
+    fn try_free_claimed(&mut self, ptr: NonNull<u8>, c: usize) -> bool {
         let Some(cl) = &mut self.claims[c] else { return false };
-        if cl.seg != seg {
+        let off = (ptr.as_ptr() as usize).wrapping_sub(cl.lo as usize);
+        if off >= cl.len {
             return false;
         }
-        let ix = segment::span_index_of(ptr);
-        let slot = segment::slot_index_of(ptr, c);
-        if usize::from(cl.span_ix) != ix || slot / 64 != u32::from(cl.word) {
-            return false;
-        }
-        let bit = 1u64 << (slot % 64);
+        let bit = 1u64 << class::slot_of_offset(off, c);
         if cl.taken & bit == 0 {
             return false;
         }
@@ -42,20 +40,36 @@ impl Heap {
 
     /// # Safety
     /// See [`Heap::dealloc`].
-    pub(super) unsafe fn dealloc_small(&mut self, ptr: NonNull<u8>, c: usize, size: usize) {
-        // SAFETY: a small allocation always lies inside a segment.
-        let seg = unsafe { segment::segment_of(ptr) };
-        if self.try_free_claimed(seg, ptr, c) {
+    #[inline]
+    pub(crate) unsafe fn dealloc_small(&mut self, ptr: NonNull<u8>, c: usize, size: usize) {
+        if self.try_free_claimed(ptr, c) {
             self.live_bytes -= size as u64;
-            self.rounding_bytes -= (class::size_of(c) - size) as u64;
             return;
         }
+        // SAFETY: a small allocation always lies inside a segment.
+        let seg = unsafe { segment::segment_of(ptr) };
+        // SAFETY: same contract, passed through.
+        unsafe { self.dealloc_unclaimed(seg, ptr, c, size) };
+    }
+
+    /// A small free that missed the claimed word: back to its span, or
+    /// out to its owner. Out of line so the claimed-word hit stays small.
+    ///
+    /// # Safety
+    /// See [`Heap::dealloc`]; `seg` is `ptr`'s segment.
+    #[inline(never)]
+    unsafe fn dealloc_unclaimed(
+        &mut self,
+        seg: NonNull<Segment>,
+        ptr: NonNull<u8>,
+        c: usize,
+        size: usize,
+    ) {
         // SAFETY: the mask lands on a live header for our own pointers.
         let seg_ref = unsafe { seg.as_ref() };
         debug_assert!(seg_ref.is_valid(), "pointer did not come from kevy-alloc");
         if seg_ref.owner == self.id {
             self.live_bytes -= size as u64;
-            self.rounding_bytes -= (class::size_of(c) - size) as u64;
             // SAFETY: our own segment; exclusive access.
             unsafe { self.free_local(seg, ptr, c) };
         } else {
@@ -107,7 +121,6 @@ impl Heap {
                     live += requested;
                     bytes += class::size_of(c);
                     self.live_bytes -= requested as u64;
-                    self.rounding_bytes -= (class::size_of(c) - requested) as u64;
                     // SAFETY: our segment, exclusive access here.
                     unsafe { self.free_local(NonNull::new_unchecked(seg), p, c) };
                 }
