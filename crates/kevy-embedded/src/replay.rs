@@ -26,34 +26,12 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     apply_view(store, args);
 }
 
-/// Apply one logged frame to `store`, as the argv shape the dispatcher
-/// runs the command layer with.
-///
-/// The command layer is generic over the argv type, so a replay that
-/// hands it a `kevy_resp::Argv` beside a dispatcher that hands it
-/// `&[Vec<u8>]` links every command twice: about 50 KB of a browser
-/// module that is shipped over the wire. There the frame is copied into
-/// a buffer whose vectors are kept between frames, and one instance
-/// serves both paths. Native builds keep the zero-copy call.
+/// Apply one logged frame to `store`, as the argv type the dispatcher
+/// runs the command layer with (see `dispatch::args`). Reads and unknown
+/// verbs are skipped.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn apply(store: &mut Store, args: &Argv) {
-    thread_local! {
-        static OWNED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
-    }
-    OWNED.with(|o| {
-        let mut owned = o.borrow_mut();
-        owned.truncate(args.len());
-        for (i, arg) in args.iter().enumerate() {
-            match owned.get_mut(i) {
-                Some(slot) => {
-                    slot.clear();
-                    slot.extend_from_slice(arg);
-                }
-                None => owned.push(arg.to_vec()),
-            }
-        }
-        apply_view(store, &crate::dispatch::Args(&owned));
-    });
+    apply_view(store, &crate::dispatch::Args::Frame(args));
 }
 
 fn apply_view<A: kevy_resp::ArgvView + ?Sized>(store: &mut Store, args: &A) {
