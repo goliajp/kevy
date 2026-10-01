@@ -37,6 +37,23 @@ command -v cargo-llvm-cov >/dev/null 2>&1 || {
     exit 2
 }
 
+# A test target that was renamed or deleted leaves its instrumented
+# executable in the coverage target dir, and `cargo llvm-cov` counts every
+# executable there: on the bench box that read 67.9% against CI's 79.6%.
+# Remove the executables no current test or library target accounts for.
+python3 - "$(cd "$HERE/.." && pwd)" <<'PY'
+import json, os, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+meta = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                                 cwd=root, capture_output=True, text=True, check=True).stdout)
+names = {t["name"].replace("-", "_") for p in meta["packages"] for t in p["targets"]}
+for deps in (root / "target" / "llvm-cov-target").glob("*/deps"):
+    for f in deps.iterdir():
+        stem, _, tail = f.name.rpartition("-")
+        if f.is_file() and os.access(f, os.X_OK) and not f.suffix and stem and stem not in names:
+            f.unlink()
+PY
+
 echo "covgate: measuring workspace line coverage (instrumented build + tests)..."
 COVJSON=$(mktemp)
 # --output-path keeps the JSON pure: runners interleave rustup/cargo
