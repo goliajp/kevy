@@ -68,12 +68,7 @@ impl<C: Commands> Shard<C> {
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot {
-                remaining: 1,
-                agg: Agg::First(None),
-                done: None,
-                proto,
-            });
+            c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
         }
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
     }
@@ -245,7 +240,12 @@ impl<C: Commands> Shard<C> {
     ) {
         if let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
+            c.pending.push_back(PendingSlot {
+                remaining,
+                agg: crate::message_agg::slot_agg(agg),
+                done: None,
+                proto,
+            });
         }
         if is_quit {
             self.mark_closing(conn_id);
