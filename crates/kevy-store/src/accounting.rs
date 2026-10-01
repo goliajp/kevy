@@ -159,7 +159,13 @@ impl Store {
     /// metadata line is hot. No-op when the table is empty. Cheap when not.
     #[inline]
     pub fn prefetch_for_key(&self, key: &[u8]) {
-        let hash = key.kevy_hash();
+        self.prefetch_for_hash(key.kevy_hash());
+    }
+
+    /// [`Store::prefetch_for_key`] for a key whose hash (`kevy_hash`) the
+    /// caller already has.
+    #[inline]
+    pub fn prefetch_for_hash(&self, hash: u64) {
         self.map.prefetch_for_hash(hash);
     }
 

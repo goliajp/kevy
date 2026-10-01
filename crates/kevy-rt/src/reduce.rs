@@ -448,20 +448,33 @@ pub(crate) fn drain_front(conn: &mut Conn) {
 /// ```
 #[inline]
 pub fn shard_of(key: &[u8], n: usize, routing: Routing) -> usize {
+    route_of(key, n, routing).0
+}
+
+/// [`shard_of`], with the key's keyspace hash when routing computed it:
+/// an untagged key under [`Routing::KevyHash`] routes by the very hash its
+/// shard's map files it under.
+#[inline]
+pub(crate) fn route_of(key: &[u8], n: usize, routing: Routing) -> (usize, Option<u64>) {
     if n == 1 {
-        return 0;
+        return (0, None);
     }
     if matches!(routing, Routing::Slots) {
-        return slot_to_shard(kevy_hash::key_hash_slot(key), n);
+        return (slot_to_shard(kevy_hash::key_hash_slot(key), n), None);
     }
     // Respect `{hashtag}` even in non-cluster mode so EVAL
     // scripts can colocate keys via the standard `{tag}:k1` /
     // `{tag}:k2` pattern (matches Redis Cluster semantics). Keys
     // WITHOUT `{...}` hash whole-key — byte-identical to the
     // pre-hashtag routing, so no migration for existing keyspaces.
-    let hash_input = kevy_hash::hashtag(key).unwrap_or(key);
-    let h = hash_input.kevy_hash();
-    if n.is_power_of_two() { (h as usize) & (n - 1) } else { (h as usize) % n }
+    let (h, whole) = match kevy_hash::hashtag(key) {
+        Some(tag) => (tag.kevy_hash(), None),
+        None => {
+            let h = key.kevy_hash();
+            (h, Some(h))
+        }
+    };
+    (if n.is_power_of_two() { (h as usize) & (n - 1) } else { (h as usize) % n }, whole)
 }
 
 /// Owner shard of a cluster `slot` under the contiguous even split: shard `i`
