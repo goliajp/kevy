@@ -459,26 +459,9 @@ pub fn shard_of(key: &[u8], n: usize, routing: Routing) -> usize {
     // `{tag}:k2` pattern (matches Redis Cluster semantics). Keys
     // WITHOUT `{...}` hash whole-key — byte-identical to the
     // pre-hashtag routing, so no migration for existing keyspaces.
-    let hash_input = hashtag(key).unwrap_or(key);
+    let hash_input = kevy_hash::hashtag(key).unwrap_or(key);
     let h = hash_input.kevy_hash();
     if n.is_power_of_two() { (h as usize) & (n - 1) } else { (h as usize) % n }
-}
-
-/// Extract the `{...}` hashtag from `key` per Redis Cluster spec:
-/// the bytes between the FIRST `{` and the FIRST subsequent `}`. An
-/// empty `{}` (immediately closed) does NOT count — returns `None`
-/// so the caller falls back to whole-key hashing. Matches
-/// `kevy_hash::hashtag` shape exactly (kept inline here so the
-/// non-cluster fast path stays one crate-local call).
-#[inline]
-fn hashtag(key: &[u8]) -> Option<&[u8]> {
-    let start = key.iter().position(|&b| b == b'{')?;
-    let after = &key[start + 1..];
-    let len = after.iter().position(|&b| b == b'}')?;
-    if len == 0 {
-        return None;
-    }
-    Some(&after[..len])
 }
 
 /// Owner shard of a cluster `slot` under the contiguous even split: shard `i`
