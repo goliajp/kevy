@@ -51,7 +51,9 @@ impl<C: Commands> Shard<C> {
             match parse_command_borrowed(&buf[off..]) {
                 Ok(Some((argv, consumed))) => {
                     if let Some(key) = argv.get(1) {
-                        if self.nshards == 1 {
+                        // slot routing hashes for the slot, not the bucket,
+                        // so routing first would only delay the prefetch
+                        if self.nshards == 1 || self.cluster.is_some() {
                             self.store.prefetch_for_key(key);
                         } else {
                             self.route_hint = Some(self.prefetch_local(key));
