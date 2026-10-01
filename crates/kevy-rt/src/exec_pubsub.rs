@@ -4,7 +4,7 @@
 //! `impl<C: Commands> Shard<C>`.
 
 use crate::Commands;
-use crate::message::{Agg, Inbound, Part, PendingSlot};
+use crate::message::{Inbound, Part, PendingSlot};
 use crate::reduce::{pubsub_message, pubsub_message_header};
 use crate::shard::Shard;
 use kevy_resp::{
@@ -70,7 +70,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
-                agg: Agg::First(None),
+                agg: None,
                 done: None,
                 proto: c.proto,
             });
@@ -198,7 +198,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
-                agg: Agg::First(None),
+                agg: None,
                 done: None,
                 proto: c.proto,
             });
@@ -357,7 +357,7 @@ impl<C: Commands> Shard<C> {
             c.proto = new_proto;
             c.pending.push_back(PendingSlot {
                 remaining: 1,
-                agg: Agg::First(None),
+                agg: None,
                 done: None,
                 proto: c.proto,
             });
