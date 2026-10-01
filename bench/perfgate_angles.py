@@ -66,6 +66,8 @@ CALLGRIND = {
 }
 # angles whose single request costs far more than a GET count fewer
 CALLGRIND_OPS = {"zinterstore": 5_000}
+# connections per angle (default 4); KEVY_CG_CONNS overrides, for experiments
+CALLGRIND_CONNS = {}
 
 
 def crc16(data):
