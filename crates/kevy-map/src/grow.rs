@@ -49,22 +49,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             if self.mmap_backed && (i * slot_bytes) - released >= RELEASE_STEP {
                 released = self.release_moved(released, i * slot_bytes);
             }
-            // SAFETY: i < old_cap ⇒ metadata in-bounds.
-            let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
-            if meta & 0x80 == 0 {
-                // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
-                // so this byte is never re-read as occupied.
-                let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
-                // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
-                // immediately is what keeps the `ptr::read` above from being a double move:
-                // the byte is never seen as occupied again.
-                unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
-                let hash = k.kevy_hash();
-                let to = new_table.insert_known_unique(hash, k, v);
-                if let (Some(old), Some(new)) = (&self.aux, &mut new_table.aux) {
-                    new[to] = old[i];
-                }
-            }
+            self.move_slot(i, &mut new_table);
         }
         // All occupied entries are now in new_table; the old self has no live slots.
         self.occupied = 0;
@@ -72,6 +57,28 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         core::mem::swap(self, &mut new_table);
         // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
         // for previously-empty slots) ⇒ Drop walks but touches no slots.
+    }
+
+    /// Move the entry at slot `i`, if any, and its side word into `to`.
+    #[inline]
+    fn move_slot(&mut self, i: usize, to: &mut Self) {
+        // SAFETY: i < cap ⇒ metadata in-bounds.
+        let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
+        if meta & 0x80 != 0 {
+            return;
+        }
+        // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
+        // so this byte is never re-read as occupied.
+        let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
+        // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
+        // immediately is what keeps the `ptr::read` above from being a double move:
+        // the byte is never seen as occupied again.
+        unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
+        let hash = k.kevy_hash();
+        let at = to.insert_known_unique(hash, k, v);
+        if let (Some(old), Some(new)) = (&self.aux, &mut to.aux) {
+            new[at] = old[i];
+        }
     }
 
     /// Hand back the huge pages of slot bytes `[released, moved)` rounded

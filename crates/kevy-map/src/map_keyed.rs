@@ -64,13 +64,31 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// assert_eq!(m.get(b"k".as_slice()), Some(&2));
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert_slot(key, value).1
+    }
+
+    /// [`Self::insert`], also answering which slot the entry now holds — for
+    /// a caller that keeps a side word ([`Self::enable_aux`]) for the entry.
+    /// An overwrite keeps the slot and its word; a new key's word is zero.
+    ///
+    /// ```
+    /// let mut m = kevy_map::KevyMap::new();
+    /// m.enable_aux();
+    /// let (slot, old) = m.insert_slot(5u64, "five");
+    /// assert_eq!((old, m.aux(slot)), (None, Some(0)));
+    /// *m.aux_mut(slot).unwrap() = 9;
+    /// let (again, old) = m.insert_slot(5, "FIVE");
+    /// assert_eq!((again, old, m.aux(again)), (slot, Some("five"), Some(9)));
+    /// ```
+    #[inline]
+    pub fn insert_slot(&mut self, key: K, value: V) -> (usize, Option<V>) {
         self.maybe_grow();
         self.insert_with_room(key, value)
     }
 
-    /// [`Self::insert`] after the growth check, which the caller has made.
+    /// [`Self::insert_slot`] after the growth check, which the caller has made.
     #[inline]
-    pub(crate) fn insert_with_room(&mut self, key: K, value: V) -> Option<V> {
+    pub(crate) fn insert_with_room(&mut self, key: K, value: V) -> (usize, Option<V>) {
         let hash = key.kevy_hash();
         match self.probe_with_key(hash, &key) {
             ProbeOutcome::Found(idx) => {
@@ -84,7 +102,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // is a valid `V` to move out and the new one is written in its place.
                 let old_v = unsafe { ptr::replace(v_ptr, value) };
                 drop(key);
-                Some(old_v)
+                (idx, Some(old_v))
             }
             ProbeOutcome::NotFound { insert_at, via_tombstone } => {
                 self.set_meta(insert_at, h2(hash));
@@ -98,7 +116,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 if via_tombstone {
                     self.deleted -= 1;
                 }
-                None
+                (insert_at, None)
             }
         }
     }
