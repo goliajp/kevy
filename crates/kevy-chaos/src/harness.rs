@@ -311,7 +311,17 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        // Best-effort cleanup on test panic / abnormal exit.
+        // a test that panics while this server is up says what the server
+        // was doing: still running or exited, and what it last wrote
+        if std::thread::panicking() {
+            let state = match self.child.as_mut().map(std::process::Child::try_wait) {
+                Some(Ok(None)) => "running".to_owned(),
+                Some(Ok(Some(status))) => format!("exited ({status})"),
+                Some(Err(e)) => format!("unknown ({e})"),
+                None => "stopped by the test".to_owned(),
+            };
+            eprintln!("kevy on port {}: {state}; {}", self.config.port, self.stderr_tail());
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
