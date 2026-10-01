@@ -102,6 +102,9 @@ dependencies = [
 [[package]]
 name = "kevy-madvise"
 version = "7.0.0"
+dependencies = [
+ "kevy-sys",
+]
 
 [[package]]
 name = "kevy-map"

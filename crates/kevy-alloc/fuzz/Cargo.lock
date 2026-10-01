@@ -56,6 +56,9 @@ dependencies = [
 [[package]]
 name = "kevy-alloc"
 version = "7.0.0"
+dependencies = [
+ "kevy-sys",
+]
 
 [[package]]
 name = "kevy-alloc-fuzz"
@@ -64,6 +67,10 @@ dependencies = [
  "kevy-alloc",
  "libfuzzer-sys",
 ]
+
+[[package]]
+name = "kevy-sys"
+version = "7.0.0"
 
 [[package]]
 name = "libc"
