@@ -123,12 +123,12 @@ impl Store {
         // hand-off in phase 2 happens AFTER `self.live_entry_mut`'s
         // borrow on `self.map` is released — without splitting the
         // borrow we couldn't call `self.maybe_offload_drop`.
-        let (outcome, old_value) = match self.live_entry_mut(key) {
-            Some(e) => {
+        let (outcome, old_value) = match self.live_entry_word_mut(key) {
+            Some((e, word)) => {
                 if cond == SetCondition::IfAbsent {
                     return false;
                 }
-                let (delta, ttl_delta, old) = overwrite_in_place(e, new_value, expire_at, key_heap);
+                let (delta, ttl_delta, old) = overwrite_in_place(e, word, new_value, expire_at);
                 (Ok((delta, ttl_delta)), Some(old))
             }
             None => {
@@ -235,9 +235,10 @@ impl Store {
                 // is_expired+remove path.
                 let expired = occ.get().is_expired(uc, cn);
                 if expired {
+                    let word = occ.aux();
                     let old = occ.remove();
                     // borrow on self.map released by remove(self).
-                    self.note_expired_removed(&old);
+                    self.note_expired_removed(&old, word, key_heap);
                     if cond == SetCondition::IfPresent {
                         return SetOutcome::Refused { drop_first: Some(old.value) };
                     }
@@ -250,12 +251,9 @@ impl Store {
                     // so phase 2 can hand it to the bio thread instead
                     // of dropping inline (a large-value latency-tail
                     // amplifier).
-                    let (delta, ttl_delta, old) = overwrite_in_place(
-                        occ.get_mut(),
-                        take_new_value(value_slot),
-                        expire_at,
-                        key_heap,
-                    );
+                    let (e, word) = occ.get_mut_with_aux();
+                    let (delta, ttl_delta, old) =
+                        overwrite_in_place(e, word, take_new_value(value_slot), expire_at);
                     SetOutcome::Updated { delta, ttl_delta, old }
                 }
             }
@@ -272,8 +270,9 @@ impl Store {
     /// expired: subtract its weight, decrement the TTL gauge, bump the
     /// expired counter.
     #[inline]
-    fn note_expired_removed(&mut self, old: &Entry) {
-        self.used_memory = self.used_memory.saturating_sub(old.weight());
+    fn note_expired_removed(&mut self, old: &Entry, word: Option<u64>, key_heap: u64) {
+        let w = key_heap + crate::entry_weight::value_weight(&old.value, word);
+        self.used_memory = self.used_memory.saturating_sub(w);
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }
@@ -310,16 +309,20 @@ enum SetOutcome {
 #[inline]
 fn overwrite_in_place(
     e: &mut Entry,
+    word: Option<&mut u64>,
     new_value: Value,
     expire_at: Option<u64>,
-    key_heap: u64,
 ) -> (i64, i64, Value) {
+    use crate::entry_weight::{kept, stamp, value_weight};
     let had_ttl = e.expire_at_ns.is_some();
+    let old_vw = value_weight(&e.value, word.as_deref().copied());
     let old = core::mem::replace(&mut e.value, new_value);
     e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
-    let new_w = key_heap + e.value.weight();
-    let delta = new_w as i64 - e.weight() as i64;
+    let new_vw = e.value.weight();
+    if let Some(word) = word {
+        stamp(word, kept(&e.value), new_vw);
+    }
+    let delta = new_vw as i64 - old_vw as i64;
     let ttl_delta = i64::from(e.expire_at_ns.is_some()) - i64::from(had_ttl);
-    e.set_weight(new_w);
     (delta, ttl_delta, old)
 }

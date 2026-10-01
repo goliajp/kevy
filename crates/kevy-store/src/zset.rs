@@ -5,7 +5,7 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
-use crate::value::{SmallBytes, Value, ZSetData, zset_member_weight};
+use crate::value::{SmallBytes, Value, ZSetData};
 use crate::zset_seg::{SegZSetData, Z_PROMOTE};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
@@ -119,7 +119,7 @@ impl Store {
                     added += 1;
                     delta += w;
                 }
-                ZaddOutcome::UpdatedHeap => {}
+                ZaddOutcome::UpdatedHeap(w) => delta += w,
             }
         }
         self.account_delta(key, delta);
@@ -160,22 +160,24 @@ impl Store {
             let mut d: i64 = 0;
             if let Some(e) = self.live_entry_mut(key) {
                 match &mut e.value {
+                    // the member table does not shrink: a member takes its
+                    // rank-tree slot and its heap
                     Value::ZSet(z) => {
                         // G-A3: hoist Arc::make_mut OUT of loop.
                         let z = Arc::make_mut(z);
                         for m in members {
                             if z.remove(m) {
                                 r += 1;
-                                d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
+                                d -= member_weight(m);
                             }
                         }
                     }
                     Value::SegZSet(z) => {
                         let z = Arc::make_mut(z);
                         for m in members {
-                            if z.remove(m) {
+                            if let Some(shell) = z.remove_weighed(m) {
                                 r += 1;
-                                d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
+                                d += shell - member_weight(m);
                             }
                         }
                     }
@@ -223,10 +225,8 @@ impl Store {
         let mut z = self.zset_mut(key, true)?.expect("created");
         let cur = z.score_of(member).unwrap_or(0.0);
         let next = cur + incr;
-        let smb = SmallBytes::from_slice(member);
-        let is_new = !z.contains_member(member);
-        z.insert(member, next);
-        let d = if is_new { zset_member_weight(&smb) as i64 } else { 0 };
+        let (is_new, grown) = z.insert_weighed(member, next);
+        let d = grown + if is_new { member_weight(member) } else { 0 };
         self.account_delta(key, d);
         Ok(next)
     }
@@ -252,28 +252,10 @@ impl Store {
                 let is_new = promote_flat_zset_and_add(v, m, score);
                 self.reweigh_entry(key);
                 // Reweighed from scratch — swallow the per-member delta.
-                if is_new { Ok(ZaddOutcome::AddedHeap(0)) } else { Ok(ZaddOutcome::UpdatedHeap) }
+                if is_new { Ok(ZaddOutcome::AddedHeap(0)) } else { Ok(ZaddOutcome::UpdatedHeap(0)) }
             }
-            Value::ZSet(z) => {
-                let z = Arc::make_mut(z);
-                let smb = SmallBytes::from_slice(m);
-                let w = zset_member_weight(&smb) as i64;
-                if z.insert(m, score) {
-                    Ok(ZaddOutcome::AddedHeap(w))
-                } else {
-                    Ok(ZaddOutcome::UpdatedHeap)
-                }
-            }
-            Value::SegZSet(z) => {
-                let z = Arc::make_mut(z);
-                let smb = SmallBytes::from_slice(m);
-                let w = zset_member_weight(&smb) as i64;
-                if z.insert(m, score) {
-                    Ok(ZaddOutcome::AddedHeap(w))
-                } else {
-                    Ok(ZaddOutcome::UpdatedHeap)
-                }
-            }
+            Value::ZSet(z) => Ok(added(flat_insert_weighed(Arc::make_mut(z), m, score), m)),
+            Value::SegZSet(z) => Ok(added(Arc::make_mut(z).insert_weighed(m, score), m)),
             _ => Err(StoreError::WrongType),
         }
     }
@@ -303,12 +285,10 @@ impl Store {
 fn promote_inline_zset_and_add(v: &mut Value, m: &[u8], score: f64) -> ZaddOutcome {
     let Value::SmallZSetInline(z) = v else { unreachable!("matched inline") };
     let mut promoted = small_zset::promote(z);
-    let smb = SmallBytes::from_slice(m);
-    let is_new = !promoted.by_member.contains_key(m);
-    let w = zset_member_weight(&smb) as i64;
-    promoted.insert(m, score);
+    let is_new = promoted.insert(m, score);
     *v = Value::ZSet(Arc::new(promoted));
-    if is_new { ZaddOutcome::AddedHeap(w) } else { ZaddOutcome::UpdatedHeap }
+    // the caller reweighs from scratch, which counts the member
+    if is_new { ZaddOutcome::AddedHeap(0) } else { ZaddOutcome::UpdatedHeap(0) }
 }
 
 /// Flat zset at the threshold: segment, then set. One-time
@@ -336,23 +316,45 @@ impl ZRefMut<'_> {
             Self::Seg(z) => z.score_of(member),
         }
     }
-    fn contains_member(&self, member: &[u8]) -> bool {
+    /// Insert or update; whether the member was new, and by how many
+    /// bytes the structure around the members moved.
+    fn insert_weighed(&mut self, member: &[u8], score: f64) -> (bool, i64) {
         match self {
-            Self::Flat(z) => z.by_member.contains_key(member),
-            Self::Seg(z) => z.contains_member(member),
+            Self::Flat(z) => flat_insert_weighed(z, member, score),
+            Self::Seg(z) => z.insert_weighed(member, score),
         }
     }
-    fn insert(&mut self, member: &[u8], score: f64) -> bool {
-        match self {
-            Self::Flat(z) => z.insert(member, score),
-            Self::Seg(z) => z.insert(member, score),
-        }
+}
+
+/// [`ZSetData::insert`], also answering by how many bytes its member table
+/// grew (the rank tree is charged per member, in [`member_weight`]).
+fn flat_insert_weighed(z: &mut ZSetData, member: &[u8], score: f64) -> (bool, i64) {
+    let before = z.by_member.footprint();
+    let is_new = z.insert(member, score);
+    (is_new, z.by_member.footprint() as i64 - before as i64)
+}
+
+/// What a member adds to a zset besides the structure's growth: its
+/// rank-tree slot, and its heap held twice (member table and rank tree).
+fn member_weight(m: &[u8]) -> i64 {
+    let heap = kevy_map::malloc_footprint(SmallBytes::heap_bytes_for(m)) as u64;
+    (2 * heap + crate::value::RANKTREE_SLOT_BYTES) as i64
+}
+
+/// A ZADD verdict from an insert into a heap encoding.
+fn added((is_new, grown): (bool, i64), m: &[u8]) -> ZaddOutcome {
+    if is_new {
+        ZaddOutcome::AddedHeap(member_weight(m) + grown)
+    } else {
+        ZaddOutcome::UpdatedHeap(grown)
     }
 }
 
 enum ZaddOutcome {
     AddedInline,
     UpdatedInline,
+    /// What the new member and any growth it caused added.
     AddedHeap(i64),
-    UpdatedHeap,
+    /// What an update moved the structure by (a segment split or retired).
+    UpdatedHeap(i64),
 }

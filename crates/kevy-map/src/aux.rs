@@ -15,12 +15,20 @@ use alloc_crate::vec;
 use crate::map::KevyMap;
 
 /// A zeroed lane for `cap` slots.
-pub(crate) fn lane(cap: usize) -> Box<[u64]> {
-    vec![0u64; cap].into_boxed_slice()
+pub(crate) fn lane(cap: usize) -> Box<Box<[u64]>> {
+    Box::new(vec![0u64; cap].into_boxed_slice())
 }
 
 impl<K, V> KevyMap<K, V> {
+    /// `cap - 1`, the probe's wraparound mask (`cap` is zero or a power of
+    /// two; every probe returns early on an empty table).
+    #[inline(always)]
+    pub(crate) fn mask(&self) -> usize {
+        self.cap.wrapping_sub(1)
+    }
+
     /// Keep a side word per slot from now on; a no-op when already kept.
+    /// Whether this call allocated the lane (so [`Self::footprint`] grew).
     ///
     /// ```
     /// let mut m: kevy_map::KevyMap<u64, &str> = kevy_map::KevyMap::new();
@@ -35,10 +43,12 @@ impl<K, V> KevyMap<K, V> {
     /// // the word moved with its entry when the table grew
     /// assert_eq!(m.aux(m.find_slot(&7).unwrap()), Some(42));
     /// ```
-    pub fn enable_aux(&mut self) {
-        if self.aux.is_none() {
-            self.aux = Some(lane(self.cap));
+    pub fn enable_aux(&mut self) -> bool {
+        if self.aux.is_some() {
+            return false;
         }
+        self.aux = Some(lane(self.cap));
+        true
     }
 
     /// The side word of the entry at `slot`; `None` when the slot is empty
@@ -80,11 +90,20 @@ impl<K, V> KevyMap<K, V> {
         }
     }
 
-    /// The side lane's bytes, as the allocator holds them.
+    /// The side lane's bytes, as the allocator holds them: the words, and
+    /// the box holding the pointer to them.
     pub(crate) fn aux_footprint(&self) -> usize {
-        match &self.aux {
-            Some(lane) if !lane.is_empty() => crate::malloc_footprint(lane.len() * 8),
-            _ => 0,
-        }
+        self.aux.as_ref().map_or(0, |lane| lane_footprint(lane.len()))
     }
 }
+
+/// What a lane of `cap` words holds at the allocator.
+pub(crate) fn lane_footprint(cap: usize) -> usize {
+    let words = if cap == 0 { 0 } else { crate::malloc_footprint(cap * 8) };
+    crate::malloc_footprint(core::mem::size_of::<Box<[u64]>>()) + words
+}
+
+// A map is 56 bytes, and every hash, set and sorted set holds one: a field
+// added here is paid once per collection.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<KevyMap<u64, u64>>() == 56);

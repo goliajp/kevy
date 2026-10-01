@@ -185,12 +185,13 @@ impl Store {
             }
             Value::List(l) => {
                 let l = Arc::make_mut(l);
+                let cap = l.capacity();
                 if front {
                     l.push_front(v.to_vec())
                 } else {
                     l.push_back(v.to_vec())
                 }
-                return Ok(list_item_weight(v.len()) as i64);
+                return Ok(flat_delta(l, cap, v.len() as i64));
             }
             Value::SegList(l) => {
                 let l = Arc::make_mut(l);
@@ -257,16 +258,18 @@ impl Store {
                     }
                 }
             } else if let Some(l) = self.list_mut(key, false)? {
+                let cap = l.capacity();
                 for _ in 0..count {
                     let popped = if front { l.pop_front() } else { l.pop_back() };
                     match popped {
                         Some(v) => {
-                            d -= list_item_weight(v.len()) as i64;
+                            d -= v.capacity() as i64;
                             o.push(v);
                         }
                         None => break,
                     }
                 }
+                d = flat_delta(l, cap, d);
             }
             (o, d)
         };
@@ -312,9 +315,9 @@ impl Store {
         } else {
             let l = self.list_mut(key, false)?.ok_or(StoreError::NoSuchKey)?;
             let i = norm_index(idx, l.len()).ok_or(StoreError::OutOfRange)?;
-            let old_len = l[i].len() as i64;
+            let old = l[i].capacity() as i64;
             l[i] = val.to_vec();
-            val.len() as i64 - old_len
+            val.len() as i64 - old
         };
         self.account_delta(key, delta);
         Ok(())
@@ -356,8 +359,9 @@ impl Store {
                         return Ok(-1);
                     };
                     let insert_at = beside(idx);
+                    let cap = l.capacity();
                     l.insert(insert_at, val.to_vec());
-                    (l.len() as i64, list_item_weight(val.len()) as i64)
+                    (l.len() as i64, flat_delta(l, cap, val.len() as i64))
                 }
             }
         };
@@ -392,19 +396,20 @@ impl Store {
             }
         } else if let Some(l) = self.list_mut(key, false)? {
             match range_bounds(start, stop, l.len()) {
+                // removing items keeps the deque's slots: only the items' bytes go
                 None => {
-                    let d = -(l.iter().map(|v| list_item_weight(v.len()) as i64).sum::<i64>());
+                    let d = -(l.iter().map(|v| v.capacity() as i64).sum::<i64>());
                     l.clear();
                     d
                 }
                 Some((s, e)) => {
                     let mut d: i64 = 0;
                     for v in l.iter().skip(e + 1) {
-                        d -= list_item_weight(v.len()) as i64;
+                        d -= v.capacity() as i64;
                     }
                     l.drain(e + 1..);
                     for v in l.iter().take(s) {
-                        d -= list_item_weight(v.len()) as i64;
+                        d -= v.capacity() as i64;
                     }
                     l.drain(..s);
                     d
@@ -438,6 +443,13 @@ fn promote_flat_to_seg(slot: &mut Value, v: &[u8], front: bool) {
 
 /// The flat-list LREM walk (unchanged semantics; hoisted out of the
 /// method so the seg/flat dispatch stays within the fn-LOC cap).
+/// A flat list's weight change: `bytes` of items in or out, plus its
+/// deque's slots, which follow its capacity (they stay allocated as items
+/// leave, and grow in steps as items arrive).
+fn flat_delta(l: &ListData, cap_before: usize, bytes: i64) -> i64 {
+    (l.capacity() as i64 - cap_before as i64) * crate::value::LIST_SLOT_BYTES as i64 + bytes
+}
+
 fn flat_lrem(l: &mut ListData, count: i64, val: &[u8]) -> (usize, i64) {
     let mut r = 0usize;
     let mut d: i64 = 0;
@@ -446,7 +458,7 @@ fn flat_lrem(l: &mut ListData, count: i64, val: &[u8]) -> (usize, i64) {
         let mut i = 0;
         while i < l.len() {
             if r < limit && l[i] == val {
-                d -= list_item_weight(l[i].len()) as i64;
+                d -= l[i].capacity() as i64;
                 l.remove(i);
                 r += 1;
             } else {
@@ -459,7 +471,7 @@ fn flat_lrem(l: &mut ListData, count: i64, val: &[u8]) -> (usize, i64) {
         while i > 0 {
             i -= 1;
             if r < limit && l[i] == val {
-                d -= list_item_weight(l[i].len()) as i64;
+                d -= l[i].capacity() as i64;
                 l.remove(i);
                 r += 1;
             }

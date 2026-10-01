@@ -132,13 +132,13 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         // ≥ cap/8 EMPTY slots — occupied + deleted never exceeds the 7/8
         // threshold — so the walk terminates far earlier in practice).
         for off in 0..self.cap {
-            let p = (start + off) & self.mask;
+            let p = (start + off) & self.mask();
             // SAFETY: p < cap ⇒ metadata pointer in-bounds.
             let meta = unsafe { *self.metadata_ptr.as_ptr().add(p) };
             if meta & 0x80 == 0 {
                 // SAFETY: occupied slot ⇒ initialised.
                 let kv = unsafe { (*self.slots_ptr.as_ptr().add(p)).assume_init_ref() };
-                let home = (kv.0.kevy_hash() as usize) & self.mask;
+                let home = (kv.0.kevy_hash() as usize) & self.mask();
                 if home / GROUP_WIDTH == g {
                     f(&kv.0, &kv.1);
                 }

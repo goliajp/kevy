@@ -94,6 +94,7 @@ pub use cond::{InsertPosition, ListEnd, ScoreCompare, SetCondition};
 mod defrag;
 pub use defrag::{DefragHint, DefragStep};
 mod entry;
+mod entry_weight;
 mod error;
 pub use bitmap::BitOp;
 pub use error::{KevyError, KevyResult};

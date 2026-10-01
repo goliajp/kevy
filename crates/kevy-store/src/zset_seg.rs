@@ -30,6 +30,7 @@ use crate::nostd_prelude::*;
 use crate::seg_map::SegMap;
 use crate::value::{Score, ScoreBound, SmallBytes};
 use alloc::sync::Arc;
+use core::mem::size_of;
 use kevy_ranktree::RankTree;
 
 /// Flat `Value::ZSet` size at which a write promotes to the segmented
@@ -159,8 +160,29 @@ impl SegZSetData {
     /// assert_eq!(z.score_of(b"a"), Some(2.0));
     /// ```
     pub fn insert(&mut self, member: &[u8], score: f64) -> bool {
+        self.insert_weighed(member, score).0
+    }
+
+    /// [`Self::insert`], also answering by how many bytes the structure
+    /// around the members moved: the member table's growth, and a
+    /// segment pointer for each segment split off or retired.
+    pub(crate) fn insert_weighed(&mut self, member: &[u8], score: f64) -> (bool, i64) {
+        let segs = self.segs.len();
         let smb = SmallBytes::from_slice(member);
-        let old = self.by_member.insert(smb.clone(), score);
+        let (old, grown) = self.by_member.insert_sized(smb.clone(), score);
+        let is_new = self.order(old, smb, score);
+        (is_new, grown + Self::seg_bytes(self.segs.len(), segs))
+    }
+
+    /// A segment pointer's bytes for every segment between `before` and `now`.
+    #[inline]
+    fn seg_bytes(now: usize, before: usize) -> i64 {
+        (now as i64 - before as i64) * size_of::<Arc<RankTree<ZKey>>>() as i64
+    }
+
+    /// Put `(score, smb)` in order after the member table took it; `old`
+    /// is the score it held before. Whether the member was new.
+    fn order(&mut self, old: Option<f64>, smb: SmallBytes, score: f64) -> bool {
         if let Some(old_sc) = old {
             // See ZSetData::insert. Same reasoning, and one cost more: the
             // path below reaches its segment through Arc::make_mut, so under
@@ -201,11 +223,17 @@ impl SegZSetData {
     /// assert!(!z.remove(b"a"));
     /// ```
     pub fn remove(&mut self, member: &[u8]) -> bool {
-        let Some(sc) = self.by_member.remove(member) else {
-            return false;
-        };
+        self.remove_weighed(member).is_some()
+    }
+
+    /// [`Self::remove`]; when the member was there, by how many bytes the
+    /// structure around the members moved (a segment it emptied retires;
+    /// the member table does not shrink).
+    pub(crate) fn remove_weighed(&mut self, member: &[u8]) -> Option<i64> {
+        let segs = self.segs.len();
+        let sc = self.by_member.remove(member)?;
         self.remove_ordered(&(Score(sc), SmallBytes::from_slice(member)));
-        true
+        Some(Self::seg_bytes(self.segs.len(), segs))
     }
 
     /// Drop `key` from its segment, retiring emptied segments and
@@ -400,10 +428,11 @@ impl SegZSetData {
     /// [`crate::Value::weight`]'s SegZSet arm — the flat ZSet model
     /// (member slots + ×2 heap bytes + rank-tree slots) plus the shells.
     pub(crate) fn weight_as_zset(&self) -> u64 {
-        self.by_member.weight_shell_only()
-            + self.by_member.keys().map(|m| 2 * m.heap_bytes() as u64).sum::<u64>()
+        crate::seg_map::arc_box::<Self>()
+            + self.by_member.shell_bytes()
+            + self.by_member.keys().map(|m| 2 * crate::hash_weight::held(m)).sum::<u64>()
             + (self.len() as u64).saturating_mul(crate::value::RANKTREE_SLOT_BYTES)
-            + (self.segs.len() as u64).saturating_mul(8)
+            + (self.segs.len() * size_of::<Arc<RankTree<ZKey>>>()) as u64
     }
 
     /// Every bucket AND every segment tree unique — the bio-drop gate.

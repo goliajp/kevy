@@ -160,7 +160,6 @@ mod enabled {
             }
             let mut entry = Entry::new(value, None);
             entry.expire_at_ns = expire;
-            entry.set_weight(u64::from(cref.weight));
             self.tier_scratch = Some(entry);
             Ok(self.tier_scratch.as_ref())
         }

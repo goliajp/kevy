@@ -119,6 +119,8 @@ impl Store {
     ) -> Result<HsetOutcome, StoreError> {
         let v = self.hash_value_for_set(key)?.expect("present and packed");
         let Value::PackedRow(r) = v else { return Err(StoreError::WrongType) };
+        // a packed row's weight is worked out, not kept: measure it first
+        let before = r.footprint();
         let slot = r.names().iter().position(|c| c == field);
         let existed = slot.is_some_and(|i| r.has(i));
         let rebuilt = match slot {
@@ -131,7 +133,7 @@ impl Store {
         if rebuilt.is_none() {
             return self.unpack_then_set(key, field, value);
         }
-        self.reweigh_entry(key);
+        self.reweigh_scalar(key, before);
         Ok(HsetOutcome::Rebuilt { added: !existed })
     }
 
@@ -163,12 +165,14 @@ impl Store {
     pub(crate) fn unpack_row(&mut self, key: &[u8]) {
         let Some(e) = self.map.get_mut_quiet(key) else { return };
         let Value::PackedRow(r) = &e.value else { return };
+        // the packed form's weight is worked out, not kept: measure it first
+        let before = r.footprint();
         let mut flat = HashData::with_capacity(r.len().max(1));
         for (f, val) in r.fields() {
             flat.insert(SmallBytes::from_slice(f), SmallBytes::from_slice(val));
         }
         e.value = Value::Hash(Arc::new(flat));
-        self.reweigh_entry(key);
+        self.reweigh_scalar(key, before);
     }
 
     /// `HSET` — returns the count of newly-added fields.

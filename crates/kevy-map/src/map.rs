@@ -139,8 +139,6 @@ pub struct KevyMap<K, V> {
     pub(crate) metadata_ptr: NonNull<u8>,
     /// Allocated slot count. `0` when no allocation is held.
     pub(crate) cap: usize,
-    /// `cap - 1` when `cap > 0`; `0` when `cap == 0`.
-    pub(crate) mask: usize,
     /// Live entries.
     pub(crate) occupied: usize,
     /// Tombstones (not yet reclaimed).
@@ -151,7 +149,9 @@ pub struct KevyMap<K, V> {
     /// Drives the dispatch in [`Drop`] between `munmap_2mb` and `dealloc`.
     pub(crate) mmap_backed: bool,
     /// One owner word per slot, once [`Self::enable_aux`] asked for it.
-    pub(crate) aux: Option<alloc_crate::boxed::Box<[u64]>>,
+    /// Boxed twice so the field is one thin pointer: every map — each hash,
+    /// set and sorted set holds one — stays 56 bytes.
+    pub(crate) aux: Option<alloc_crate::boxed::Box<alloc_crate::boxed::Box<[u64]>>>,
     /// Marker so dropck and variance treat us as owning `(K, V)` like a
     /// `Box<[MaybeUninit<(K, V)>]>` would.
     pub(crate) _marker: PhantomData<(K, V)>,
@@ -195,7 +195,6 @@ impl<K, V> KevyMap<K, V> {
             slots_ptr: NonNull::dangling(),
             metadata_ptr: NonNull::dangling(),
             cap: 0,
-            mask: 0,
             occupied: 0,
             deleted: 0,
             mmap_backed: false,
@@ -242,7 +241,7 @@ impl<K, V> KevyMap<K, V> {
         debug_assert!(i < self.cap);
         // SAFETY: i ∈ [0, cap); i2 ∈ [GROUP_WIDTH, cap + GROUP_WIDTH);
         // both in-bounds since metadata buffer length is cap + GROUP_WIDTH.
-        let i2 = (i.wrapping_sub(GROUP_WIDTH) & self.mask) + GROUP_WIDTH;
+        let i2 = (i.wrapping_sub(GROUP_WIDTH) & self.mask()) + GROUP_WIDTH;
         // SAFETY: both indices are in range by the bound stated just above, and the
         // metadata allocation is `cap + GROUP_WIDTH` bytes long.
         unsafe {
@@ -421,7 +420,7 @@ impl<K, V> KevyMap<K, V> {
         if self.cap == 0 {
             return;
         }
-        let idx = (hash as usize) & self.mask;
+        let idx = (hash as usize) & self.mask();
         // SAFETY: idx < cap ≤ metadata length ⇒ pointer in-bounds; prefetch
         // reads never trap and never observe values.
         let ptr = unsafe { self.metadata_ptr.as_ptr().add(idx) };

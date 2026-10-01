@@ -82,6 +82,13 @@ impl<K> KevySet<K> {
         self.0.iter_from_bucket(start).chain(self.0.iter().take(start)).map(|(k, ())| k)
     }
 
+    /// The bytes the set's table holds at the allocator (see
+    /// [`KevyMap::footprint`]).
+    #[inline]
+    pub fn footprint(&self) -> usize {
+        self.0.footprint()
+    }
+
     /// The backing map, for callers that want its bucket addresses (prefetch).
     pub fn as_map(&self) -> &KevyMap<K, ()> {
         &self.0
@@ -93,6 +100,20 @@ impl<K: KevyHash + Eq> KevySet<K> {
     /// present (matches `HashSet::insert`).
     pub fn insert(&mut self, key: K) -> bool {
         self.0.insert(key, ()).is_none()
+    }
+
+    /// [`Self::insert`], also answering by how many bytes
+    /// [`Self::footprint`] moved (nonzero only when the table grew).
+    ///
+    /// ```
+    /// let mut s = kevy_map::KevySet::new();
+    /// assert_eq!(s.insert_sized(1u64), (true, s.footprint() as isize));
+    /// assert_eq!(s.insert_sized(1), (false, 0));
+    /// ```
+    #[inline]
+    pub fn insert_sized(&mut self, key: K) -> (bool, isize) {
+        let (old, grown) = self.0.insert_sized(key, ());
+        (old.is_none(), grown)
     }
 }
 
