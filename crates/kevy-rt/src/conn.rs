@@ -245,6 +245,25 @@ mod tests {
     use crate::message::PendingSlot;
     use crate::reduce::drain_front;
 
+    fn parked_reply(seq: u64) -> Vec<u8> {
+        vec![b'a' + (seq % 26) as u8; 31 + (seq * 7919 % 200) as usize]
+    }
+
+    /// `seq`'s reply arrives: written out when it is the front, else parked.
+    fn finish(c: &mut Conn, seq: u64) {
+        let idx = (seq - c.next_emit) as usize;
+        if idx == 0 {
+            c.output.extend_from_slice(&parked_reply(seq));
+            c.pending.pop_front();
+            c.next_emit += 1;
+            drain_front(c);
+        } else {
+            let r = c.park(&parked_reply(seq));
+            c.pending[idx].done = Some(r);
+            c.pending[idx].remaining = 0;
+        }
+    }
+
     /// A pipeline that never runs dry: replies finish out of order, the
     /// ones behind an unfinished front park, and the output is still every
     /// reply in seq order while the parked buffer stays bounded.
@@ -259,19 +278,11 @@ mod tests {
             rng ^= rng << 17;
             rng
         };
-        let reply = |seq: u64| {
-            let len = 31 + (seq * 7919 % 200) as usize;
-            vec![b'a' + (seq % 26) as u8; len]
-        };
         let (mut pushed, mut done, mut peak) = (0u64, Vec::<bool>::new(), 0usize);
         for _ in 0..20_000 {
             for _ in 0..next() % 3 {
-                c.pending.push_back(PendingSlot {
-                    remaining: 1,
-                    agg: None,
-                    done: None,
-                    proto: c.proto,
-                });
+                let proto = c.proto;
+                c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
                 pushed += 1;
             }
             done.resize(pushed as usize, false);
@@ -280,27 +291,14 @@ mod tests {
                 continue;
             }
             // the front finishes rarely, so the pipeline stays backed up
-            let seq = if next() % 16 == 0 {
-                open[0]
-            } else {
-                open[(next() % open.len() as u64) as usize]
-            };
+            let pick = if next() % 16 == 0 { 0 } else { next() % open.len() as u64 };
+            let seq = open[pick as usize];
             done[seq as usize] = true;
-            let idx = (seq - c.next_emit) as usize;
-            if idx == 0 {
-                c.output.extend_from_slice(&reply(seq));
-                c.pending.pop_front();
-                c.next_emit += 1;
-                drain_front(&mut c);
-            } else {
-                let r = c.park(&reply(seq));
-                c.pending[idx].done = Some(r);
-                c.pending[idx].remaining = 0;
-            }
+            finish(&mut c, seq);
             peak = peak.max(c.parked.len());
             assert!(c.parked.len() <= 2 * c.parked_live + PARKED_COMPACT_MIN + 256);
         }
-        let want: Vec<u8> = (0..c.next_emit).flat_map(reply).collect();
+        let want: Vec<u8> = (0..c.next_emit).flat_map(parked_reply).collect();
         assert_eq!(c.output, want, "emitted out of order or corrupted");
         assert!(c.next_emit > 1000, "the run emitted little: {}", c.next_emit);
         assert!(peak > PARKED_COMPACT_MIN, "never compacted: peak {peak}");
