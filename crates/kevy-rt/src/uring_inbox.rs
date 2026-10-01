@@ -162,7 +162,7 @@ mod tests {
     fn a_pending_slot() -> crate::message_agg::PendingSlot {
         crate::message_agg::PendingSlot {
             remaining: 0,
-            agg: crate::message_agg::Agg::SumInt(0),
+            agg: crate::message_agg::slot_agg(crate::message_agg::Agg::SumInt(0)),
             done: None,
             proto: kevy_resp::RespVersion::default(),
         }

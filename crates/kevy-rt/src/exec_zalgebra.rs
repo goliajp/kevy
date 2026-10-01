@@ -51,7 +51,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::SumInt(0);
+                slot.agg = crate::message_agg::slot_agg(Agg::SumInt(0));
             }
         }
         if dst_shard == self.id {
@@ -72,7 +72,10 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = targets.len() as u32;
-                slot.agg = Agg::ExtensionGather { argv: argv.clone(), chunks: Vec::new() };
+                slot.agg = crate::message_agg::slot_agg(Agg::ExtensionGather {
+                    argv: argv.clone(),
+                    chunks: Vec::new(),
+                });
             }
         }
         self.dispatch_targets(conn_id, seq, targets);
@@ -100,7 +103,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::First(None);
+                slot.agg = None;
             }
         }
         self.fold(conn_id, seq, crate::message::Part::Reply(SmallReply::from_vec(reply)));

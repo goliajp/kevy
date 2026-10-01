@@ -280,11 +280,24 @@ pub(crate) enum RenameStep {
     Restore,
 }
 
+/// A slot's aggregator as it is stored: a single target's reply needs none.
+#[inline]
+pub(crate) fn slot_agg(agg: Agg) -> Option<Box<Agg>> {
+    match agg {
+        Agg::First(None) => None,
+        agg => Some(Box::new(agg)),
+    }
+}
+
 /// One outstanding command slot awaiting `remaining` sub-results, held in a
 /// per-connection seq-ordered ring.
 pub(crate) struct PendingSlot {
     pub(crate) remaining: u32,
-    pub(crate) agg: Agg,
+    /// How the sub-results combine; `None` is a single target's own reply
+    /// (`Agg::First(None)`), which is nearly every slot. Any other
+    /// aggregator is boxed: it sits beside a multi-shard command, and
+    /// inline its largest form made every slot 168 bytes.
+    pub(crate) agg: Option<Box<Agg>>,
     /// Materialized reply once `remaining == 0`; emitted in seq order.
     /// `SmallReply` so the forwarded tiny-reply path (+OK / :N / small
     /// GET) stays heap-free end to end.
@@ -298,3 +311,8 @@ pub(crate) struct PendingSlot {
     /// 1 byte + alignment padding; not on any hot path.
     pub(crate) proto: RespVersion,
 }
+
+// A slot rides every pipelined command; it was 168 bytes while the
+// largest aggregator sat inline.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<PendingSlot>() == 48);

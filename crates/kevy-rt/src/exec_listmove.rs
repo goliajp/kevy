@@ -113,7 +113,12 @@ impl<C: Commands> Shard<C> {
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot { remaining: 1, agg, done: None, proto });
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg: crate::message_agg::slot_agg(agg),
+                done: None,
+                proto,
+            });
         }
         self.dispatch_op(conn_id, seq, src_shard, Op::ListMoveTake { key: src, from_left });
     }
@@ -217,7 +222,7 @@ impl<C: Commands> Shard<C> {
             && let Some(slot) = c.pending.front_mut()
         {
             slot.remaining = 1;
-            slot.agg = agg;
+            slot.agg = crate::message_agg::slot_agg(agg);
         }
     }
 

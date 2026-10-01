@@ -86,7 +86,12 @@ impl<C: Commands> Shard<C> {
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot { remaining: 1, agg, done: None, proto });
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg: crate::message_agg::slot_agg(agg),
+                done: None,
+                proto,
+            });
         }
         let take_op = Op::RenameTake(src);
         if src_shard == self.id {
@@ -152,7 +157,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::RenameOrchestrator {
+                slot.agg = crate::message_agg::slot_agg(Agg::RenameOrchestrator {
                     step: RenameStep::Put,
                     nx,
                     src,
@@ -160,7 +165,7 @@ impl<C: Commands> Shard<C> {
                     dst_shard,
                     taken: None,
                     put_stored: None,
-                };
+                });
             }
         }
         let put_op = Op::RenamePut { dst, value, ttl_ms, nx };
@@ -229,7 +234,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::RenameOrchestrator {
+                slot.agg = crate::message_agg::slot_agg(Agg::RenameOrchestrator {
                     step: RenameStep::Restore,
                     nx,
                     src: Vec::new(),
@@ -237,7 +242,7 @@ impl<C: Commands> Shard<C> {
                     dst_shard: 0,
                     taken: None,
                     put_stored: None,
-                };
+                });
             }
         }
         let restore_op = Op::RenamePut { dst: src, value, ttl_ms, nx: false };
@@ -270,12 +275,7 @@ impl<C: Commands> Shard<C> {
     fn fold_rename_reply(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot {
-                remaining: 1,
-                agg: Agg::First(None),
-                done: None,
-                proto,
-            });
+            c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
             // Silence unused — proto only matters for the few aggs that
             // care about RESP3 shape, not for a fixed-bytes reply.
             let _ = RespVersion::V2;

@@ -33,7 +33,7 @@ impl<C: Commands> Shard<C> {
                     if idx == 0
                         && matches!(
                             conn.pending.front(),
-                            Some(PendingSlot { remaining: 1, agg: Agg::First(None), .. })
+                            Some(PendingSlot { remaining: 1, agg: None, .. })
                         ) =>
                 {
                     conn.output.extend_from_slice(b.as_slice());
@@ -47,13 +47,29 @@ impl<C: Commands> Shard<C> {
             let Some(slot) = conn.pending.get_mut(idx) else {
                 return;
             };
+            let Some(agg) = slot.agg.as_deref_mut() else {
+                // a single target: its reply is the slot's
+                match part {
+                    Part::Reply(b) if slot.remaining == 1 => slot.done = Some(b),
+                    Part::Reply(b) => slot.agg = Some(Box::new(Agg::First(Some(b)))),
+                    _ => {}
+                }
+                slot.remaining -= 1;
+                if slot.remaining == 0 {
+                    if slot.done.is_none() {
+                        slot.done = Some(materialize(Agg::First(None), slot.proto));
+                    }
+                    drain_front(conn);
+                }
+                return;
+            };
             // (Agg::AllOk, Part::Ok) `{}` body matches the catch-all `_ => {}`
             // body but documents the *expected* aggregator/part pairing — the
             // wildcard arm is the fallback for impossible combinations after
             // the dispatcher arms. match_same_arms would collapse the two and
             // hide the contract; keep them separate.
             #[allow(clippy::match_same_arms)]
-            match (&mut slot.agg, part) {
+            match (agg, part) {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
                 // WAIT: reply = MIN over per-shard acked counts.
@@ -173,7 +189,7 @@ impl<C: Commands> Shard<C> {
             slot.remaining -= 1;
             if slot.remaining == 0 {
                 let proto = slot.proto;
-                let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
+                let agg = slot.agg.take().map_or(Agg::First(None), |agg| *agg);
                 if matches!(
                     agg,
                     Agg::WatchCollect { .. }
@@ -248,12 +264,7 @@ impl<C: Commands> Shard<C> {
                 let s = c.next_seq;
                 c.next_seq += 1;
                 let proto = c.proto;
-                c.pending.push_back(PendingSlot {
-                    remaining: 1,
-                    agg: Agg::First(None),
-                    done: None,
-                    proto,
-                });
+                c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
                 s
             }
             None => return,
