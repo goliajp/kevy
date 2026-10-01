@@ -1,0 +1,77 @@
+//! A word per slot beside the table, for the owner's own bookkeeping.
+//!
+//! What a map's owner keeps about an entry but rarely reads — a cached
+//! size, an access clock — would widen every slot if it lived in the value,
+//! and a wider slot spans more cache lines on every lookup. The side lane
+//! holds one `u64` per slot instead, allocated only once the owner asks for
+//! it, and touched only by the owner's own calls: a lookup never reads it.
+//!
+//! A slot's word starts at zero when an entry takes the slot, and moves
+//! with the entry when the table grows.
+
+use alloc_crate::boxed::Box;
+use alloc_crate::vec;
+
+use crate::map::KevyMap;
+
+/// A zeroed lane for `cap` slots.
+pub(crate) fn lane(cap: usize) -> Box<[u64]> {
+    vec![0u64; cap].into_boxed_slice()
+}
+
+impl<K, V> KevyMap<K, V> {
+    /// Keep a side word per slot from now on; a no-op when already kept.
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, &str> = kevy_map::KevyMap::new();
+    /// m.insert(7, "seven");
+    /// m.enable_aux();
+    /// let slot = m.find_slot(&7).unwrap();
+    /// assert_eq!(m.aux(slot), Some(0));
+    /// *m.aux_mut(slot).unwrap() = 42;
+    /// for i in 0..100 {
+    ///     m.insert(100 + i, "grown");
+    /// }
+    /// // the word moved with its entry when the table grew
+    /// assert_eq!(m.aux(m.find_slot(&7).unwrap()), Some(42));
+    /// ```
+    pub fn enable_aux(&mut self) {
+        if self.aux.is_none() {
+            self.aux = Some(lane(self.cap));
+        }
+    }
+
+    /// The side word of the entry at `slot`; `None` when the slot is empty
+    /// or no side words are kept.
+    #[inline]
+    pub fn aux(&self, slot: usize) -> Option<u64> {
+        let lane = self.aux.as_ref()?;
+        self.slot_is_full(slot).then(|| lane[slot])
+    }
+
+    /// The side word of the entry at `slot`, to change; `None` when the
+    /// slot is empty or no side words are kept.
+    #[inline]
+    pub fn aux_mut(&mut self, slot: usize) -> Option<&mut u64> {
+        if !self.slot_is_full(slot) {
+            return None;
+        }
+        self.aux.as_mut().map(|lane| &mut lane[slot])
+    }
+
+    /// An entry has just taken `slot`: its side word starts at zero.
+    #[inline]
+    pub(crate) fn reset_aux(&mut self, slot: usize) {
+        if let Some(lane) = &mut self.aux {
+            lane[slot] = 0;
+        }
+    }
+
+    /// The side lane's bytes, as the allocator holds them.
+    pub(crate) fn aux_footprint(&self) -> usize {
+        match &self.aux {
+            Some(lane) if !lane.is_empty() => crate::malloc_footprint(lane.len() * 8),
+            _ => 0,
+        }
+    }
+}

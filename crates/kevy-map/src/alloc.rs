@@ -95,6 +95,7 @@ impl<K, V> KevyMap<K, V> {
             occupied: 0,
             deleted: 0,
             mmap_backed,
+            aux: None,
             _marker: PhantomData,
         }
     }
@@ -152,7 +153,9 @@ impl<K, V> KevyMap<K, V> {
         let size =
             (self.cap * (kv + 1) + GROUP_WIDTH).next_multiple_of(core::mem::align_of::<(K, V)>());
         debug_assert_eq!(size, table_layout::<(K, V)>(self.cap).0.size());
-        if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+        let table =
+            if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) };
+        table + self.aux_footprint()
     }
 
     /// The bytes [`Self::footprint`] will read once the table has grown to
@@ -175,7 +178,8 @@ impl<K, V> KevyMap<K, V> {
         let size = table_layout::<(K, V)>(cap).0.size();
         // `alloc_table` maps a table this large directly wherever it can
         let mapped = size >= THP_BACKED_THRESHOLD && cfg!(target_os = "linux") && !cfg!(miri);
-        if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+        let lane = if self.aux.is_some() { malloc_footprint(cap * 8) } else { 0 };
+        (if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }) + lane
     }
 
     /// New keys the table takes before an insert grows it: 0 when the next

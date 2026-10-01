@@ -150,6 +150,8 @@ pub struct KevyMap<K, V> {
     /// THP-aligned storage); `false` when it came from the global allocator.
     /// Drives the dispatch in [`Drop`] between `munmap_2mb` and `dealloc`.
     pub(crate) mmap_backed: bool,
+    /// One owner word per slot, once [`Self::enable_aux`] asked for it.
+    pub(crate) aux: Option<alloc_crate::boxed::Box<[u64]>>,
     /// Marker so dropck and variance treat us as owning `(K, V)` like a
     /// `Box<[MaybeUninit<(K, V)>]>` would.
     pub(crate) _marker: PhantomData<(K, V)>,
@@ -197,6 +199,7 @@ impl<K, V> KevyMap<K, V> {
             occupied: 0,
             deleted: 0,
             mmap_backed: false,
+            aux: None,
             _marker: PhantomData,
         }
     }

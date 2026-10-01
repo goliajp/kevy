@@ -26,6 +26,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 .expect("a capacity that overflows usize could not have been allocated")
         };
         let mut new_table = Self::alloc_table(new_cap);
+        if self.aux.is_some() {
+            new_table.aux = Some(crate::aux::lane(new_cap));
+        }
         // Move every live entry over. After ptr::read'ing a slot we mark its
         // metadata DELETED, so any subsequent Drop (incl. panic unwind) won't
         // double-free; the old allocation will free with all-DELETED metadata.
@@ -57,7 +60,10 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // the byte is never seen as occupied again.
                 unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
                 let hash = k.kevy_hash();
-                new_table.insert_known_unique(hash, k, v);
+                let to = new_table.insert_known_unique(hash, k, v);
+                if let (Some(old), Some(new)) = (&self.aux, &mut new_table.aux) {
+                    new[to] = old[i];
+                }
             }
         }
         // All occupied entries are now in new_table; the old self has no live slots.
@@ -86,7 +92,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// Insert under the assumption that the key isn't already present (used
     /// by `grow` to repopulate the new table). Skips the duplicate-key
     /// check. Uses a 16-slot SIMD group scan to find the first EMPTY.
-    fn insert_known_unique(&mut self, hash: u64, k: K, v: V) {
+    fn insert_known_unique(&mut self, hash: u64, k: K, v: V) -> usize {
         let h2v = h2(hash);
         let mut group_start = (hash as usize) & self.mask;
         loop {
@@ -102,7 +108,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                     (*self.slots_ptr.as_ptr().add(slot)).write((k, v));
                 }
                 self.occupied += 1;
-                return;
+                return slot;
             }
             // Linear probing by GROUP_WIDTH (tried triangular — at our 7/8
             // load factor and group-scan-aware probe, linear wins on cache

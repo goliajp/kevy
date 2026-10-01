@@ -37,6 +37,9 @@
 extern crate alloc as alloc_crate;
 
 mod alloc;
+mod aux;
+#[cfg(test)]
+mod aux_tests;
 mod clone;
 mod group;
 mod grow;
