@@ -6,12 +6,12 @@ the windows close, so their request count only has to outlast them.
 
   pinned_*   one generator per shard on that shard's own cluster port, keys
              hashtagged to the shard: nothing is forwarded
-  compat_*   the same generators on the shared port, where REUSEPORT puts
-             each connection on some shard
+  compat_*   the same generators on the shared port, which spreads the
+             connections over the shards in turn
   xshard_set untagged keys on the shared port: with n shards, (n-1)/n of
              the commands belong to another shard
   onekey_*   redis-benchmark -t, one fixed key: one shard does all the work
-  zinterstore  a two-set ZINTERSTORE on one shard
+  zinterstore  a two-set ZINTERSTORE, on a one-shard server
   hybrid_p95 IDX.QUERY HYBRID p95 from one closed-loop client (latency only)
 """
 
@@ -86,6 +86,16 @@ def run_quiet(argv):
 
 def cluster(angle):
     return angle.startswith(("pinned_", "compat_", "xshard_"))
+
+
+def topology(angle, topo):
+    """The server shape the angle runs on. ZINTERSTORE works on the one
+    shard that owns both sets; on four, the other three idle and their idle
+    loop is billed to every command, so it runs on one shard."""
+    if angle != "zinterstore":
+        return topo
+    first = topo["srv_list"][0]
+    return dict(topo, srv_threads=1, srv_cpus=str(first), srv_list=[first])
 
 
 def warm(angle, port, shards):
