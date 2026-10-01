@@ -19,6 +19,25 @@
 //! number there is a row that backfilling from any single source would
 //! have missed. That is the 89 % / 76 % drift the lesson was paid for,
 //! measured on your own data instead of quoted from someone else's.
+//!
+//! ```
+//! use kevy_cli::backfill_keys::{Source, collect};
+//! # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+//! let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+//! // The index lost item 3; the keyspace still has it.
+//! client.request_borrowed(&[b"ZADD", b"idx:mail-by-date", b"1", b"1", b"2", b"2"])?;
+//! for id in ["1", "2", "3"] {
+//!     client.request_borrowed(&[b"SET", format!("mail:{id}").as_bytes(), b"body"])?;
+//! }
+//! let sources = [
+//!     Source::Index("idx:mail-by-date".into()),
+//!     Source::Prefix { prefix: "mail:".into(), keep: false },
+//! ];
+//! let union = collect(&mut client, &sources)?;
+//! assert!(union.names.contains(&b"3".to_vec()), "the union has what the index lost");
+//! assert_eq!(union.sources[1].unique, 1, "only the keyspace named item 3");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 // The progress report goes to stderr, and a stderr that has gone away
 // (a closed pipe, `| head`) is not a reason to abandon a backfill that
@@ -29,16 +48,55 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use kevy_resp_client::RespClient;
+use crate::link::Link;
 
 /// Where a set of item names comes from.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::backfill_keys::Source;
+/// // `--from-index mail:by-date --from-prefix mail: --from-file archive.txt`
+/// let sources = [
+///     Source::Index("mail:by-date".into()),
+///     Source::Prefix { prefix: "mail:".into(), keep: false },
+///     Source::File("archive.txt".into()),
+/// ];
+/// let labels: Vec<String> = sources.iter().map(Source::label).collect();
+/// assert_eq!(labels, ["index mail:by-date", "prefix mail:", "file archive.txt"]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Source {
     /// The members of a set, sorted set, or list key.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SADD", b"tags:rust", b"a", b"b"])?;
+    /// let u = collect(&mut client, &[Source::Index("tags:rust".into())])?;
+    /// assert_eq!(u.names.len(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Index(String),
     /// Every key in the keyspace under a prefix.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SET", b"user:7", b"x"])?;
+    /// let source = Source::Prefix { prefix: "user:".into(), keep: false };
+    /// assert_eq!(collect(&mut client, &[source])?.names, vec![b"7".to_vec()]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Prefix {
         /// The prefix to scan.
+        ///
+        /// ```
+        /// use kevy_cli::backfill_keys::Source;
+        /// let s = Source::Prefix { prefix: "order:".into(), keep: false };
+        /// assert_eq!(s.label(), "prefix order:");
+        /// ```
         prefix: String,
         /// Keep the whole key rather than stripping the prefix.
         ///
@@ -46,14 +104,47 @@ pub enum Source {
         /// the members of an index: `mail:123` under `mail:` becomes
         /// `123`, which is what a sorted set of ids holds. Keeping the
         /// prefix is right when the key *is* the name.
+        ///
+        /// ```
+        /// use kevy_cli::backfill_keys::{Source, collect};
+        /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+        /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+        /// client.request_borrowed(&[b"SET", b"mail:123", b"x"])?;
+        /// let stripped = Source::Prefix { prefix: "mail:".into(), keep: false };
+        /// let whole = Source::Prefix { prefix: "mail:".into(), keep: true };
+        /// assert_eq!(collect(&mut client, &[stripped])?.names, vec![b"123".to_vec()]);
+        /// assert_eq!(collect(&mut client, &[whole])?.names, vec![b"mail:123".to_vec()]);
+        /// # Ok::<(), Box<dyn std::error::Error>>(())
+        /// ```
         keep: bool,
     },
     /// One name per line, from a file (an archive listing, an export).
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// let dir = kevy_tmpdir::TmpDir::new("backfill-file");
+    /// let listing = dir.path().join("archive.txt");
+    /// std::fs::write(&listing, "41\n\n42\n")?; // blank lines are skipped
+    /// let source = Source::File(listing.to_string_lossy().into_owned());
+    /// let u = collect(&mut client, &[source])?;
+    /// assert_eq!(u.names, vec![b"41".to_vec(), b"42".to_vec()]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     File(String),
 }
 
 impl Source {
     /// How this source prints in the report.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::Source;
+    /// assert_eq!(Source::Index("by-date".into()).label(), "index by-date");
+    /// let whole = Source::Prefix { prefix: "mail:".into(), keep: true };
+    /// assert_eq!(whole.label(), "prefix mail: (whole keys)");
+    /// assert_eq!(Source::File("ids.txt".into()).label(), "file ids.txt");
+    /// ```
     pub fn label(&self) -> String {
         match self {
             Source::Index(k) => format!("index {k}"),
@@ -66,28 +157,125 @@ impl Source {
 }
 
 /// What one source contributed.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::backfill_keys::{Source, collect};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"SADD", b"a", b"1", b"2"])?;
+/// client.request_borrowed(&[b"SADD", b"b", b"2", b"3"])?;
+/// let u = collect(&mut client, &[Source::Index("a".into()), Source::Index("b".into())])?;
+/// let r = &u.sources[0];
+/// assert_eq!((r.label.as_str(), r.total, r.unique), ("index a", 2, 1));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct SourceReport {
     /// How the source was named on the command line.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SADD", b"ids", b"1"])?;
+    /// let u = collect(&mut client, &[Source::Index("ids".into())])?;
+    /// assert_eq!(u.sources[0].label, "index ids");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub label: String,
     /// Names this source produced.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"RPUSH", b"queue", b"x", b"y", b"z"])?;
+    /// let u = collect(&mut client, &[Source::Index("queue".into())])?;
+    /// assert_eq!(u.sources[0].total, 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub total: usize,
     /// Names **no other source** produced. Non-zero means backfilling
     /// from any single source would have missed these rows.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SADD", b"old", b"1", b"2"])?;
+    /// client.request_borrowed(&[b"SADD", b"new", b"1", b"2", b"9"])?;
+    /// let u = collect(&mut client, &[Source::Index("old".into()), Source::Index("new".into())])?;
+    /// assert_eq!(u.sources[0].unique, 0, "the old index alone misses nothing");
+    /// assert_eq!(u.sources[1].unique, 1, "only the new one names 9");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub unique: usize,
 }
 
 /// The union, and where each name came from.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_cli::backfill_keys::{Source, collect};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"SADD", b"a", b"1"])?;
+/// client.request_borrowed(&[b"SADD", b"b", b"1", b"2"])?;
+/// let u = collect(&mut client, &[Source::Index("a".into()), Source::Index("b".into())])?;
+/// assert_eq!((u.names.len(), u.sources.len()), (2, 2));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Union {
     /// Every name, first-seen order, deduplicated.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"RPUSH", b"first", b"b", b"a"])?;
+    /// client.request_borrowed(&[b"RPUSH", b"second", b"a", b"c"])?;
+    /// let sources = [Source::Index("first".into()), Source::Index("second".into())];
+    /// let u = collect(&mut client, &sources)?;
+    /// assert_eq!(u.names, vec![b"b".to_vec(), b"a".to_vec(), b"c".to_vec()]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub names: Vec<Vec<u8>>,
     /// One entry per source, in the order they were given.
+    ///
+    /// ```
+    /// use kevy_cli::backfill_keys::{Source, collect};
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// client.request_borrowed(&[b"SADD", b"x", b"1"])?;
+    /// client.request_borrowed(&[b"SADD", b"y", b"1"])?;
+    /// let u = collect(&mut client, &[Source::Index("y".into()), Source::Index("x".into())])?;
+    /// let labels: Vec<_> = u.sources.iter().map(|s| s.label.as_str()).collect();
+    /// assert_eq!(labels, ["index y", "index x"]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub sources: Vec<SourceReport>,
 }
 
 /// Read every source and union their names.
-pub fn collect(client: &mut RespClient, sources: &[Source]) -> io::Result<Union> {
+///
+/// A source that cannot be read is an error, never an empty
+/// contribution:
+///
+/// ```
+/// use kevy_cli::backfill_keys::{Source, collect};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"ZADD", b"by-date", b"1", b"m1"])?;
+/// let u = collect(&mut client, &[Source::Index("by-date".into())])?;
+/// assert_eq!(u.names, vec![b"m1".to_vec()]);
+///
+/// let err = collect(&mut client, &[Source::Index("no-such-index".into())]).unwrap_err();
+/// assert!(err.to_string().contains("does not exist"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn collect(client: &mut dyn Link, sources: &[Source]) -> io::Result<Union> {
     let mut per_source: Vec<BTreeSet<Vec<u8>>> = Vec::with_capacity(sources.len());
     let mut names: Vec<Vec<u8>> = Vec::new();
     let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -124,7 +312,7 @@ fn account(labels: &[String], per_source: &[BTreeSet<Vec<u8>>]) -> Vec<SourceRep
         .collect()
 }
 
-fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> {
+fn read_source(client: &mut dyn Link, s: &Source) -> io::Result<Vec<Vec<u8>>> {
     match s {
         Source::Index(key) => crate::collections::members(client, key),
         Source::Prefix { prefix, keep } => read_prefix(client, prefix, *keep),
@@ -140,7 +328,7 @@ fn read_source(client: &mut RespClient, s: &Source) -> io::Result<Vec<Vec<u8>>> 
 /// Every key under a prefix, stripped unless the caller wants the key
 /// itself: stripped names line up with the members of an index, which
 /// is what makes the union meaningful.
-fn read_prefix(client: &mut RespClient, prefix: &str, keep: bool) -> io::Result<Vec<Vec<u8>>> {
+fn read_prefix(client: &mut dyn Link, prefix: &str, keep: bool) -> io::Result<Vec<Vec<u8>>> {
     Ok(crate::collections::scan_prefix(client, prefix)?
         .into_iter()
         .map(|k| if keep { k } else { k[prefix.len().min(k.len())..].to_vec() })
@@ -148,6 +336,19 @@ fn read_prefix(client: &mut RespClient, prefix: &str, keep: bool) -> io::Result<
 }
 
 /// The accounting, on stderr so redirecting the names keeps it.
+///
+/// ```
+/// use kevy_cli::backfill_keys::{Source, collect, print_report};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"SADD", b"ids", b"1", b"2"])?;
+/// let u = collect(&mut client, &[Source::Index("ids".into())])?;
+/// for name in &u.names {
+///     println!("{}", String::from_utf8_lossy(name)); // stdout: the key-set
+/// }
+/// print_report(&u); // stderr: "2 name(s) in the union", then one line per source
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn print_report(u: &Union) {
     let e = io::stderr();
     let mut e = e.lock();
@@ -169,40 +370,23 @@ pub fn print_report(u: &Union) {
     };
 }
 
-/// The command line: host, port, and the sources in the order given.
-fn parse_args(args: &[String]) -> (String, u16, Vec<Source>) {
-    let (mut host, mut port) = (crate::DEFAULT_HOST.to_string(), crate::DEFAULT_PORT);
+/// The sources, in the order given.
+fn parse_args(args: &[String]) -> Result<Vec<Source>, String> {
     let (mut sources, mut keep) = (Vec::new(), false);
-    let mut i = 0;
-    while i < args.len() {
-        let has_val = i + 1 < args.len();
-        match args[i].as_str() {
-            "-h" if has_val => {
-                host = args[i + 1].clone();
-                i += 2;
+    let mut scan = crate::tools::argscan::Scan::new(args);
+    while let Some(word) = scan.next() {
+        match word {
+            "--keep-prefix" => keep = true,
+            "--from-index" => sources.push(Source::Index(scan.value(word)?.to_string())),
+            "--from-prefix" => {
+                sources.push(Source::Prefix { prefix: scan.value(word)?.to_string(), keep: false })
             }
-            "-p" if has_val => {
-                port = args[i + 1].parse().unwrap_or(crate::DEFAULT_PORT);
-                i += 2;
-            }
-            "--keep-prefix" => {
-                keep = true;
-                i += 1;
-            }
-            "--from-index" if has_val => {
-                sources.push(Source::Index(args[i + 1].clone()));
-                i += 2;
-            }
-            "--from-prefix" if has_val => {
-                sources.push(Source::Prefix { prefix: args[i + 1].clone(), keep: false });
-                i += 2;
-            }
-            "--from-file" if has_val => {
-                sources.push(Source::File(args[i + 1].clone()));
-                i += 2;
-            }
-            _ => i += 1,
+            "--from-file" => sources.push(Source::File(scan.value(word)?.to_string())),
+            other => return Err(crate::tools::argscan::unexpected(other)),
         }
+    }
+    if sources.is_empty() {
+        return Err("give at least one source".into());
     }
     if keep {
         for s in &mut sources {
@@ -211,36 +395,27 @@ fn parse_args(args: &[String]) -> (String, u16, Vec<Source>) {
             }
         }
     }
-    (host, port, sources)
+    Ok(sources)
 }
 
-/// `backfill-keys [-h host] [-p port] --from-index K --from-prefix P
-/// [--keep-prefix] --from-file F …`
-pub fn run_backfill_keys_cli(args: &[String]) -> ExitCode {
-    let (host, port, sources) = parse_args(args);
-    if sources.is_empty() {
-        eprintln!("kevy-cli backfill-keys: give at least one source");
-        eprintln!(
-            "usage: kevy-cli backfill-keys [-h host] [-p port] \
-             [--from-index <key>] [--from-prefix <p> [--keep-prefix]] [--from-file <path>] …"
-        );
-        return ExitCode::FAILURE;
-    }
-    emit(&host, port, &sources)
-}
-
-/// Names to stdout, accounting to stderr. A source that cannot be read
-/// is an error rather than an empty contribution — a silently empty
-/// source is exactly the hole this command exists to close.
-fn emit(host: &str, port: u16, sources: &[Source]) -> ExitCode {
-    let mut client = match RespClient::connect(host, port) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("kevy-cli backfill-keys: could not connect to {host}:{port}: {e}");
+/// `backfill-keys --from-index K --from-prefix P [--keep-prefix]
+/// --from-file F …` on `client`. Names to stdout, accounting to stderr. A
+/// source that cannot be read is an error rather than an empty
+/// contribution — a silently empty source is exactly the hole this command
+/// exists to close.
+pub(crate) fn run_on(client: &mut dyn Link, args: &[String]) -> ExitCode {
+    let sources = match parse_args(args) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("kevy-cli backfill-keys: {msg}");
+            eprintln!(
+                "usage: kevy-cli --kevy backfill-keys [--from-index <key>] \
+                 [--from-prefix <p> [--keep-prefix]] [--from-file <path>] …"
+            );
             return ExitCode::FAILURE;
         }
     };
-    let u = match collect(&mut client, sources) {
+    let u = match collect(client, &sources) {
         Ok(u) => u,
         Err(e) => {
             eprintln!("kevy-cli backfill-keys: {e}");

@@ -12,7 +12,7 @@ kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压�
 - 把 `kevy_embedded::Store` 嵌进宿主应用，想弄清进程崩溃后什么能留下、什么留不下，以及在宿主内部怎么观测。
 - 有个键的 TTL 在重启前后行为怪异。
 
-如果只想要“`kill -9` 能不能扛住”的快速答案：能，默认策略下最多丢一秒的写入。
+如果只想要“`kill -9` 能不能扛住”的快速答案：能。嵌入式存储被杀时，已经返回的写入一条不丢；服务器被杀最多丢最后一轮 reactor 迭代的写入。默认策略下，断电最多丢约一秒再加一次 fsync 的耗时。
 
 ## 核心思路
 
@@ -140,9 +140,9 @@ v1 格式的日志没有记录信封，表达不了事务边界；在首次重�
 | 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发增长规则。 |
 | 自动重写绝对上限 | `auto_aof_rewrite_bytes` | `with_auto_rewrite_bytes(n)` | `0`（关）| 独立触发器：AOF 超过 `n` 字节即重写，与增长比例无关。可在线调整（`CONFIG SET auto-aof-rewrite-bytes`）。 |
 | 自动重写陈旧度 | `auto_aof_rewrite_interval_secs` | `with_auto_rewrite_interval(d)` | `0`（关）| 独立触发器：距上次重写超过该时长且日志有增长即重写。可在线调整。 |
-| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_resync(true)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
+| resync 回放 | `replay_resync`（`[persistence]`）| `with_replay_mode(ReplayMode::Resync)` | `false`（strict）| 仅启动时生效。文件中部损坏时恢复其后的完好尾巴，而不是停在损坏处——见 resync 一节。 |
 | 持久化目录 | `data_dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
-| reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 刷盘、自动重写检查、TTL 清理。 |
+| reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 的 fsync、`No` 的缓冲写入、自动重写检查、TTL 清理。 |
 
 ### 触发面
 
@@ -159,22 +159,22 @@ v1 格式的日志没有记录信封，表达不了事务边界；在首次重�
 | 策略 | 耐久性 | 代价 |
 |---|---|---|
 | `Always` | 零丢失——每次写入先 fsync 再回复 | 吞吐约砍半 |
-| `EverySec`（默认）| 崩溃最多丢约 1 秒的写入 | 开销小 |
-| `No` | 交给 OS 页缓存刷盘 | 开销最小 |
+| `EverySec`（默认）| 断电：约 1 秒加一个 tick，再加一次 fsync 的耗时。进程崩溃：嵌入式存储的追加是暂存的（[见下文](#嵌入式存储的暂存追加)），已返回的不丢；服务器丢最后一轮 reactor 迭代 | 开销小 |
+| `No` | 从不 fsync：进程被杀丢的和 `EverySec` 一样；断电后哪些落了盘由 OS 决定 | 开销最小 |
 
 ## 取舍与限制
 
-**各策略的吞吐与数据丢失。**`Always` 让每条回复都等 `fsync` 完成，是唯一能在 `kill -9` 下做到零命令丢失的策略，代价是在典型 NVMe 上把 SET 密集的吞吐砍掉约一半。`EverySec` 由后台每秒刷一次盘，崩溃最多丢这一秒窗口内的写入——之所以选它当默认，正因为它与 Redis 的取舍一致，且丢失窗口通常可以接受。`No` 交给内核定夺：吞吐最高，但崩溃可能丢掉还留在页缓存里的一切，时间跨度可能达数秒。
+**各策略的吞吐与数据丢失。**`Always` 让每条回复都等 `fsync` 完成，是唯一能在 `kill -9` 下做到零命令丢失的策略，代价是在典型 NVMe 上把 SET 密集的吞吐砍掉约一半。`EverySec` 由后台大约每秒 fsync 一次，不挡写入，所以断电可能丢掉这一秒，外加 fsync 进行期间到达的写入——之所以选它当默认，正因为它与 Redis 的取舍一致，且丢失窗口通常可以接受。`No` 何时落盘交给内核：吞吐最高，但断电可能丢掉内核还没写回的一切，时间跨度可能达数秒。两种策略下，进程被杀丢多少取决于写入路径，而不是策略（见下一段和[耐久性契约](#耐久性契约v21)）。
 
 **`AppendFsync` 管什么、不管什么。** 它设定的是单条命令的掉电窗口。它从来与「一个 `atomic` 块是否全有全无」无关——那是日志里事务标记的事（见[崩溃一致性](#崩溃一致性契约v4)），而且自 4.0 起在任何 fsync 策略下都成立。
 
-这件事值得直说，因为这些名字诱人往反方向读。一位存放金融数据的用户在初次接触时选了 `Always`，理由是「已确认的写入不能丢」；他拿到的是代价最高的设置，而且在 4.0 之前，对他真正需要的那个块原子性，一分钱也没买到。当你连一条已确认的命令都不能丢时，选 `Always`；当一秒的窗口可以接受时，选 `EverySec`。这两个选择都不影响事务。
+这件事值得直说，因为这些名字诱人往反方向读。一位存放金融数据的用户在初次接触时选了 `Always`，理由是「已确认的写入不能丢」；他拿到的是代价最高的设置，而且在 4.0 之前，对他真正需要的那个块原子性，一分钱也没买到。当你连一条已确认的命令都不能丢时，选 `Always`；当约一秒的窗口可以接受时，选 `EverySec`。这两个选择都不影响事务。
 
 **AOF 重放成本与快照加载成本。**没有快照时，启动耗时随 AOF 字节数线性增长：本地 NVMe 上，4 GiB 的 AOF 几秒钟回放完，40 GiB 就要一分钟以上。快照能封住这个上限——加载只是一次流式读，外加快照之后那一小段 AOF 尾巴——但代价是一次短暂的视图冻结（O(keys)，每键纳秒级，因为集合值靠引用计数共享），外加快照落盘期间首次改动的集合各拷贝一次。写密集负载下，更推荐靠自动重写压住 AOF 体积，而不是定期跑 `BGSAVE`：重写给出同样的启动时间上限，还省掉第二个文件的管理。
 
 **后台任务并发。**每个 shard 同一时刻最多跑一个后台保存或重写。任务进行中再来的重复请求会记一条日志然后跳过，绝不排队。
 
-**AOF 写与 reactor 线程。**追加与 fsync 在任何 reactor 上都不占用 reactor 线程：io_uring 下作为排队操作走 shard 自己的 ring；epoll/kqueue reactor 下由每 shard 一个的 writer 线程以顺序追加排空同一条队列(盘上字节相同)。无论哪种，reactor 热路径上都不再阻塞于 `write(2)` 或 `fsync(2)`——GB/s 摄入下曾把它停上数秒的正是这里(5.0 尾延迟工作，端到端实测见 `bench/` 的 finding 文档)。耐久性不变：`everysec` 崩溃窗口仍 ≤ 1 秒；`always` 下写入的回复会保持到覆盖它的 fsync 落盘——回复本身依旧担保耐久性，只是 reactor 不再陪着等，并发连接共享 fsync 轮次(组提交)。`KEVY_AOF_OFFLOAD=0` 在任何 reactor 上都恢复经典同步路径。
+**AOF 写与 reactor 线程。**追加与 fsync 在任何 reactor 上都不占用 reactor 线程：io_uring 下作为排队操作走 shard 自己的 ring；epoll/kqueue reactor 下由每 shard 一个的 writer 线程以顺序追加排空同一条队列(盘上字节相同)。无论哪种，reactor 热路径上都不再阻塞于 `write(2)` 或 `fsync(2)`——GB/s 摄入下曾把它停上数秒的正是这里(5.0 尾延迟工作，端到端实测见 `bench/` 的 finding 文档)。耐久性不变：`everysec` 仍大约每秒 fsync 一次；`always` 下写入的回复会保持到覆盖它的 fsync 落盘——回复本身依旧担保耐久性，只是 reactor 不再陪着等，并发连接共享 fsync 轮次(组提交)。`KEVY_AOF_OFFLOAD=0` 在任何 reactor 上都恢复经典同步路径。
 
 **饱和摄入下 rewrite 顺延(5.0)。**rewrite 必须折入运行期间落下的写；当追加速率被证明跑赢折入速度时,5.0 顺延 rewrite 而不是付无界停顿：增长规则在当前大小重新锚定，下一个增长因子后重试。显式 `BGREWRITEAOF` 永不受限。可观察的交换项：持续写饱和下 AOF 会越过常规重写点继续增长，压力缓解后收回——磁盘可退，停顿不可退。rewrite 前后可能短暂看到 `<aof>.rewrite`(构建中镜像)与 `<aof>.trashN`(把旧日志 GB 级释放挪出服务线程的硬链接)；两者自动清理，崩溃孤儿由下次 rewrite 回收。备份请排除 `*.rewrite` / `*.trash*`。
 
@@ -269,19 +269,28 @@ store.evictions_total();        // total evicted by maxmemory
 
 ## 耐久性契约（v2.1）
 
-按 `appendfsync` × 写入路径，说明“调用返回 OK”各自保证了什么。“durable”= 已落到稳定存储（`fdatasync` 已完成）；“windowed”= 还在 OS 页缓存里，只有*机器*（而不只是进程）在窗口内死掉才会丢。
+按 `appendfsync` × 写入路径，说明“调用返回 OK”各自保证了什么。“durable”= 已落到稳定存储（`fdatasync` 已完成）；“windowed”= 还没 fsync，窗口内断电或 OS 崩溃可能丢。*进程*被杀丢得更少，见表格下方。
 
 | 写入路径 | `always` | `everysec` | `no` |
 |---|---|---|---|
-| 服务器命令回复 | 回复离开 shard 前已 durable（按批次组提交）| windowed ≤ 1 s | 由 OS 定节奏 |
-| 嵌入式门面操作（`set`、`zadd`、…）| 返回即 durable | windowed ≤ 1 s | 由 OS 定节奏 |
-| 嵌入式 `atomic` / `atomic_all_shards` 块 | 提交即 durable（每个触及的 shard 一次 fsync）| windowed ≤ 1 s | 由 OS 定节奏 |
-| 嵌入式 `Pipeline::commit` | 返回即 durable，fsync 按 shard 合批 | windowed ≤ 1 s | 由 OS 定节奏 |
+| 服务器命令回复 | 回复离开 shard 前已 durable（按批次组提交）| windowed，≤ 约 1 s + 一个 tick + 一次 fsync | 由 OS 定节奏，一个 tick 内进内核 |
+| 嵌入式门面操作（`set`、`zadd`、…）| 返回即 durable | windowed，≤ 约 1 s + 一个 tick + 一次 fsync | 由 OS 定节奏，一个 tick 内进内核 |
+| 嵌入式 `atomic` / `atomic_all_shards` 块 | 提交即 durable（每个触及的 shard 一次 fsync）| windowed，≤ 约 1 s + 一个 tick + 一次 fsync | 由 OS 定节奏，一个 tick 内进内核 |
+| 嵌入式 `Pipeline::commit` | 返回即 durable，fsync 按 shard 合批 | windowed，≤ 约 1 s + 一个 tick + 一次 fsync | 由 OS 定节奏，一个 tick 内进内核 |
 | …以上任一 + **`Store::fsync_aof()`** | 无操作 | **屏障处即 durable** | **屏障处即 durable** |
 
 `Store::fsync_aof()` 是逐写入粒度的耐久性逃生口（Postgres 按事务 `synchronous_commit` 那一路）：部署跑 `everysec` 换吞吐，再把屏障放在少数几笔“一经确认就必须扛住机器崩溃”的写入之后。代价：每个脏 shard 一次 `fdatasync`。
 
-进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入，其他策略最多丢一个 fsync 窗口；AOF 尾巴在下次打开时回放，撕裂的末记录在打开时截掉（丢弃区先复制到隔离文件），绝不静默应用（完整状态机见下面的崩溃一致性契约）。
+进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入。其他策略只丢还没离开用户态的写入：服务器默认的 reactor 每轮迭代都把追加交给内核，所以服务器进程被杀只丢最后一轮的写入；嵌入式引擎把追加暂存在内核持有的内存里（见下一节），进程被杀时已返回的写入一条不丢；关掉暂存后，它按 shard 缓冲追加（最多 256 KiB），每个 tick 把缓冲写进内核，进程被杀最多丢一个 tick 的写入（服务器设 `KEVY_AOF_OFFLOAD=0` 时同样如此）。AOF 尾巴在下次打开时回放，撕裂的末记录在打开时截掉（丢弃区先复制到隔离文件），绝不静默应用（完整状态机见下面的崩溃一致性契约）。
+
+### 嵌入式存储的暂存追加
+
+在 `everysec` 和 `no` 下，嵌入式的一次追加在返回的那一刻就已经在内核持有的内存里，追加路径上没有系统调用：
+
+- **在 Apple 平台上**，映射的是 AOF 本身，末尾预分配一段（4 MiB 起，翻倍到 64 MiB 为止），追加就是往里复制。存储打开期间文件比其中的记录长，多出来的部分全是零；干净关闭时会截掉，被杀的进程留下的零在下次打开时清掉。
+- **在其他平台上**，追加先进一个暂存环 `aof-<i>.aof.stage`（默认每个 shard 4 MiB），这是一个小的映射文件，每个 tick 排进 AOF。下次打开时会重放被杀的进程留在里面的内容，在原目录里和在被杀之后复制出来的目录里都一样。
+
+放得进暂存环的一阵写入不会在调用方线程上调用 `write()`；比暂存环大的持续写入流，速度受限于排空时 `write()` 的速度。断电的丢失上界照旧由 fsync 策略决定。`Config::with_stage_ring(0)` 和 `Config::with_mapped_aof(false)` 可以关掉这两样；`always` 两样都不用。6.4 及更早的版本两样都不认识：进程被杀之后，先用 7.0 打开并关闭一次目录，再退回旧版本（[upgrading-6.4-to-7.0.md](upgrading-6.4-to-7.0.md#1-退回-64目录里可能有什么)）。
 
 **有序停机**（`SHUTDOWN` 或 SIGTERM）在任何策略下都零丢失：排空过程会在退出前强制 fsync AOF 尾巴，所以崩溃可能丢掉的 `everysec` 窗口对干净停机不适用。
 
@@ -304,7 +313,7 @@ store.evictions_total();        // total evicted by maxmemory
 
 **事务标记只属于事务。**流水线批不是事务（Redis 的 pipelining 明确非原子），所以 reactor 批不带标记（`always` 下只共享一次 fsync；4.x 线上曾有一段时间每个单命令批都要付约 65 B 的标记对，被磁盘门禁抓出后修正）。服务器侧的 `MULTI`/`EXEC` 在连接所属 shard 上为排队命令成组打标；扇出到其它 shard 的命令落进各自的日志、逐条独立。因此跨 shard `EXEC` 的崩溃原子性是按 shard 的，不是全局的——与 Redis 自己「EXEC 内运行时错误不回滚其它命令」的精神一致。上文的全有或全无保证属于嵌入式 `atomic()` 家族，它的写入按构造就是单 shard 的。
 
-**feed（CDC）只在内存中，且跑在磁盘前面。** feed backlog 不会在打开时从 AOF 重建；重启后只有 `(generation, offset)` 游标存活。帧在 apply 时刻发射，**早于**记录同一笔写入的 AOF 字节被 fsync——`everysec` 下消费者可能观测到最多约 1 秒后被崩溃回滚的写入（`always`：零；`no`：无上界）。崩溃会 bump feed generation，所以所有崩溃前游标都会收到 `-FEEDRESYNC` / `FeedError::Resync`，消费者必须从恢复后的 store 重新扫描重建。只有覆盖某帧的 fsync 窗口关闭后，才能把它当成 durable 事实——对未 durable 帧采取的副作用，resync 无法召回。
+**feed（CDC）只在内存中，且跑在磁盘前面。** feed backlog 不会在打开时从 AOF 重建；重启后只有 `(generation, offset)` 游标存活。帧在 apply 时刻发射，**早于**记录同一笔写入的 AOF 字节被 fsync——`everysec` 下消费者可能观测到约 1 秒（再加一次 fsync）后被崩溃回滚的写入（`always`：零；`no`：断电时无上界）。崩溃会 bump feed generation，所以所有崩溃前游标都会收到 `-FEEDRESYNC` / `FeedError::Resync`，消费者必须从恢复后的 store 重新扫描重建。只有覆盖某帧的 fsync 窗口关闭后，才能把它当成 durable 事实——对未 durable 帧采取的副作用，resync 无法召回。
 
 **副本对未 fsync 的帧不持有耐久性主张。** 主节点 unclean 重启后会按未 fsync 后缀回滚并 bump feed generation；应用过被回滚写入的副本处于领先位，重连时其分叉历史经全量快照重同步丢弃。重连握手携带副本的 generation（v4），generation 不匹配时主节点拒绝按 offset 续传——无论副本隔多久重连，都不可能被静默喂入新历史的同号 offset（见 [replication.md](replication.md)）。
 
@@ -352,7 +361,7 @@ store.evictions_total();        // total evicted by maxmemory
 replay_resync = true
 ```
 
-（嵌入式用 `Config::with_replay_resync(true)`，手工搭 runtime 用 `Runtime::with_replay_resync(true)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
+（嵌入式用 `Config::with_replay_mode(ReplayMode::Resync)`，手工搭 runtime 用 `Runtime::with_replay_mode(ReplayMode::Resync)`；该设置仅启动时生效——回放先于第一次在线配置 tick。）
 
 resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、CRC **和**恰好一条良构命令的解析三者同时吻合的位置（伪接受需要同时骗过三者——每个候选偏移约 2⁻³²），然后从那里继续应用。每段被跳过的区间都会上报——persist 层的 `ReplayReport::resynced_ranges`、`Store::open_report()` 上的 `OpenReport::resynced_bytes`——且 `corrupt` 标志保持竖起：resync 恢复数据，但不宣布文件健康。
 
@@ -362,7 +371,7 @@ resync 模式下，回放跳过损坏区：向前扫描，直到长度前缀、C
 
 ## 原子性章程（嵌入式 serving-store，v2.1）
 
-- **`Store::atomic(body)`**——单 shard 事务：闭包期间持有该 shard 的写锁，闭包内的读能看到自己刚写的内容，AOF 追加先攒着、**提交时一次 fsync** 落盘（`always` 下）。事务触及的所有键必须哈希到同一个 shard——所以写模式跨任意键时，serving-store 的钦定配置就是 **1 shard**：原子性完整保留，又不付跨 shard 协调的成本。1 shard 配置的天花板是单核写吞吐；实测数字见 `bench/REPORT.md`。
+- **`Store::atomic(body)`**——单 shard 事务：闭包期间持有该 shard 的写锁，闭包内的读能看到自己刚写的内容，AOF 追加先攒着、**提交时一次 fsync** 落盘（`always` 下）。事务触及的所有键必须哈希到同一个 shard——所以写模式跨任意键时，serving-store 的钦定配置就是 **1 shard**：原子性完整保留，又不付跨 shard 协调的成本。1 shard 配置的天花板是单核写吞吐；实测数字见 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)。
 - **`Store::atomic_all_shards(body)`**——多 shard 事务：按 shard 索引顺序拿下**所有** shard 的写锁（顺序确定 = 不会死锁），返回时按 shard 提交 AOF 批次。代价：闭包期间阻塞其他所有读写——用于维护跨 shard 不变量，别当默认写路径。
 - **`Store::pipeline()`**——**不**原子：每个操作各自拿锁，其他写者会穿插进来。它只负责合批 fsync（N 个操作 → 至多 shard 数次 fsync），仅此而已。
 - 两种原子形式都把条件操作（`ZADD GT`、`SPOP`）的**效果**记成无条件 verb，重放和副本应用因此在构造上就是确定性的。

@@ -219,7 +219,7 @@ fn zset_algebra_store_forms_and_reopen() {
 fn feed_consume_loop_and_prefix() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
     assert_eq!(s.feed_shards(), 1);
-    let (g, off) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g, offset: off, .. } = s.changes_tail().unwrap();
     assert_eq!((g, off), (1, 0));
 
     s.set(b"user:1", b"a").unwrap();
@@ -227,20 +227,23 @@ fn feed_consume_loop_and_prefix() {
     s.zadd(b"user:z", &[(1.0, b"m")]).unwrap();
 
     // full stream
-    let batch = s.changes_since(1, 0, 100, &[]).unwrap();
+    let batch = s.changes_since(crate::FeedPosition::new(1, 0), 100, &[]).unwrap();
     assert_eq!(batch.changes.len(), 3);
     assert_eq!(batch.changes[0].argv[0], b"SET".to_vec());
-    assert_eq!(batch.next, (1, 3));
+    assert_eq!(batch.next, crate::FeedPosition::new(1, 3));
     // caught up
-    let empty = s.changes_since(1, 3, 100, &[]).unwrap();
+    let empty = s.changes_since(crate::FeedPosition::new(1, 3), 100, &[]).unwrap();
     assert!(empty.changes.is_empty());
-    assert_eq!(empty.next, (1, 3));
+    assert_eq!(empty.next, crate::FeedPosition::new(1, 3));
     // prefix filter drops sess:, keeps user: (cursor unchanged by filter)
-    let user = s.changes_since(1, 0, 100, &[b"user:"]).unwrap();
+    let user = s.changes_since(crate::FeedPosition::new(1, 0), 100, &[b"user:"]).unwrap();
     assert_eq!(user.changes.len(), 2);
-    assert_eq!(user.next, (1, 3));
+    assert_eq!(user.next, crate::FeedPosition::new(1, 3));
     // future cursor rejected
-    assert!(matches!(s.changes_since(1, 99, 10, &[]), Err(FeedError::Future)));
+    assert!(matches!(
+        s.changes_since(crate::FeedPosition::new(1, 99), 10, &[]),
+        Err(FeedError::Future)
+    ));
     // disabled store answers Disabled
     let off_store = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     assert!(matches!(off_store.changes_tail(), Err(FeedError::Disabled)));
@@ -249,18 +252,15 @@ fn feed_consume_loop_and_prefix() {
 #[test]
 fn feed_flushall_bumps_generation() {
     let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
-    let (g_before, _) = s.changes_tail().unwrap();
+    let g_before = s.changes_tail().unwrap().generation;
     s.set(b"k", b"v").unwrap();
     s.flushall().unwrap();
-    let (g, off) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g, offset: off, .. } = s.changes_tail().unwrap();
     assert_ne!(g, g_before, "FLUSHALL draws a fresh generation identity");
     assert_ne!(g, 0);
     assert_eq!(off, 0);
-    match s.changes_since(g_before, 0, 10, &[]) {
-        Err(FeedError::Resync { generation, tail }) => {
-            assert_eq!(generation, g);
-            assert_eq!(tail, 0);
-        }
+    match s.changes_since(crate::FeedPosition::new(g_before, 0), 10, &[]) {
+        Err(FeedError::Resync { tail }) => assert_eq!(tail, crate::FeedPosition::new(g, 0)),
         other => panic!("expected Resync, got {other:?}"),
     }
 }
@@ -272,7 +272,7 @@ fn feed_clean_reopen_continues_crash_bumps() {
         .unwrap();
     s.set(b"a", b"1").unwrap();
     s.set(b"b", b"2").unwrap();
-    let (g1, off1) = s.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g1, offset: off1, .. } = s.changes_tail().unwrap();
     assert_ne!(g1, 0);
     assert_eq!(off1, 2);
     drop(s); // clean drop → marker written after AOF flush
@@ -281,9 +281,9 @@ fn feed_clean_reopen_continues_crash_bumps() {
         Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
             .unwrap();
     // clean reopen: same generation, offset continues
-    assert_eq!(s2.changes_tail().unwrap(), (g1, 2));
+    assert_eq!(s2.changes_tail().unwrap(), crate::FeedPosition::new(g1, 2));
     s2.set(b"c", b"3").unwrap();
-    let batch = s2.changes_since(g1, 2, 10, &[]).unwrap();
+    let batch = s2.changes_since(crate::FeedPosition::new(g1, 2), 10, &[]).unwrap();
     assert_eq!(batch.changes.len(), 1);
     assert_eq!(batch.changes[0].offset, 2);
     drop(s2);
@@ -293,7 +293,7 @@ fn feed_clean_reopen_continues_crash_bumps() {
     let s3 =
         Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0))
             .unwrap();
-    let (g3, off3) = s3.changes_tail().unwrap();
+    let crate::FeedPosition { generation: g3, offset: off3, .. } = s3.changes_tail().unwrap();
     assert_ne!(g3, g1, "unclean reopen draws a fresh generation");
     assert_ne!(g3, 0);
     assert_eq!(off3, 0);
@@ -542,7 +542,7 @@ fn idx_create_query_maintain_reopen() {
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     let st = s2.idx_stats(b"score_idx").unwrap();
     assert_eq!(st.entries, 31, "30 + copied, rebuilt from replayed data");
-    assert!(s2.idx_drop(b"score_idx"));
+    assert!(s2.idx_drop(b"score_idx").unwrap());
     assert!(
         s2.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(1), None, 10).is_err()
     );
@@ -557,11 +557,7 @@ fn view_create_query_maintain_reopen() {
     use crate::{IndexKind, IndexValType, IndexValue, ViewLeaf, ViewMode, ViewTree};
     let dir = crate::store::test_suites::tests::tmp_dir("view-reopen");
     let leaf = |idx: &str, lo: i64, hi: i64| {
-        ViewTree::Leaf(ViewLeaf {
-            index: idx.into(),
-            min: IndexValue::I64(lo),
-            max: IndexValue::I64(hi),
-        })
+        ViewTree::Leaf(ViewLeaf::new(idx, IndexValue::I64(lo), IndexValue::I64(hi)))
     };
     {
         let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -579,7 +575,14 @@ fn view_create_query_maintain_reopen() {
         s.idx_create(b"t_flag", b"t:", b"flag", IndexValType::I64, IndexKind::Range).unwrap();
         // materialized top-3 DESC: even (flag=1) rows with pri ≤ 15
         let tree = ViewTree::And(Box::new(leaf("t_pri", 0, 15)), Box::new(leaf("t_flag", 1, 1)));
-        s.view_create(b"v_top", tree, b"t_pri", true, ViewMode::Materialized { top_k: 3 }).unwrap();
+        s.view_create(
+            b"v_top",
+            tree,
+            b"t_pri",
+            kevy_index::SortOrder::Desc,
+            ViewMode::Materialized { top_k: 3 },
+        )
+        .unwrap();
         let (page, _) = s.view_query(b"v_top", None, 3).unwrap();
         let keys: Vec<_> =
             page.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
@@ -593,18 +596,32 @@ fn view_create_query_maintain_reopen() {
         let (page, _) = s.view_query(b"v_top", None, 10).unwrap();
         assert!(!page.iter().any(|(k, _)| k == b"t:14"));
         // virtual view + count + list + unknown-index rejection
-        s.view_create(b"v_all", leaf("t_pri", 0, 100), b"t_pri", false, ViewMode::Virtual).unwrap();
+        s.view_create(
+            b"v_all",
+            leaf("t_pri", 0, 100),
+            b"t_pri",
+            kevy_index::SortOrder::Asc,
+            ViewMode::Virtual,
+        )
+        .unwrap();
         assert_eq!(s.view_count(b"v_all").unwrap(), 20);
         assert_eq!(s.view_list().len(), 2);
         assert!(
-            s.view_create(b"bad", leaf("nope", 0, 1), b"t_pri", false, ViewMode::Virtual).is_err()
+            s.view_create(
+                b"bad",
+                leaf("nope", 0, 1),
+                b"t_pri",
+                kevy_index::SortOrder::Asc,
+                ViewMode::Virtual
+            )
+            .is_err()
         );
     }
     // reopen: view catalog persisted; rebuilt lazily against replayed data
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
     let (page, _) = s2.view_query(b"v_top", None, 3).unwrap();
     assert_eq!(page[0].0, b"t:15".to_vec(), "reopen rebuild honest");
-    assert!(s2.view_drop(b"v_top"));
+    assert!(s2.view_drop(b"v_top").unwrap());
     assert!(s2.view_query(b"v_top", None, 1).is_err());
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
@@ -652,12 +669,7 @@ fn text_index_highlight_embedded() {
     assert!(plain[0].2.is_empty(), "no spans without a highlight request");
     // Highlight the term: "quick" is bytes 4..9 of field "body".
     let hl = s
-        .idx_match_with(
-            b"hb",
-            b"quick",
-            10,
-            crate::MatchOpts { highlight: Some(&[]), ..Default::default() },
-        )
+        .idx_match_with(b"hb", b"quick", 10, crate::MatchOpts::default().with_highlight(&[]))
         .unwrap();
     assert_eq!(hl.len(), 1);
     assert_eq!(hl[0].0, b"n:1".to_vec());
@@ -668,7 +680,7 @@ fn text_index_highlight_embedded() {
             b"hb",
             b"quick",
             10,
-            crate::MatchOpts { highlight: Some(&[b"title".to_vec()]), ..Default::default() },
+            crate::MatchOpts::default().with_highlight(&[b"title".to_vec()]),
         )
         .unwrap();
     assert!(none[0].2.is_empty(), "the 'body' spans are filtered out");
@@ -687,8 +699,13 @@ fn ann_index_knn_embedded() {
         let (x, y) = ((i % 10) as f32, (i / 10) as f32);
         s.hset(format!("g:{i}").as_bytes(), &[(b"v", blob(x, y).as_slice())]).unwrap();
     }
-    s.idx_create_ann(b"g_v", b"g:", b"v", crate::AnnSpec { dim: 2, distance: 1, m: 0, ef: 0 })
-        .unwrap(); // l2, defaults
+    s.idx_create_ann(
+        b"g_v",
+        b"g:",
+        b"v",
+        crate::AnnSpec::new(2).with_distance(1).with_m(0).with_ef(0),
+    )
+    .unwrap(); // l2, defaults
     let hits = s.idx_knn(b"g_v", &[5.1, 7.05], 3, 0).unwrap();
     assert_eq!(hits[0].0, b"g:75".to_vec(), "{hits:?}"); // (5,7)
     assert_eq!(hits.len(), 3);
@@ -701,8 +718,23 @@ fn ann_index_knn_embedded() {
     assert_ne!(hits[0].0, b"g:0".to_vec());
     // bad params + unknown index
     assert!(
-        s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 })
-            .is_err()
+        s.idx_create_ann(
+            b"bad",
+            b"g:",
+            b"v",
+            crate::AnnSpec::new(0).with_distance(0).with_m(0).with_ef(0)
+        )
+        .is_err()
+    );
+    assert!(
+        s.idx_create_ann(
+            b"bad_m",
+            b"g:",
+            b"v",
+            crate::AnnSpec::new(2).with_distance(0).with_m(1).with_ef(0)
+        )
+        .is_err(),
+        "M = 1 has no level distribution"
     );
     assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3, 0).is_err());
 }
@@ -826,10 +858,17 @@ fn text_index_field_scope_embedded() {
         &[(b"title", b"gardening weekly"), (b"body", b"this body mentions rust once or twice")],
     )
     .unwrap();
-    s.idx_create_text(b"ft", b"n:", &[(b"title", 1.0), (b"body", 1.0)], true, &[]).unwrap();
+    s.idx_create_text(
+        b"ft",
+        b"n:",
+        &[(b"title", 1.0), (b"body", 1.0)],
+        crate::TokenPositions::Record,
+        &[],
+    )
+    .unwrap();
 
     fn scope(f: &[Vec<u8>]) -> crate::MatchOpts<'_> {
-        crate::MatchOpts { scope: f, ..Default::default() }
+        crate::MatchOpts::default().with_scope(f)
     }
     let one = |f: &str| vec![f.as_bytes().to_vec()];
     // Unscoped, both documents mention rust.
@@ -845,7 +884,7 @@ fn text_index_field_scope_embedded() {
     // Naming both fields is the unscoped query again.
     let both = vec![b"title".to_vec(), b"body".to_vec()];
     let all = s
-        .idx_match_with(b"ft", b"rust", 10, crate::MatchOpts { scope: &both, ..Default::default() })
+        .idx_match_with(b"ft", b"rust", 10, crate::MatchOpts::default().with_scope(&both))
         .unwrap();
     assert_eq!(all.len(), 2);
 
@@ -875,8 +914,14 @@ fn text_index_filter_embedded() {
         )
         .unwrap();
     }
-    s.idx_create_text(b"pf", b"p:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
-        .unwrap();
+    s.idx_create_text(
+        b"pf",
+        b"p:",
+        &[(b"body", 1.0)],
+        crate::TokenPositions::Omit,
+        &[(b"price", IndexValType::I64)],
+    )
+    .unwrap();
 
     // Unfiltered, the priciest rank first.
     let plain = s.idx_match(b"pf", b"rust", 3).unwrap();
@@ -885,12 +930,7 @@ fn text_index_filter_embedded() {
     // Filtered to the cheap half, the page fills from further down.
     let cheap = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"50" }];
     let hits = s
-        .idx_match_with(
-            b"pf",
-            b"rust",
-            3,
-            crate::MatchOpts { filters: &cheap, ..Default::default() },
-        )
+        .idx_match_with(b"pf", b"rust", 3, crate::MatchOpts::default().with_filters(&cheap))
         .unwrap();
     assert_eq!(hits.len(), 3, "not an empty page");
     assert!(hits.iter().all(|h| h.0 != b"p:0".to_vec()), "the leader is filtered out");
@@ -898,34 +938,19 @@ fn text_index_filter_embedded() {
     // Numeric, not lexicographic: 10..20 is two documents.
     let narrow = [crate::ValueFilter::Range { field: b"price", min: b"10", max: b"20" }];
     let hits = s
-        .idx_match_with(
-            b"pf",
-            b"rust",
-            10,
-            crate::MatchOpts { filters: &narrow, ..Default::default() },
-        )
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts::default().with_filters(&narrow))
         .unwrap();
     assert_eq!(hits.len(), 2, "9 must not sort above 10");
 
     // An unstored field and a bad bound both error rather than paging empty.
     let unstored = [crate::ValueFilter::Eq { field: b"colour", value: b"red" }];
     let e = s
-        .idx_match_with(
-            b"pf",
-            b"rust",
-            10,
-            crate::MatchOpts { filters: &unstored, ..Default::default() },
-        )
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts::default().with_filters(&unstored))
         .expect_err("unstored field");
     assert!(format!("{e}").contains("price"), "names what it does store: {e}");
     let badbound = [crate::ValueFilter::Range { field: b"price", min: b"cheap", max: b"50" }];
     let e = s
-        .idx_match_with(
-            b"pf",
-            b"rust",
-            10,
-            crate::MatchOpts { filters: &badbound, ..Default::default() },
-        )
+        .idx_match_with(b"pf", b"rust", 10, crate::MatchOpts::default().with_filters(&badbound))
         .expect_err("bad bound");
     assert!(format!("{e}").contains("i64"), "names the declared type: {e}");
 }
@@ -947,11 +972,19 @@ fn text_index_sort_embedded() {
         .unwrap();
     }
     s.hset(b"s:x", &[(b"body" as &[u8], b"rust" as &[u8])]).unwrap();
-    s.idx_create_text(b"sf", b"s:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
-        .unwrap();
+    s.idx_create_text(
+        b"sf",
+        b"s:",
+        &[(b"body", 1.0)],
+        crate::TokenPositions::Omit,
+        &[(b"price", IndexValType::I64)],
+    )
+    .unwrap();
 
-    let opts =
-        |desc| crate::MatchOpts { sort: Some((b"price" as &[u8], desc)), ..Default::default() };
+    let opts = |desc| {
+        crate::MatchOpts::default()
+            .with_sort(b"price", if desc { crate::SortOrder::Desc } else { crate::SortOrder::Asc })
+    };
     let asc: Vec<Vec<u8>> = s
         .idx_match_with(b"sf", b"rust", 3, opts(false))
         .unwrap()
@@ -982,7 +1015,7 @@ fn text_index_sort_embedded() {
             b"sf",
             b"rust",
             3,
-            crate::MatchOpts { sort: Some((b"colour", false)), ..Default::default() },
+            crate::MatchOpts::default().with_sort(b"colour", crate::SortOrder::Asc),
         )
         .expect_err("unstored sort field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
@@ -1009,14 +1042,20 @@ fn text_index_distinct_embedded() {
         )
         .unwrap();
     }
-    s.idx_create_text(b"gf", b"g:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
-        .unwrap();
+    s.idx_create_text(
+        b"gf",
+        b"g:",
+        &[(b"body", 1.0)],
+        crate::TokenPositions::Omit,
+        &[(b"price", IndexValType::I64)],
+    )
+    .unwrap();
 
     let plain: Vec<Vec<u8>> =
         s.idx_match(b"gf", b"rust", 3).unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(plain, vec![b"g:a1".to_vec(), b"g:a2".to_vec(), b"g:b1".to_vec()]);
 
-    let opts = crate::MatchOpts { distinct: Some(b"price"), ..Default::default() };
+    let opts = crate::MatchOpts::default().with_distinct(b"price");
     let d: Vec<Vec<u8>> =
         s.idx_match_with(b"gf", b"rust", 3, opts).unwrap().into_iter().map(|h| h.0).collect();
     assert_eq!(
@@ -1026,12 +1065,7 @@ fn text_index_distinct_embedded() {
     );
 
     let e = s
-        .idx_match_with(
-            b"gf",
-            b"rust",
-            3,
-            crate::MatchOpts { distinct: Some(b"colour"), ..Default::default() },
-        )
+        .idx_match_with(b"gf", b"rust", 3, crate::MatchOpts::default().with_distinct(b"colour"))
         .expect_err("unstored distinct field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");
 }
@@ -1057,17 +1091,18 @@ fn text_index_facet_embedded() {
         )
         .unwrap();
     }
-    s.idx_create_text(b"ff", b"f2:", &[(b"body", 1.0)], false, &[(b"price", IndexValType::I64)])
-        .unwrap();
+    s.idx_create_text(
+        b"ff",
+        b"f2:",
+        &[(b"body", 1.0)],
+        crate::TokenPositions::Omit,
+        &[(b"price", IndexValType::I64)],
+    )
+    .unwrap();
 
     let names = vec![b"price".to_vec()];
     let page = s
-        .idx_match_faceted(
-            b"ff",
-            b"rust",
-            1,
-            crate::MatchOpts { facets: &names, ..Default::default() },
-        )
+        .idx_match_faceted(b"ff", b"rust", 1, crate::MatchOpts::default().with_facets(&names))
         .unwrap();
     assert_eq!(page.hits.len(), 1, "the page is one document");
     let mut got: Vec<(Vec<u8>, u64)> = page.facets[0].clone();
@@ -1084,7 +1119,7 @@ fn text_index_facet_embedded() {
             b"ff",
             b"rust",
             10,
-            crate::MatchOpts { facets: &names, distinct: Some(b"price"), ..Default::default() },
+            crate::MatchOpts::default().with_facets(&names).with_distinct(b"price"),
         )
         .unwrap();
     assert_eq!(page.hits.len(), 3);
@@ -1095,7 +1130,7 @@ fn text_index_facet_embedded() {
             b"ff",
             b"rust",
             3,
-            crate::MatchOpts { facets: &[b"colour".to_vec()], ..Default::default() },
+            crate::MatchOpts::default().with_facets(&[b"colour".to_vec()]),
         )
         .expect_err("unstored facet field");
     assert!(format!("{e}").contains("price"), "names what it stores: {e}");

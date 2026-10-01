@@ -31,31 +31,14 @@ impl Store {
     pub fn set(&self, key: &[u8], value: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), None, false, false);
+        let ok = g.store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         commit_write(&mut g, &[b"SET", key, value])?;
-        Ok(ok)
-    }
-
-    /// `SET key value PX ms` — overwrites + sets TTL. The AOF records an
-    /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
-    /// expires at the same wall-clock instant after a restart — a relative
-    /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
-    /// fresh full duration on every restart (seen as a production
-    /// incident: cache keys never expired across restarts).
-    pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
-        ensure_writable(self)?;
-        let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
-        let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-        let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-        commit_write(&mut g, &[b"SET", key, value])?;
-        commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
         Ok(ok)
     }
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
     ///
-    /// The lock is **policy-gated** (see [`Self::reads_use_shared_lock`]):
+    /// The lock is **policy-gated**:
     /// whenever the active eviction policy won't consume a per-read LRU/LFU
     /// tick — `maxmemory == 0` (the default), or the `NoEviction` /
     /// `*Random` / `VolatileTtl` policies — this takes the **shared** lock and a
@@ -98,7 +81,7 @@ impl Store {
     /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
     /// hand JS a buffer viewing the engine's own storage (the win vs the plain
     /// [`Self::get`], which `into_owned`-copies). The lookup is non-mutating;
-    /// the lock is policy-gated like [`Self::get`] ([`Self::reads_use_shared_lock`]).
+    /// the lock is policy-gated like [`Self::get`].
     /// This lane never stamps the LRU clock and never promotes a cold value.
     pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
         if self.reads_use_shared_lock() {
@@ -107,6 +90,23 @@ impl Store {
         }
         let g = self.wshard(key);
         g.store.get_shared_owned(key).map_err(store_err)
+    }
+
+    /// [`Self::get_shared_owned`] that lends the value to `f` under the
+    /// shard's lock instead of handing out an owner — for a binding that
+    /// copies the bytes into its own reply and would otherwise allocate a
+    /// small value's owner only to drop it.
+    ///
+    /// ```
+    /// let s = kevy_embedded::Store::open(kevy_embedded::Config::default()).unwrap();
+    /// s.set(b"k", b"v").unwrap();
+    /// assert_eq!(s.get_with(b"k", |v| v.map(<[u8]>::to_vec)).unwrap(), Some(b"v".to_vec()));
+    /// ```
+    pub fn get_with<R>(&self, key: &[u8], f: impl FnOnce(Option<&[u8]>) -> R) -> KevyResult<R> {
+        if self.reads_use_shared_lock() {
+            return self.rshard(key).store.get_shared_with(key, f).map_err(store_err);
+        }
+        self.wshard(key).store.get_shared_with(key, f).map_err(store_err)
     }
 
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
@@ -157,9 +157,7 @@ impl Store {
         let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
         if touched {
-            let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
-            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-            commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
+            crate::store_glue::commit_deadline(&mut g, key)?;
         }
         Ok(touched)
     }

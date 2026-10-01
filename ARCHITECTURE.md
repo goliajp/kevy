@@ -42,11 +42,11 @@ publishable on their own.
 L6  kevy-jni  kevy-napi                       ← language ABIs
 L5  kevy  kevy-cli  kevy-client  kevy-ffi  kevy-wasm
 L4  kevy-rt  kevy-embedded  kevy-client-async  kevy-cluster-rw  kevy-mcp
-L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client
+L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client  kevy-verbs
 L2  kevy-store  kevy-resp  kevy-window  kevy-sql
 L1  kevy-map  kevy-bytes  kevy-seg  kevy-vlog  kevy-index  kevy-scalar
                                                           kevy-lua-host
-L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time
+L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time  kevy-crypto  kevy-noise
     kevy-geo  kevy-text  kevy-vector  kevy-ranktree  kevy-compress
     kevy-config  kevy-madvise  kevy-tmpdir  kevy-lua  kevy-scope
     kevy-chaos  kevy-bench  kevy-testnet  kevy-pubsub-bench
@@ -56,7 +56,9 @@ L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time
 keyspace, or about each other's callers, and several are published for
 their own sake — `kevy-map` is a Swiss-table, `kevy-ranktree` an
 order-statistic B-tree, `kevy-seg` an immutable segment file, `kevy-time`
-calendar arithmetic. A change here is felt by every caller, so they carry the
+calendar arithmetic. `kevy-crypto` holds the primitives of an encrypted
+transport: ChaCha20-Poly1305, X25519 and BLAKE2s, with no dependencies;
+`kevy-noise` is the Noise IK handshake and transport built on them. A change here is felt by every caller, so they carry the
 strictest rules and the most tests.
 
 **L2–L4 know the domain.** A keyspace, values with expiry, a wire protocol,
@@ -77,8 +79,10 @@ One `SET` from a client socket, on the server:
    they talk over `kevy-ring` SPSC queues when a key belongs to another shard.
 3. **`kevy-resp`** — bytes to argv and back. Sans-IO: it never reads a socket,
    which is why it can be tested exhaustively.
-4. **`kevy`'s dispatch** — argv to a verb, arity and type checks, the RESP2 vs
-   RESP3 reply shape.
+4. **`kevy`'s dispatch** — argv to a verb. A data command on one shard runs in
+   **`kevy-verbs`**: arity and type checks, the store call, the reply, the
+   same code the embedded engine runs. The server adds what only it has: the
+   RESP3 reply shapes, connection state, the cluster and ops verbs.
 5. **`kevy-store`** — the keyspace itself: `kevy-map` for the table,
    `kevy-bytes` for small values, expiry, and the tiering path down to
    `kevy-vlog` / `kevy-seg` when a value gets cold.
@@ -112,7 +116,7 @@ you hand it, or at step 5 with a typed call.
 
 | You want to… | Start here |
 |---|---|
-| add or fix a Redis command | `crates/kevy/src/dispatch*` + `verb_meta`, then `kevy-store` |
+| add or fix a Redis command | `kevy-verbs` for a data command on one shard, `crates/kevy/src/dispatch*` for the rest; then `verb_meta` and `kevy-store` |
 | change how a value is stored | `kevy-store`, and `kevy-bytes` if it is small |
 | touch the wire format | `kevy-resp` — and read `bench/resp3gate.sh` first |
 | change the reactor or sharding | `kevy-rt` |
@@ -136,8 +140,12 @@ the thing they check:
 - `tools/` — the version-alignment gate across seven layers, command coverage
   against the pinned Redis, channel parity that asks each registry rather
   than reading the tree.
-- `suite/manifest.toml` — three tiers: `precommit`, `prerelease`, `full`.
-  `python3 tools/suite.py precommit` is what runs before every push.
+- `suite/manifest.toml` — four tiers: `precommit`, `premerge`, `prerelease`,
+  `full`, each including the one before. `python3 tools/suite.py precommit`
+  is what runs before every push; `premerge` is what CI checks on a push;
+  `prerelease` adds the questions only a release asks, and takes every row
+  CI already answered green for the same commit instead of running it
+  again; `full` adds the long measurements that need the bench box.
 
 ## Reading order
 

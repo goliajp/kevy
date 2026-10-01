@@ -1,5 +1,7 @@
 //! The read-only RESP listener against a live embedded store.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 
 use kevy_embedded::{Config, Store};
@@ -20,7 +22,7 @@ fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn listener_reads_live_store_rejects_writes() {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = kevy_testnet::free_port();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let store = Store::open(
         Config::default().with_ttl_reaper_manual().with_resp_listener(addr).with_feed(1 << 20),
@@ -56,6 +58,9 @@ fn listener_reads_live_store_rejects_writes() {
     let r = cmd(&mut c, &[b"ZRANGE", b"z:1", b"0", b"-1", b"WITHSCORES"]);
     assert!(String::from_utf8_lossy(&r).contains("m2"), "{r:?}");
     assert_eq!(cmd(&mut c, &[b"DBSIZE"]), b":5\r\n");
+    // untiered: no tiering section at all, not one with zeroes in it
+    let info = cmd(&mut c, &[b"INFO"]);
+    assert!(!String::from_utf8_lossy(&info).contains("Tiering"), "{info:?}");
 
     // live visibility: a write AFTER connect is immediately readable
     store.set(b"greeting", b"updated").unwrap();
@@ -101,12 +106,12 @@ fn listener_reads_live_store_rejects_writes() {
 /// The listener's `INFO # Tiering` must carry the SAME field set as the
 /// server's section — docs/tiering.md promises "identical on server and
 /// embedded listener". The honesty audit (2026-07-25) found the listener
-/// silently dropping the two T6 counters; this pins all 15 fields on the
+/// silently dropping the two T6 counters; this pins all 19 fields on the
 /// listener wire so the section can never drift shorter again.
 #[test]
 fn listener_info_tiering_carries_every_documented_field() {
     let dir = kevy_tmpdir::TmpDir::new("listener-tier-info");
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = kevy_testnet::free_port();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let store = Store::open(
         Config::default()
@@ -144,6 +149,10 @@ fn listener_info_tiering_carries_every_documented_field() {
         "promotions_total",
         "peek_preads_total",
         "batch_submissions_total",
+        "vlog_raw_bytes",
+        "vlog_payload_bytes",
+        "vlog_frame_header_bytes",
+        "vlog_dict_bytes",
     ] {
         assert!(body.contains(&format!("{field}:")), "listener INFO missing `{field}`:\n{body}");
     }

@@ -13,10 +13,11 @@
 
 use kevy_index::{FieldSpec, IndexKind, ValType, ValueSpec};
 
-use super::util::{err, kevy_err};
+use super::kevy_err;
 use crate::store::Store;
+use kevy_resp::encode_error;
 
-pub(super) const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+pub(super) const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f | FIELDS f… [WEIGHTS w…] TYPE i64|f64|str|vector KIND range|unique|text|ann [WITH POSITIONS] [VALUES f… [TYPES t…]] [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e] [PARTITION local|global] [SPLIT v]…";
 
 /// Optional CREATE tail, parsed out. MAXMEM is accepted then ignored
 /// (the embedded build is synchronous, with no budget). Without the
@@ -47,7 +48,7 @@ struct Parsed {
 pub(super) fn cmd_idx_create(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     match parse(argv) {
         Ok(p) => route(s, argv, &p, out),
-        Err(msg) => err(out, msg),
+        Err(msg) => encode_error(out, msg),
     }
 }
 
@@ -101,8 +102,11 @@ fn parse_fields(argv: &[Vec<u8>]) -> Result<(Vec<FieldSpec>, usize), &'static st
     if i < argv.len() && argv[i].eq_ignore_ascii_case(b"WEIGHTS") {
         i = parse_weights(argv, i + 1, &mut weights)?;
     }
-    let fields =
-        names.into_iter().zip(weights).map(|(name, weight)| FieldSpec { name, weight }).collect();
+    let fields = names
+        .into_iter()
+        .zip(weights)
+        .map(|(name, w)| FieldSpec::new(name).with_weight(w))
+        .collect();
     Ok((fields, i))
 }
 
@@ -163,6 +167,8 @@ fn is_create_opt(a: &[u8]) -> bool {
         b"DISTANCE",
         b"VALUES",
         b"TYPES",
+        b"PARTITION",
+        b"SPLIT",
     ] {
         if a.eq_ignore_ascii_case(kw) {
             return true;
@@ -276,6 +282,15 @@ fn apply_create_opt(opt: &[u8], val: &[u8], o: &mut CreateOpts) -> Result<(), &'
             return Err("ERR GROUPBY requires a field");
         }
         o.group_by = Some(val.to_vec());
+    } else if opt.eq_ignore_ascii_case(b"PARTITION") && val.eq_ignore_ascii_case(b"LOCAL") {
+        // every embedded index is local; saying so is fine
+    } else if opt.eq_ignore_ascii_case(b"PARTITION") || opt.eq_ignore_ascii_case(b"SPLIT") {
+        // a global index saves a server the fan-out to every shard; an
+        // embedded store reads every index under its own locks, so there
+        // is nothing for it to save
+        return Err(
+            "ERR PARTITION global is a server feature; an embedded store's indexes are local",
+        );
     } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
         o.distance = if val.eq_ignore_ascii_case(b"cosine") {
             0
@@ -326,7 +341,7 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
     // the typed `idx_create_agg` / `idx_create_ann` capabilities do not
     // carry a values list to be refused downstream.
     if !p.opts.values.is_empty() && matches!(p.kind, IndexKind::Agg | IndexKind::Ann) {
-        return err(out, "ERR VALUES requires KIND text|range|unique");
+        return encode_error(out, "ERR VALUES requires KIND text|range|unique");
     }
     let res = match p.kind {
         #[cfg(feature = "text")]
@@ -339,15 +354,13 @@ fn route(s: &Store, argv: &[Vec<u8>], p: &Parsed, out: &mut Vec<u8>) {
             name,
             prefix,
             field0,
-            kevy_index::AnnSpec {
-                dim: p.opts.dim,
-                distance: p.opts.distance,
-                m: p.opts.m,
-                ef: p.opts.ef,
-            },
+            kevy_index::AnnSpec::new(p.opts.dim)
+                .with_distance(p.opts.distance)
+                .with_m(p.opts.m)
+                .with_ef(p.opts.ef),
         ),
         #[cfg(not(feature = "vector"))]
-        IndexKind::Ann => return err(out, "ERR vector indexes need the `vector` feature"),
+        IndexKind::Ann => return encode_error(out, "ERR vector indexes need the `vector` feature"),
         // range / unique (and text / ann when their feature is off — the
         // Store returns the same feature error the server would).
         _ if p.opts.values.is_empty() => s.idx_create(name, prefix, field0, p.ty, p.kind),
@@ -371,5 +384,10 @@ fn create_text(s: &Store, name: &[u8], prefix: &[u8], p: &Parsed) -> crate::Kevy
         p.fields.iter().map(|f| (f.name.as_slice(), f.weight)).collect();
     let values: Vec<(&[u8], ValType)> =
         p.opts.values.iter().map(|v| (v.name.as_slice(), v.ty)).collect();
-    s.idx_create_text(name, prefix, &fields, p.opts.with_positions, &values)
+    let positions = if p.opts.with_positions {
+        crate::TokenPositions::Record
+    } else {
+        crate::TokenPositions::Omit
+    };
+    s.idx_create_text(name, prefix, &fields, positions, &values)
 }

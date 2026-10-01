@@ -8,14 +8,17 @@
 //! rationale as MULTI) and its calls are in-process already; it
 //! answers `Unsupported`.
 //!
-//! ```no_run
-//! use kevy_client::Connection;
+//! ```
+//! use kevy_client::{Connection, Reply};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
 //!
-//! let mut conn = Connection::connect("kevy://localhost:6379")?;
+//! let mut conn = Connection::connect(&format!("kevy://localhost:{port}"))?;
 //! let replies = conn.pipeline(|p| {
 //!     p.cmd(&[b"SET", b"a", b"1"]).cmd(&[b"INCR", b"n"]).cmd(&[b"GET", b"a"]);
 //! })?;
-//! assert_eq!(replies.len(), 3);
+//! assert_eq!(replies, [Reply::Simple(b"OK".to_vec()), Reply::Int(1), Reply::Bulk(b"1".to_vec())]);
 //! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 
@@ -28,6 +31,8 @@ use crate::Connection;
 /// Client-side command buffer for [`Connection::pipeline`]. Each
 /// [`Self::cmd`] appends one RESP-encoded command; the whole buffer is
 /// flushed in a single write.
+///
+#[doc = include_str!("pipeline_docs/pipeline_buf.md")]
 #[derive(Debug, Default)]
 pub struct PipelineBuf {
     buf: Vec<u8>,

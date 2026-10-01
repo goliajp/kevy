@@ -61,7 +61,11 @@ impl<'a> Input<'a> {
             1 => f64::INFINITY,
             _ => self.score()?,
         };
-        Some(ScoreBound { value, exclusive: kind & 0x10 != 0 })
+        Some(if kind & 0x10 != 0 {
+            ScoreBound::exclusive(value)
+        } else {
+            ScoreBound::inclusive(value)
+        })
     }
 }
 
@@ -154,11 +158,7 @@ fuzz_target!(|data: &[u8]| {
             6 => {
                 let Some(member) = input.member() else { break };
                 let want = sorted(oracle).iter().position(|(m, _)| *m == member);
-                assert_eq!(
-                    store.zrank(key, &member).expect("zrank"),
-                    want,
-                    "zrank diverged"
-                );
+                assert_eq!(store.zrank(key, &member).expect("zrank"), want, "zrank diverged");
             }
             7 => {
                 let (Some(a), Some(b)) = (input.byte(), input.byte()) else { break };
@@ -177,26 +177,12 @@ fuzz_target!(|data: &[u8]| {
                 let (Some(min), Some(max)) = (input.bound(), input.bound()) else { break };
                 let ge = |s: f64| if min.exclusive { s > min.value } else { s >= min.value };
                 let le = |s: f64| if max.exclusive { s < max.value } else { s <= max.value };
-                let want: Vec<(Vec<u8>, f64)> = sorted(oracle)
-                    .into_iter()
-                    .filter(|(_, s)| ge(*s) && le(*s))
-                    .collect();
+                let want: Vec<(Vec<u8>, f64)> =
+                    sorted(oracle).into_iter().filter(|(_, s)| ge(*s) && le(*s)).collect();
                 let want_count = want.len();
-                let got = store
-                    .zrange_by_score(
-                        key,
-                        ScoreBound { value: min.value, exclusive: min.exclusive },
-                        ScoreBound { value: max.value, exclusive: max.exclusive },
-                    )
-                    .expect("zrange_by_score");
+                let got = store.zrange_by_score(key, min, max).expect("zrange_by_score");
                 assert_eq!(got, want, "zrange_by_score diverged");
-                let count = store
-                    .zcount(
-                        key,
-                        ScoreBound { value: min.value, exclusive: min.exclusive },
-                        ScoreBound { value: max.value, exclusive: max.exclusive },
-                    )
-                    .expect("zcount");
+                let count = store.zcount(key, min, max).expect("zcount");
                 assert_eq!(count, want_count, "zcount diverged");
             }
             9 => {

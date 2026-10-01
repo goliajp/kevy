@@ -15,8 +15,21 @@
 //!
 //! If kevy ever needs SHA-1 / SHA-256 for an actual security-bearing
 //! purpose, that's a separate `kevy-crypto` stone, not here.
+//!
+//! ```
+//! use kevy_lua::sha1;
+//! let digest = sha1::sha1(b"abc");
+//! let hex = sha1::hex(&digest);
+//! assert_eq!(&hex, b"a9993e364706816aba3e25717850c26c9cd0d89d");
+//! assert_eq!(sha1::parse_hex(&hex), Some(digest));
+//! ```
 
 /// Compute the SHA-1 of `data`. Returns the 20-byte digest.
+///
+/// ```
+/// let d = kevy_lua::sha1::sha1(b"");
+/// assert_eq!(d[..4], [0xda, 0x39, 0xa3, 0xee]);
+/// ```
 pub fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0];
 
@@ -79,6 +92,12 @@ fn compress(h: &mut [u32; 5], chunk: &[u8]) {
 }
 
 /// Format a 20-byte SHA-1 digest as 40 lowercase ASCII hex chars.
+///
+/// ```
+/// let mut d = [0u8; 20];
+/// d[0] = 0xAB;
+/// assert_eq!(&kevy_lua::sha1::hex(&d)[..4], b"ab00");
+/// ```
 pub fn hex(digest: &[u8; 20]) -> [u8; 40] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = [0u8; 40];
@@ -91,6 +110,14 @@ pub fn hex(digest: &[u8; 20]) -> [u8; 40] {
 
 /// Parse a 40-character ASCII hex string into a SHA-1 digest.
 /// Returns `None` on malformed input (wrong length or non-hex chars).
+///
+/// ```
+/// use kevy_lua::sha1::parse_hex;
+/// let empty = kevy_lua::sha1::sha1(b"");
+/// assert_eq!(parse_hex(b"DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"), Some(empty));
+/// assert_eq!(parse_hex(b"da39"), None);
+/// assert_eq!(parse_hex(&[b'z'; 40]), None);
+/// ```
 pub fn parse_hex(hex_str: &[u8]) -> Option<[u8; 20]> {
     if hex_str.len() != 40 {
         return None;

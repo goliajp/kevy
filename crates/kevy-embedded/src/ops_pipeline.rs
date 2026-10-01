@@ -17,6 +17,16 @@ use crate::store::Store;
 /// Builder-style write queue. Returned by [`Store::pipeline`]; call
 /// fluent methods to enqueue + `commit()` to apply with batched
 /// AOF fsync.
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// let queued = s.pipeline().set(b"a", b"1").incr(b"hits").incr(b"hits");
+/// assert_eq!(queued.len(), 3);
+/// assert_eq!(s.get(b"hits")?, None, "nothing applies before commit");
+/// queued.commit()?;
+/// assert_eq!(s.get(b"hits")?.as_deref(), Some(&b"2"[..]));
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug)]
 pub struct Pipeline<'a> {
     store: &'a Store,

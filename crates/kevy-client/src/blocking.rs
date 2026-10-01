@@ -22,6 +22,8 @@ use kevy_resp_client::RespClient;
 use crate::{Connection, num_f64, string, unexpected};
 
 /// `(key, member, score)` from [`Connection::bzpopmin`].
+///
+#[doc = include_str!("blocking_docs/zpop_hit.md")]
 pub type ZPopHit = (Vec<u8>, Vec<u8>, f64);
 
 impl Connection {

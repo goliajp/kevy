@@ -146,7 +146,7 @@ HSET u:1 id 1 name ada age 34 dept eng
 
 # the ORDER BY dept, age DESC walk — one composite index, no planner
 IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
-                    "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。",
+                    "note": "类型化列、二级索引、复合 ORDER BY 路径——连你的 PG/MySQL schema 文件也能编译（kevy-cli --kevy sql compile）。没有运行期 SQL，没有 join：那些留在 Postgres。",
                     "go": "单表服务型读",
                     "href": "use/app-store/",
                 },
@@ -186,7 +186,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 481 KB, persists to OPFS
+# a browser tab — 639 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -203,24 +203,25 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "为什么可以直接替换 Redis",
             "h2": "同样的协议。更高的吞吐。",
             "intro": (
-                "RESP2 和 RESP3，206 条命令——redis-cli 和你的客户端库不用改就能连。"
-                "一台机器，16 核，loopback，五次取中位数。"
+                "RESP2 和 RESP3，209 条命令——redis-cli 和你的客户端库不用改就能连。"
+                "一台机器，每个引擎 4 核，loopback，取 15 个窗口的中位数。"
             ),
             "rows": [
-                ["GET", 7800299, 5597865, "1.39×", False],
-                ["SET", 6918058, 2573396, "2.69×", False],
-                ["INCR", 6133940, 3459395, "1.77×", False],
-                ["SADD", 5600597, 3690483, "1.52×", False],
-                ["HSET", 4287217, 3021325, "1.42×", False],
-                ["LPUSH", 3213470, 2862374, "1.12×", True],
-                ["ZADD", 3053101, 2773929, "1.10×", True],
+                ["GET", 8726283, 5467748, "1.60×", False],
+                ["SET", 7409590, 2861941, "≥ 2.59×", False],
+                ["INCR", 7249946, 3788318, "1.91×", False],
+                ["SADD", 6919570, 4204106, "1.65×", False],
+                ["HSET", 5393670, 3352393, "≥ 1.61×", False],
+                ["LPUSH", 4424738, 3220774, "1.37×", False],
+                ["ZADD", 4980252, 3112253, "≥ 1.60×", False],
             ],
-            "us": "kevy 6.3.0",
-            "them": "Redis 8.10.1",
+            "us": "kevy 7.0.0",
+            "them": "Redis 8.10.2",
             "thin": "不到 15%——决定胜负的是你的负载，不是引擎",
             "note": (
-                "<b>LPUSH 和 ZADD 只领先 10% 和 15%。</b>如果 list 或者 sorted set "
-                "是你的热路径，那么性能就不是换过来的理由。"
+                "<b>领先最少的是 LPUSH：1.37×。</b>如果 list 是你的热路径，"
+                "为了性能换过来之前，先拿你自己的负载测一下。带 ≥ 的数字是压测端的上限，"
+                "kevy 至少有这么快。"
                 "<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>"
                 "迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——"
                 "而且两个方向都能走。"
@@ -296,7 +297,7 @@ PAGES["migrate"] = {
             "t": "prose",
             "h2": "从 Redis 过来",
             "body": [
-                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 206 条命令。"
+                "<b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 209 条命令。"
                 "把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，"
                 "也没有新协议要学。",
                 "<b>所以真正要问的只有一句：你能换到什么。</b>只有四样。如果这四样对你都没有"
@@ -327,7 +328,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "你现在跑的那些操作，它更快",
-                    "body": "同一台机器上对 Redis 8.10.1：GET 快 1.33×，SET 快 2.66×，INCR 快 2.05×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 10% 和 15%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。",
+                    "body": "同一台机器上对 Redis 8.10.2：GET 快 1.60×，SET 至少快 2.59×，INCR 快 1.91×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 领先 1.37×，是最少的一行；差距这么小的时候，你的 value 大小和 key 分布跟引擎一样重要。",
                 },
                 {
                     "title": "数据集不必再装进 RAM",
@@ -355,21 +356,21 @@ PAGES["migrate"] = {
             "caption": "从 Redis 导出，导入 kevy，再校验两边一致。下面每一条命令都真的跑过。",
             "text": """# 1. dump what you want to move. it is a RESP file — readable,
 #    diffable, and it streams rather than loading into memory.
-kevy-cli export -p 6379 --prefix user: dump.resp
+kevy-cli -p 6379 --kevy export --prefix user: dump.resp
 -> exported 41023 keys -> dump.resp
 
 # 2. load it. --strict stops on the first error rather than
 #    limping onward with a half-migrated keyspace.
-kevy-cli import -p 6380 --strict dump.resp
+kevy-cli -p 6380 --kevy import --strict dump.resp
 -> imported 82046 ok, 0 errors, offset 4108331
 
 # 3. prove they agree, rather than hoping.
-kevy-cli digest -p 6379 user:
-kevy-cli digest -p 6380 user:
+kevy-cli -p 6379 --kevy digest user:
+kevy-cli -p 6380 --kevy digest user:
 -> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
 
 # an interrupted import resumes where it stopped:
-kevy-cli import -p 6380 --resume dump.resp""",
+kevy-cli -p 6380 --kevy import --resume dump.resp""",
         },
         {
             "t": "prose",
@@ -425,7 +426,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
             "kind": "note",
             "title": "如果你以后又想走",
             "body": (
-                "同样这三条命令，反过来跑一遍就行。<code>kevy-cli export</code> 写出的是一个"
+                "同样这三条命令，反过来跑一遍就行。<code>kevy-cli --kevy export</code> 写出的是一个"
                 "普通的 RESP 文件，任何 Redis 兼容的服务端都能导入，而 <code>digest</code> "
                 "能证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南里，"
                 "搬出去这件事</a>写得和搬进来一样细——我们宁可你走得干净，"
@@ -482,7 +483,7 @@ PAGES["choose"] = {
                 ["数据只属于一个程序", "嵌入",
                  "没有 socket，没有第二个进程，也没有东西要序列化。是一次函数调用，不是一次网络往返。"],
                 ["数据属于用户的设备", "浏览器",
-                 "481 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。"],
+                 "639 KB 的 WebAssembly。真的 TTL、发布订阅和 stream，落在浏览器自己的文件系统上。离线也能用。"],
                 ["代码在边缘按请求执行", "边缘",
                  "没有要预热的东西，也不用建连接。存储和你的代码待在同一个 isolate 里。"],
                 ["一台没有操作系统、没有堆的设备", "裸机",
@@ -500,7 +501,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "它真的能直接替换 Redis 吗？",
-                    "a": "在协议层面，是的——RESP2 和 RESP3，206 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 206 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                    "a": "在协议层面，是的——RESP2 和 RESP3，209 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。跨 shard 的 <code>RENAME</code> 不是原子的——多键写只在单个 shard 内原子。另外 SCAN 的游标只在签发它的服务器上有效，与 Redis Cluster 的按节点性质相同。<a href=\"~/docs/commands/\">全部 209 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
                 },
                 {
                     "q": "数据集必须装进 RAM 吗？",
@@ -508,7 +509,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "机器挂了会怎么样？",
-                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。在默认的 <code>everysec</code> fsync 策略下，被硬杀最多丢一秒的写；把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
+                    "a": "每一次写都先落进一份 append-only 日志，启动时重放这份日志。被硬杀时，嵌入式存储已返回的写一条不丢，服务器最多丢最后一轮 reactor 迭代的写；在默认的 <code>everysec</code> fsync 策略下，断电约丢一秒。把 <code>appendfsync = \"always\"</code> 打开就一条都不丢，代价是吞吐。快照存在的唯一目的，是给重放时间设一个上界。<a href=\"~/docs/persistence/\">持久化指南</a>里有具体数字。",
                 },
                 {
                     "q": "机器故障能扛过去吗？",
@@ -516,11 +517,11 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "有认证吗？",
-                    "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
+                    "a": "没有，以后也不会有。没有 AUTH，没有 ACL，没有 TLS——永久不在范围内。把 kevy 跑在内网，或者放在一个真正把这些事做好的代理后面。从 7.0 起，kevy 可以给自己的链路加密，不配置就不开启：节点之间的链路，两端都用密钥证明身份；以及给 Rust 客户端用的第二个客户端端口，可以只接受你列出的客户端密钥。<a href=\"~/docs/encrypted-links/\">加密链路指南</a>写了它覆盖什么、代价多少。一层敷衍的认证比坦白没有认证更糟，因为它会引诱人去信任它。",
                 },
                 {
                     "q": "如果我用得太大了，或者只是改主意了呢？",
-                    "a": "<code>kevy-cli export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
+                    "a": "<code>kevy-cli --kevy export</code> 会把你的 keyspace 写成一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入它；<code>kevy-cli --kevy digest</code> 则在你扔掉任何东西之前，先证明这份拷贝没有走样。<a href=\"~/docs/migration/\">迁移指南</a>里，搬出去写得和搬进来一样细。",
                 },
             ],
         },
@@ -699,7 +700,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "指南", "title": "食谱", "body": "会话、限流、排行榜、信息流的可用配方。", "go": "去读", "href": "docs/cookbook/"},
                 {"kicker": "指南", "title": "持久化", "body": "kill -9 之后什么还在，以及 fsync 策略要你付出什么。", "go": "去读", "href": "docs/persistence/"},
-                {"kicker": "参考", "title": "全部命令", "body": "206 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
+                {"kicker": "参考", "title": "全部命令", "body": "209 条命令，每一条都标着真实代价和相对 Redis 的偏差。", "go": "去查", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1196,7 +1197,7 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             "items": [
                 {
                     "do": "列、索引、排序路径，一条声明写完",
-                    "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。",
+                    "note": "行仍是前缀下的普通 hash——缺列就是 NULL；kevy-cli --kevy sql compile schema.sql 会从 CREATE TABLE / CREATE INDEX 生成这一行。",
                     "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
 -> OK""",
                 },
@@ -1217,7 +1218,7 @@ IDX.COUNT orders.status EQ open
             ],
             "cost": (
                 "<b>没有运行期 SQL，也没有 join。</b>服务端把 <code>SELECT</code> 当作"
-                "未知命令拒绝；<code>kevy-cli sql compile</code> 在构建期把 PG/MySQL "
+                "未知命令拒绝；<code>kevy-cli --kevy sql compile</code> 在构建期把 PG/MySQL "
                 "schema 文件变成上面这些声明，并按名拒绝 JOIN、子查询和 GROUP BY，"
                 "同时指向替代它们的配方。唯一性是校验而非强制，约束是配方而非引擎检查。"
                 "开着<a href=\"~/docs/tiering/\">分层存储</a>时，index-only 查询即使"
@@ -1252,7 +1253,7 @@ PAGES["use/embedded"] = {
             "h1": "把存储<br>放进东西本身",
             "lede": (
                 "没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，"
-                "可以是一个 481 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
+                "可以是一个 639 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 "
                 "no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b>"
             ),
         },
@@ -1305,7 +1306,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "在一个浏览器标签页里",
-            "goal": "gzip 之后 481 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
+            "goal": "gzip 之后 639 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
             "cost_t": "成本与限制",
             "items": [
                 {
@@ -1323,6 +1324,13 @@ db.pttl("cart:u881");       // the engine expires it, not your code""",
                 {
                     "do": "听见别的标签页",
                     "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+                {
+                    "do": "留一个刷新后还在的发件箱",
+                    "code": """db.cmd("XGROUP", "CREATE", "outbox", "sync", "$", "MKSTREAM");  // once
+db.cmd("XADD", "outbox", "*", "op", "save", "cart", "u881");
+db.cmd("XREADGROUP", "GROUP", "sync", "tab-1", "STREAMS", "outbox", ">");
+// no BLOCK in a tab: read on a timer, XACK once it is sent""",
                 },
             ],
             "cost": (
@@ -1393,24 +1401,24 @@ PAGES["benchmarks"] = {
             "t": "table",
             "h2": "四个引擎，一台机器",
             "intro": (
-                "50 条连接，小 value。五次运行取中位数，数字取自每个服务端自己的命令计数器，"
-                "统计的是三秒稳态窗口内的增量，而不是压测客户端报出来的速率。"
+                "50 条连接，pipeline 16，小 value，每个引擎 4 核。取 15 个窗口（3 轮，每轮 5 个）的中位数，"
+                "数字取自每个服务端自己的命令计数器在三秒窗口内的增量，而不是压测客户端报出来的速率。"
+                "带 ≥ 的数字是压测端喂不满时的读数，引擎至少有这么快；竞品的这种数字不算倍数。"
             ),
-            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
+            "head": ["", "kevy 7.0.0", "Redis 8.10.2", "valkey 9.1.2", "Dragonfly 2.0.0", "vs Redis 8.10.2"],
             "rows": [
-                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
-                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
-                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
-                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
-                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
-                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
-                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
+                ["GET", "8,726,283", "5,467,748", "4,041,855", "≥ 3,364,079", "*1.60×"],
+                ["SET", "≥ 7,409,590", "2,861,941", "2,011,380", "2,019,740", "*≥ 2.59×"],
+                ["INCR", "7,249,946", "3,788,318", "2,750,827", "2,223,491", "*1.91×"],
+                ["SADD", "6,919,570", "4,204,106", "2,728,331", "1,911,038", "*1.65×"],
+                ["HSET", "≥ 5,393,670", "3,352,393", "2,283,589", "1,964,211", "*≥ 1.61×"],
+                ["LPUSH", "4,424,738", "3,220,774", "2,260,722", "1,700,519", "*1.37×"],
+                ["ZADD", "≥ 4,980,252", "3,112,253", "2,159,811", "1,804,781", "*≥ 1.60×"],
             ],
             "note": (
-                "<b>LPUSH 比 Redis 8.10.1 快 10%，ZADD 快 15%。</b>差距只有这么大的时候，"
-                "决定胜负的是你的 value 大小和 key 分布，而不是引擎——所以如果 list 或者 "
-                "sorted set 是你的热路径，请拿你自己的负载去测，不要为了性能而换。"
-                "这两行的颜色是故意标成这样的。"
+                "<b>LPUSH 比 Redis 8.10.2 快 37%，是领先最少的一行。</b>差距这么小的时候，"
+                "你的 value 大小和 key 分布跟引擎一样重要——所以如果 list 是你的热路径，"
+                "为了性能换过来之前，请拿你自己的负载去测。"
             ),
         },
         {
@@ -1418,8 +1426,8 @@ PAGES["benchmarks"] = {
             "h2": "这组数字没有告诉你的事",
             "body": [
                 "<b>这是 loopback。</b>这里没有网络，而在真实部署里，你等的往往正是网络。"
-                "如果你的延迟大部分花在网络上，那么一个 GET 快 2.6× 的引擎，"
-                "并不会让你的 p99 也好 2.6×。",
+                "如果你的延迟大部分花在网络上，那么一个 GET 快 2× 的引擎，"
+                "并不会让你的 p99 也好 2×。",
                 "<b>value 很小。</b>一个 value 到 64 KB 的时候，整件事的瓶颈会落到内核的 "
                 "TCP 路径上，差距收窄到个位数百分比。如果你存的是大块数据，"
                 "这些数字说的不是你。",
@@ -1433,8 +1441,8 @@ PAGES["benchmarks"] = {
             "intro": "你真正会发到标签页里的东西。",
             "head": ["", "体积", ""],
             "rows": [
-                ["kevy.wasm", "1442 KB", "引擎本体，未压缩"],
-                ["gzip 之后", "481 KB", "真正过网络的量"],
+                ["kevy.wasm", "1865 KB", "引擎本体，未压缩"],
+                ["gzip 之后", "639 KB", "真正过网络的量"],
                 ["冷启动", "&lt; 20 ms", "编译加实例化，缓存已热"],
             ],
             "note": (
@@ -1448,7 +1456,7 @@ PAGES["benchmarks"] = {
             "t": "code",
             "h2": "自己复现",
             "caption": "两个脚本。这一页上的所有东西都是它们跑出来的。",
-            "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh",
+            "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD",
         },
     ],
 }

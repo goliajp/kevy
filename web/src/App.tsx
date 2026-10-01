@@ -1,6 +1,9 @@
 import { ArrowDown, ArrowUpRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+// The command count is the reference's, which is generated from the
+// engine's verb table; a literal here said 191 while the server answered 209.
+import commandTable from './commands.json'
 import { CodeBlock } from './components/CodeBlock'
 import { LINKS as FOOTER_LINKS } from './components/Footer'
 import { Layout } from './components/Layout'
@@ -46,10 +49,10 @@ db.set(b"user:1", b"alice", None)?;
 // cells where kevy is barely ahead. A table that only showed the wins
 // would not be a measurement.
 const PERF: { op: string; kevy: string; valkey: string; ratio: string }[] = [
-  { op: 'GET', kevy: '7.49 M', valkey: '2.98 M', ratio: '2.51×' },
-  { op: 'SET', kevy: '6.82 M', valkey: '1.68 M', ratio: '4.05×' },
-  { op: 'INCR', kevy: '6.75 M', valkey: '2.28 M', ratio: '2.96×' },
-  { op: 'HSET', kevy: '4.00 M', valkey: '1.86 M', ratio: '2.15×' },
+  { op: 'GET', kevy: '8.73 M', valkey: '4.04 M', ratio: '2.16×' },
+  { op: 'SET', kevy: '≥ 7.41 M', valkey: '2.01 M', ratio: '≥ 3.68×' },
+  { op: 'INCR', kevy: '7.25 M', valkey: '2.75 M', ratio: '2.64×' },
+  { op: 'HSET', kevy: '≥ 5.39 M', valkey: '2.28 M', ratio: '≥ 2.36×' },
 ]
 
 const BEYOND = ['vector', 'fts', 'idx', 'view', 'feed', 'embed'] as const
@@ -121,13 +124,13 @@ export function App() {
 
           <div className="figures">
             <div className="figure">
-              <div className="v">4.05×</div>
+              <div className="v">≥ 3.68×</div>
               <div className="k">
                 <T k="front.fig.speed" />
               </div>
             </div>
             <div className="figure">
-              <div className="v">191</div>
+              <div className="v">{commandTable.commands.length}</div>
               <div className="k">
                 <T k="front.fig.commands" />
               </div>

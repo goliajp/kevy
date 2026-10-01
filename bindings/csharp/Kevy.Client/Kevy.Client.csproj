@@ -15,12 +15,13 @@
     <AssemblyName>Kevy.Client</AssemblyName>
 
     <PackageId>kevy</PackageId>
-    <Version>6.4.0</Version>
+    <Version>7.0.0</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>The first-party kevy client for .NET — one Connect(url) to the embedded engine or a remote RESP server, every command family on both a sync and an async face. Pure Rust engine, zero services.</Description>
     <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/goliajp/kevy</RepositoryUrl>
     <PackageProjectUrl>https://kevy.golia.jp</PackageProjectUrl>
+    <PackageReleaseNotes>Tracks the kevy 7.0.0 engine. KevyReadOnlyException's message now ends with a period, as the server's does: "READONLY You can't write against a read only replica." With a libkevy_ffi built from 7.0.0, the embedded backend keeps every write that returned when the process is killed, serves the stream and GEO commands through Do and KevyDb.Cmd, and fixes several defects that lost writes or hash-field TTLs; after a kill, open and close a file:// store with 7.0 before going back to 6.4. Details: https://github.com/goliajp/kevy/blob/develop/bindings/csharp/Kevy.Client/CHANGELOG.md</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

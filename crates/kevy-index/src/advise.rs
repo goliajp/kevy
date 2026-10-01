@@ -12,18 +12,85 @@
 use crate::catalog::ValType;
 use crate::table::{TableCatalog, TableSpec};
 
+#[path = "advise_usage.rs"]
+mod usage;
+pub use usage::UsageCell;
+
 /// What shape of query was refused — the kind half of the derived
 /// declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_index::{AdviseLog, AdviseShape};
+/// let mut log = AdviseLog::new();
+/// log.observe(b"t.at", AdviseShape::Range, &[]);
+/// // the shape is half the family key: the same name refused as MATCH is a new family
+/// log.observe(b"t.at", AdviseShape::Match, &[]);
+/// assert_eq!(log.entries().len(), 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AdviseShape {
     /// `RANGE`/`EQ` on an undeclared single-column path.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape};
+    /// # let mut cat = kevy_index::TableCatalog::new();
+    /// # cat.create(kevy_index::parse_table_declare(&[
+    /// #     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    /// #     b"COLUMN", b"at", b"i64", b"COLUMN", b"body", b"str", b"INDEX", b"at", b"range",
+    /// # ])?)?;
+    /// let a = AdviseEntry::new("t.at", AdviseShape::Range, 1).advice(&cat);
+    /// assert!(a.is_some_and(|a| a.contains("INDEX at range")));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Range,
     /// `WHERE` naming these columns, in clause order, on a name with
     /// no composite path.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape};
+    /// # let mut cat = kevy_index::TableCatalog::new();
+    /// # cat.create(kevy_index::parse_table_declare(&[
+    /// #     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    /// #     b"COLUMN", b"at", b"i64", b"COLUMN", b"body", b"str", b"INDEX", b"at", b"range",
+    /// # ])?)?;
+    /// let shape = AdviseShape::Where(vec![b"body".to_vec(), b"at".to_vec()]);
+    /// let a = AdviseEntry::new("t.by_body", shape, 1).advice(&cat);
+    /// assert!(a.is_some_and(|a| a.contains("ORDERPATH by_body ON body THEN at")));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Where(Vec<Vec<u8>>),
     /// `MATCH` on an undeclared text path.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape};
+    /// # let mut cat = kevy_index::TableCatalog::new();
+    /// # cat.create(kevy_index::parse_table_declare(&[
+    /// #     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    /// #     b"COLUMN", b"at", b"i64", b"COLUMN", b"body", b"str", b"INDEX", b"at", b"range",
+    /// # ])?)?;
+    /// let a = AdviseEntry::new("t.body", AdviseShape::Match, 1).advice(&cat);
+    /// assert!(a.is_some_and(|a| a.contains("FIELD body TYPE str KIND text")));
+    /// // only a str column can carry a text index
+    /// assert_eq!(AdviseEntry::new("t.at", AdviseShape::Match, 1).advice(&cat), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Match,
-    /// A `FILTER` naming a field the (existing) path does not store.
+    /// A clause naming a field the (existing) path does not store: a
+    /// `FILTER`, or `FIELDS` on a global index, which answers them from
+    /// its stored values.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape};
+    /// # let mut cat = kevy_index::TableCatalog::new();
+    /// # cat.create(kevy_index::parse_table_declare(&[
+    /// #     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    /// #     b"COLUMN", b"at", b"i64", b"COLUMN", b"body", b"str", b"INDEX", b"at", b"range",
+    /// # ])?)?;
+    /// let a = AdviseEntry::new("t.at", AdviseShape::Filter(b"body".to_vec()), 1).advice(&cat);
+    /// assert!(a.is_some_and(|a| a.starts_with("add VALUES body (type str)")));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Filter(Vec<u8>),
 }
 
@@ -31,21 +98,106 @@ pub enum AdviseShape {
 /// was refused, and the first argv seen (the human-readable sample).
 /// `Clone` so a caller holding the log under a lock can snapshot
 /// entries out and render them lock-free.
-#[derive(Debug, Clone)]
+///
+/// ```
+/// use kevy_index::{AdviseEntry, AdviseShape};
+/// let e = AdviseEntry::new("t.at", AdviseShape::Range, 16);
+/// assert_eq!((e.count, e.sample.len()), (16, 0));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AdviseEntry {
     /// The access-path name the query asked for (`<table>.<suffix>`).
+    ///
+    /// ```
+    /// # use kevy_index::{AdviseLog, AdviseShape};
+    /// let mut log = AdviseLog::new();
+    /// log.observe(b"orders.at", AdviseShape::Range, &[]);
+    /// assert_eq!(log.entries()[0].name, b"orders.at");
+    /// ```
     pub name: Vec<u8>,
     /// The refused shape.
+    ///
+    /// ```
+    /// # use kevy_index::{AdviseLog, AdviseShape};
+    /// let mut log = AdviseLog::new();
+    /// log.observe(b"orders.body", AdviseShape::Match, &[]);
+    /// assert_eq!(log.entries()[0].shape, AdviseShape::Match);
+    /// ```
     pub shape: AdviseShape,
     /// Refusals observed for this family.
+    ///
+    /// ```
+    /// # use kevy_index::{AdviseLog, AdviseShape};
+    /// let mut log = AdviseLog::new();
+    /// log.observe(b"orders.at", AdviseShape::Range, &[]);
+    /// log.observe(b"orders.at", AdviseShape::Range, &[]);
+    /// assert_eq!(log.entries()[0].count, 2);
+    /// ```
     pub count: u64,
     /// The first refused argv, verbatim.
+    ///
+    /// ```
+    /// # use kevy_index::{AdviseLog, AdviseShape};
+    /// let mut log = AdviseLog::new();
+    /// let first = [b"RANGE".to_vec(), b"orders.at".to_vec()];
+    /// log.observe(b"orders.at", AdviseShape::Range, &first);
+    /// log.observe(b"orders.at", AdviseShape::Range, &[b"EQ".to_vec()]);
+    /// assert_eq!(log.entries()[0].sample, first, "later argvs only count");
+    /// ```
     pub sample: Vec<Vec<u8>>,
+}
+
+impl AdviseEntry {
+    /// Render one observed family as the declaration command that would
+    /// have served it — executable verbatim, or `None` when the catalog
+    /// cannot ground it (unknown table / column: the query itself was
+    /// malformed, not under-declared).
+    #[must_use]
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape, TableCatalog, parse_table_declare};
+    /// let mut cat = TableCatalog::new();
+    /// cat.create(parse_table_declare(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64",
+    /// ])?)?;
+    /// let e = AdviseEntry::new("t.at", AdviseShape::Range, 3);
+    /// assert!(e.advice(&cat).is_some_and(|a| a.contains("INDEX at range")));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn advice(&self, cat: &TableCatalog) -> Option<String> {
+        advice_of(self, cat)
+    }
+
+    /// Family `(name, shape)` refused `count` times, with no sample argv.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape};
+    /// assert_eq!(AdviseEntry::new("t.body", AdviseShape::Match, 1).name, b"t.body");
+    /// ```
+    pub fn new(name: impl Into<Vec<u8>>, shape: AdviseShape, count: u64) -> AdviseEntry {
+        AdviseEntry { name: name.into(), shape, count, sample: Vec::new() }
+    }
 }
 
 /// The bounded refusal log. Insertion-ordered; when full, the entry
 /// with the SMALLEST count makes room (a family that keeps being
 /// refused defends its seat).
+///
+/// ```
+/// use kevy_index::{AdviseLog, AdviseShape};
+/// let mut log = AdviseLog::with_cap(2);
+/// assert_eq!(log.observe(b"t.a", AdviseShape::Range, &[]), 1);
+/// assert_eq!(log.observe(b"t.a", AdviseShape::Range, &[]), 2);
+/// log.observe(b"t.b", AdviseShape::Range, &[]);
+/// // full: the new family evicts the least-refused one, `t.b`
+/// log.observe(b"t.c", AdviseShape::Range, &[]);
+/// let names: Vec<_> = log.entries().iter().map(|e| e.name.clone()).collect();
+/// assert_eq!(names, [b"t.a".to_vec(), b"t.c".to_vec()]);
+/// log.clear();
+/// assert!(log.entries().is_empty());
+/// ```
 #[derive(Debug)]
 pub struct AdviseLog {
     entries: Vec<AdviseEntry>,
@@ -61,21 +213,30 @@ impl Default for AdviseLog {
 }
 
 /// How many refusal families the default log retains.
+///
+/// ```
+/// use kevy_index::{ADVISE_CAP, AdviseLog, AdviseShape};
+/// let mut log = AdviseLog::new();
+/// for i in 0..=ADVISE_CAP {
+///     log.observe(format!("t.c{i}").as_bytes(), AdviseShape::Range, &[]);
+/// }
+/// assert_eq!(log.entries().len(), ADVISE_CAP);
+/// ```
 pub const ADVISE_CAP: usize = 128;
 
 /// Refusals a family must accumulate before the auto loop declares
 /// for it (tables that opted in via `AUTODECLARE <n>`). Empirical
 /// knob, not a derivation.
+///
+/// ```
+/// use kevy_index::{AUTODECLARE_AFTER, AdviseLog, AdviseShape};
+/// let mut log = AdviseLog::new();
+/// let n = (0..AUTODECLARE_AFTER).map(|_| log.observe(b"t.at", AdviseShape::Range, &[])).last();
+/// assert_eq!(n, Some(AUTODECLARE_AFTER), "the refusal that crosses the threshold");
+/// ```
 pub const AUTODECLARE_AFTER: u64 = 16;
 
-/// Apply one refused family to the table's declaration — the auto
-/// half of the loop, shared by both faces so they cannot derive
-/// different declarations. Returns the ledger entry recorded in
-/// `auto_added` (`path` or `path#field`); `None` when the budget is
-/// spent, the shape is not one a table declaration serves (`MATCH`
-/// stays advise-only — a text index carries knobs the loop must not
-/// pick), the name does not ground, or it is already declared.
-pub fn apply_auto(spec: &mut TableSpec, e: &AdviseEntry) -> Option<Vec<u8>> {
+pub(crate) fn apply_auto(spec: &mut TableSpec, e: &AdviseEntry) -> Option<Vec<u8>> {
     if spec.auto_added.len() >= spec.autodeclare {
         return None;
     }
@@ -117,10 +278,8 @@ fn auto_entry(
             if cols.is_empty() || spec.orderpaths.iter().any(|op| op.name == suffix) {
                 return None;
             }
-            spec.orderpaths.push(crate::table::OrderPath {
-                name: suffix.to_vec(),
-                on: cols.iter().map(|c| (c.clone(), false)).collect(),
-            });
+            let on = cols.iter().map(|c| (c.clone(), kevy_text::SortOrder::Asc)).collect();
+            spec.orderpaths.push(crate::table::OrderPath::new(suffix, on));
             Some(name.to_vec())
         }
         AdviseShape::Filter(field) => {
@@ -171,12 +330,8 @@ impl AdviseLog {
                 .expect("cap >= 1, so a full log is non-empty");
             self.entries.swap_remove(weakest);
         }
-        self.entries.push(AdviseEntry {
-            name: name.to_vec(),
-            shape,
-            count: 1,
-            sample: argv.to_vec(),
-        });
+        self.entries
+            .push(AdviseEntry { sample: argv.to_vec(), ..AdviseEntry::new(name, shape, 1) });
         1
     }
 
@@ -194,81 +349,10 @@ impl AdviseLog {
     }
 }
 
-/// One declared path's usage counters — the refusal log's dual: that
-/// log says what is missing, this says what goes unused (the reclaim
-/// face's raw material). Plain relaxed atomics — the served-query
-/// path pays two uncontended stores, never a lock.
-#[derive(Debug)]
-pub struct UsageCell {
-    /// Queries served through this path.
-    pub hits: std::sync::atomic::AtomicU64,
-    /// Unix seconds of the most recent hit (0 = never).
-    pub last_hit_s: std::sync::atomic::AtomicI64,
-    /// Unix seconds the path was first seen declared — "never hit"
-    /// is only meaningful with an age next to it (a path declared
-    /// five seconds ago is not reclaim material).
-    pub declared_s: std::sync::atomic::AtomicI64,
-    /// Windowed paths only: the smallest `lower_bound - boundary`
-    /// any query has probed (`i64::MAX` = never observed). A margin
-    /// that never goes non-positive means no query has touched the
-    /// cold side — the window-narrowing advice's whole input, no max
-    /// tracking needed (boundary ≈ max − span, within a bucket).
-    pub min_margin: std::sync::atomic::AtomicI64,
-}
-
-/// A zeroed cell with the margin UNOBSERVED (`i64::MAX`) — a derived
-/// all-zeroes default would read as "a query probed margin 0".
-impl Default for UsageCell {
-    fn default() -> Self {
-        use std::sync::atomic::{AtomicI64, AtomicU64};
-        Self {
-            hits: AtomicU64::new(0),
-            last_hit_s: AtomicI64::new(0),
-            declared_s: AtomicI64::new(0),
-            min_margin: AtomicI64::new(i64::MAX),
-        }
-    }
-}
-
-impl UsageCell {
-    /// A fresh cell for a path first seen declared at `now_s`.
-    #[must_use]
-    pub fn declared_at(now_s: i64) -> Self {
-        let c = Self::default();
-        c.declared_s.store(now_s, std::sync::atomic::Ordering::Relaxed);
-        c
-    }
-
-    /// Record one windowed query's probe depth (`lower - boundary`).
-    pub fn probe(&self, margin: i64) {
-        self.min_margin.fetch_min(margin, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Count one served query at `now_s` (unix seconds).
-    pub fn hit(&self, now_s: i64) {
-        use std::sync::atomic::Ordering::Relaxed;
-        self.hits.fetch_add(1, Relaxed);
-        self.last_hit_s.store(now_s, Relaxed);
-    }
-
-    /// `(hits, last_hit_s, declared_s)` snapshot.
-    #[must_use]
-    pub fn read(&self) -> (u64, i64, i64) {
-        use std::sync::atomic::Ordering::Relaxed;
-        (self.hits.load(Relaxed), self.last_hit_s.load(Relaxed), self.declared_s.load(Relaxed))
-    }
-}
-
-/// The window-narrowing advice for one windowed table, given the
-/// smallest probe margin any query on one of its paths has shown:
-/// `Some` when every observed query kept more than a bucket of
-/// margin, so SPAN can shrink by the bucket-aligned amount.
-/// Advise-only — the window synthesis point; the engine never
-/// narrows on its own.
-#[must_use]
-pub fn narrow_advice(spec: &TableSpec, margin: i64) -> Option<String> {
+pub(crate) fn narrow_advice(spec: &TableSpec, margin: Option<i64>) -> Option<String> {
     let w = spec.window.as_ref()?;
-    if margin == i64::MAX || w.bucket <= 0 {
+    let margin = margin?;
+    if w.bucket <= 0 {
         return None;
     }
     let narrow = margin - margin.rem_euclid(w.bucket);
@@ -288,12 +372,7 @@ pub fn narrow_advice(spec: &TableSpec, margin: i64) -> Option<String> {
     ))
 }
 
-/// Render one observed family as the declaration command that would
-/// have served it — executable verbatim, or `None` when the catalog
-/// cannot ground it (unknown table / column: the query itself was
-/// malformed, not under-declared).
-#[must_use]
-pub fn advice_of(e: &AdviseEntry, cat: &TableCatalog) -> Option<String> {
+pub(crate) fn advice_of(e: &AdviseEntry, cat: &TableCatalog) -> Option<String> {
     let dot = e.name.iter().position(|&b| b == b'.')?;
     let (table, suffix) = (&e.name[..dot], &e.name[dot + 1..]);
     let t = cat.get(table)?;
@@ -335,6 +414,54 @@ pub fn advice_of(e: &AdviseEntry, cat: &TableCatalog) -> Option<String> {
                 show(&e.name)
             ))
         }
+    }
+}
+
+impl TableSpec {
+    /// Apply one refused family to the table's declaration — the auto
+    /// half of the loop, shared by both faces so they cannot derive
+    /// different declarations. Returns the ledger entry recorded in
+    /// `auto_added` (`path` or `path#field`); `None` when the budget is
+    /// spent, the shape is not one a table declaration serves (`MATCH`
+    /// stays advise-only — a text index carries knobs the loop must not
+    /// pick), the name does not ground, or it is already declared.
+    ///
+    /// ```
+    /// use kevy_index::{AdviseEntry, AdviseShape, parse_table_declare};
+    /// let mut t = parse_table_declare(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64", b"AUTODECLARE", b"1",
+    /// ])?;
+    /// let e = AdviseEntry::new("t.at", AdviseShape::Range, 16);
+    /// assert_eq!(t.apply_auto(&e), Some(b"t.at".to_vec()));
+    /// assert_eq!(t.apply_auto(&e), None, "the budget of one is spent");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn apply_auto(&mut self, e: &AdviseEntry) -> Option<Vec<u8>> {
+        apply_auto(self, e)
+    }
+
+    /// The window-narrowing advice for one windowed table, given the
+    /// smallest probe margin any query on one of its paths has shown:
+    /// `Some` when every observed query kept more than a bucket of
+    /// margin, so SPAN can shrink by the bucket-aligned amount.
+    /// Advise-only — the window synthesis point; the engine never
+    /// narrows on its own.
+    #[must_use]
+    ///
+    /// ```
+    /// use kevy_index::parse_table_declare;
+    /// let t = parse_table_declare(&[
+    ///     b"TABLE.DECLARE", b"t", b"PREFIX", b"t:", b"PK", b"id", b"COLUMN", b"id", b"i64",
+    ///     b"COLUMN", b"at", b"i64", b"INDEX", b"at", b"range",
+    ///     b"WINDOW", b"at", b"SPAN", b"100", b"BUCKET", b"10",
+    /// ])?;
+    /// assert_eq!(t.narrow_advice(None), None, "no query observed yet");
+    /// assert!(t.narrow_advice(Some(37)).is_some_and(|a| a.contains("SPAN 70")));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn narrow_advice(&self, margin: Option<i64>) -> Option<String> {
+        narrow_advice(self, margin)
     }
 }
 

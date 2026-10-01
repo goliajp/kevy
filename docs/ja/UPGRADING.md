@@ -2,7 +2,7 @@
 
 章は2つ、新しいものから。**3.x → 4.0**（APIの定義に関するメジャー。クライアントワイヤはそのまま、ディスクは無変更で開いて最初のリライトでフォーマットが昇格し、Rustの顔は一度だけ変わって、以後は凍結されます）と、**2.x → 3.x**（能力のメジャー。すべてが引き継がれました）です。各章は、何が自動でアップグレードされ、何にコード変更が要り、そしてどう戻すのかを明示します。
 
-**6.3 または 6.2 から来た方へ。** そのホップはこのページではなく [upgrading-6.3-to-6.4.md](upgrading-6.3-to-6.4.md) と [upgrading-6.2-to-6.3.md](upgrading-6.2-to-6.3.md) です。
+**6.4、6.3 または 6.2 から来た方へ。** そのホップはこのページではなく [upgrading-6.4-to-7.0.md](upgrading-6.4-to-7.0.md)、[upgrading-6.3-to-6.4.md](upgrading-6.3-to-6.4.md)、[upgrading-6.2-to-6.3.md](upgrading-6.2-to-6.3.md) です。
 
 ---
 
@@ -267,7 +267,7 @@ kevy 3.xは2.xのスーパーセットです。2.xのワークロードはすべ
 
 ## 3.xで加わるもの（アップグレードする理由）
 
-hydration付きの宣言型インデックス（`IDX.*`）、名前付きビュー（`VIEW.*`）、書き込み時の集約（GROUP BY / 分散top-K）、辞書不要のCJK全文検索とBM25、HNSWによるベクトルKNN（さらにBM25+KNNのハイブリッド融合）、recovery-point契約を持つCDCフィード（`FEED.*`）、組み込みをプライマリにするレプリケーション、機械可読な契約（`COMMAND DOCS`、生成されるリファレンス、`kevy-mcp` MCPサーバー）、可用性のアーク（レプリケーションのラグの真実、`FAILOVER`、クォーラムのクラッシュ選挙、`WAIT` / `REPL.TOKEN` / `REPL.WAIT`の整合性ラダー——[docs/availability.md](availability.md)）、そして移行ツールチェーン（`kevy-cli import/export/--verify/diff/inspect/digest`）です。[docs/designing-on-kevy.md](designing-on-kevy.md)と[docs/cookbook.md](cookbook.md)から始めてください。性能の領収書は[bench/PERF-LEDGER.md](../../bench/PERF-LEDGER.md)にあります。
+hydration付きの宣言型インデックス（`IDX.*`）、名前付きビュー（`VIEW.*`）、書き込み時の集約（GROUP BY / 分散top-K）、辞書不要のCJK全文検索とBM25、HNSWによるベクトルKNN（さらにBM25+KNNのハイブリッド融合）、recovery-point契約を持つCDCフィード（`FEED.*`）、組み込みをプライマリにするレプリケーション、機械可読な契約（`COMMAND DOCS`、生成されるリファレンス、`kevy-mcp` MCPサーバー）、可用性のアーク（レプリケーションのラグの真実、`FAILOVER`、クォーラムのクラッシュ選挙、`WAIT` / `REPL.TOKEN` / `REPL.WAIT`の整合性ラダー——[docs/availability.md](availability.md)）、そして移行ツールチェーン（`kevy-cli import/export/--verify/diff/inspect/digest`）です。[docs/designing-on-kevy.md](designing-on-kevy.md)と[docs/cookbook.md](cookbook.md)から始めてください。性能の実測値は[PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)にあります。
 
 これらのどれも、暗黙に有効化されることはありません。2.xのワークロードを載せた3.xサーバーは空のカタログを持ち、空のカタログに対するインデックスフックはperfgateのラチェットに載っています（2.x比でリグレッションなし）。
 

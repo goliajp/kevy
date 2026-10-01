@@ -17,7 +17,7 @@ impl TextSegment {
     /// Live counters — O(1): every term is a running
     /// counter maintained at the mutation sites (the per-tick stat
     /// walk of these structures was a consumer's measured tiering
-    /// idle/write-load CPU term, F16a). [`Self::recompute_stats`] is
+    /// idle/write-load CPU term, F16a). The test-only `recompute_stats` is
     /// the walking reference the tests hold these to.
     pub fn stats(&self) -> TextStats {
         TextStats {

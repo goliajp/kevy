@@ -112,6 +112,16 @@ fn outran_warn(
     );
 }
 
+/// The log ended inside a transaction that never committed: replay dropped
+/// its records, and the open that follows cuts them off the log.
+pub(crate) fn log_open_transaction(path: &Path, bytes: u64) {
+    eprintln!(
+        "kevy: AOF {} ended inside a transaction that never committed; its {bytes} bytes \
+         were not replayed and are cut from the log before new writes.",
+        path.display()
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

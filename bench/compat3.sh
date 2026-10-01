@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 3-way differential compatibility: run the SAME command sequence against
-# valkey 9.1.2, redis 8.10.1, and kevy (all in Docker, driven by the neutral
+# valkey 9.1.2, redis 8.10.2, and kevy (all in Docker, driven by the neutral
 # valkey-cli) and diff the replies. valkey & redis are the reference (a Redis
 # fork + the original); kevy is the subject. All start empty, so an identical
 # sequence must yield identical replies.
@@ -8,6 +8,12 @@
 #   check   — exact reply match (scalars + order-sensitive: GET/LRANGE/ZRANGE…)
 #   checku  — order-insensitive (unordered collections: HGETALL/SMEMBERS/SINTER…)
 set -uo pipefail
+# KEVY_BIN=<release server> runs that binary instead of building the image
+if [ -n "${KEVY_BIN:-}" ]; then
+  KEVY_BIN=$(cd "$(dirname "$KEVY_BIN")" && pwd)/$(basename "$KEVY_BIN")
+  [ -x "$KEVY_BIN" ] || { echo "compat3: $KEVY_BIN is not an executable" >&2; exit 2; }
+  export KEVY_BIN COMPOSE_FILE=docker-compose.yml:docker-compose.hostbin.yml
+fi
 cd "$(dirname "$0")"
 
 . ./anchor-lib.sh || { echo "compat3: cannot load anchor-lib.sh" >&2; exit 2; }
@@ -305,6 +311,98 @@ check XTRIM xs MAXLEN 2
 check XLEN xs
 check XADD xs 1-0 f dup       # ERR id <= top
 check XRANGE missingstream - +  # empty array
+# XAUTOCLAIM's cursor: the next pending id, 0-0 at the end, and a scan of at
+# most COUNT x 10 entries whether or not they are idle enough
+for i in $(seq 1 12); do check XADD xa "$i-0" f v; done
+check XGROUP CREATE xa ga 0
+check XREADGROUP GROUP ga c1 COUNT 100 STREAMS xa ">"
+check XAUTOCLAIM xa ga c2 0 0-0 COUNT 100 JUSTID
+check XAUTOCLAIM xa ga c2 0 0-0 COUNT 2 JUSTID
+check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 1 JUSTID
+check XAUTOCLAIM xa ga c2 100000000 0-0 COUNT 2 JUSTID
+# the pending summary lists consumers by name in byte order, not in the
+# order they first appear in the pending list (bob holds the oldest entry)
+for i in 1 2 3 4 5; do check XADD xo "$i-0" f v; done
+check XGROUP CREATE xo g 0
+for c in bob alice zed bob Bob; do check XREADGROUP GROUP g "$c" COUNT 1 STREAMS xo ">"; done
+check XPENDING xo g
+# XINFO: the replies that carry no clock. A deletion behind a group makes
+# its lag unknowable (nil); a trim is not a deletion. Redis 8.10 answers
+# XINFO STREAM with six more fields than valkey, so that line is expected
+# in the redis-vs-valkey column.
+check XINFO STREAM xs
+check XINFO GROUPS xs
+check XINFO GROUPS xo
+for i in 1 2 3 4; do check XADD xe "$i-0" f v; done
+check XGROUP CREATE xe g0 0
+check XGROUP CREATE xe g1 0 ENTRIESREAD 1
+check XGROUP CREATE xe g2 '$'
+check XINFO GROUPS xe
+check XDEL xe 3-0
+check XINFO GROUPS xe
+check XGROUP SETID xe g1 2-0 ENTRIESREAD 2
+check XGROUP SETID xe nog 0
+check XINFO GROUPS xe
+check XINFO STREAM xe FULL COUNT 2
+check XINFO CONSUMERS xe g0
+check XINFO CONSUMERS xe nog
+check XINFO STREAM missingstream
+check XINFO STREAM xe BOGUS
+check XINFO BOGUS
+check XINFO HELP
+# A read of a consumer's history hands its entries out again (the delivery
+# count goes up), an entry deleted since comes back with no fields, and an
+# empty history is still listed. XAUTOCLAIM lists a deleted entry whatever
+# its idle time.
+for i in 1 2 3 4 5; do check XADD xp "$i-0" f v; done
+check XGROUP CREATE xp g 0
+check XREADGROUP GROUP g c COUNT 3 STREAMS xp ">"
+check XREADGROUP GROUP g c STREAMS xp 0
+check XDEL xp 2-0
+check XREADGROUP GROUP g c STREAMS xp 0
+check XREADGROUP GROUP g c2 STREAMS xp 0
+check XPENDING xp g
+check XPENDING xp g IDLE 100000000 - + 10
+check XAUTOCLAIM xp g c3 100000000 0 COUNT 10 JUSTID
+check XCLAIM xp g c3 0 1-0 JUSTID
+check XCLAIM xp g c3 0 5-0 JUSTID FORCE LASTID 5-0
+check XINFO GROUPS xp
+check XCLAIM xp g c3 x 1-0
+check XCLAIM xp g c3 0 1-0 BOGUS
+check XCLAIM missingstream g c3 0 1-0
+check XREADGROUP GROUP g newc STREAMS xp missingstream xs xo ">" ">" ">" ">"
+check XINFO GROUPS xp
+check XGROUP DESTROY missingstream g
+check XGROUP CREATECONSUMER missingstream g c
+check XGROUP DELCONSUMER missingstream g c
+check XGROUP HELP
+# XADD and XTRIM options; an approximate trim takes only whole nodes
+check XADD xp NOMKSTREAM 6-0 f v
+check XADD missingstream NOMKSTREAM 1-0 f v
+check XADD xp MAXLEN = 5 7-0 f v
+check XADD xp MINID "~" 3-0 LIMIT 10 8-0 f v
+check XADD xp MAXLEN 1 LIMIT 1 9-0 f v
+check XADD xp 0-0 f v
+check XADD xp MAXLEN 1 MAXLEN
+for h in valkey redis kevy; do
+    seq 1 150 | sed 's/.*/XADD xn &-0 f v/' |
+        docker compose exec -T loadgen valkey-cli -h "$h" -p 6379 >/dev/null 2>&1
+done
+check XTRIM xn MAXLEN "~" 10 LIMIT 20
+check XTRIM xn MAXLEN "~" 60
+check XTRIM xn MAXLEN "~" 50
+check XLEN xn
+check XINFO STREAM xn
+# ranges with exclusive bounds, XREAD's '+', and XSETID's checks
+check XRANGE xp "(3-0" + COUNT 2
+check XREVRANGE xp "(7-0" - COUNT 1
+check XRANGE xp - + COUNT 0
+check XREAD STREAMS xp +
+check XREAD STREAMS xp '$'
+check XSETID xp 9-0 ENTRIESADDED 100 MAXDELETEDID 8-0
+check XSETID xp 1-0
+check XSETID missingstream 1-0
+check XINFO STREAM xp
 
 # --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
 #     too on a line, it's float formatting in the references, not a kevy gap) ---

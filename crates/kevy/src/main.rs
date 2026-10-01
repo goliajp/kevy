@@ -12,16 +12,17 @@ use kevy_config::{CliOverrides, Config};
 
 /// Route every allocation in the process through `kevy-alloc`.
 ///
-/// Behind a feature and off by default. An allocator has no run-time
-/// switch — whatever it costs, it costs on every `SET`, `GET` and
-/// published message — so the decision to build with it belongs to
-/// whoever builds, and the measurement that justifies it is the
-/// interleaved A/B in `bench/allocgate.sh` (M1, M2).
+/// On by default (the `kevy-alloc` feature). An allocator has no run-time
+/// switch, so a server on the system allocator is a separate build:
+/// `--no-default-features`.
 #[cfg(feature = "kevy-alloc")]
 #[global_allocator]
 static GLOBAL: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
 
 fn main() -> ! {
+    #[cfg(feature = "kevy-alloc")]
+    kevy::kevy_alloc_is_global();
+    handle_keygen();
     handle_help_and_version();
     let mut cfg = resolve_config();
     let threads = resolve_thread_count(&mut cfg);
@@ -50,6 +51,29 @@ fn handle_help_and_version() {
                 std::process::exit(0);
             }
             _ => {}
+        }
+    }
+}
+
+/// `kevy keygen <file>`: write a private key for the encrypted links and
+/// print its public key, the value peers put in their configuration.
+fn handle_keygen() {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some("keygen") {
+        return;
+    }
+    let Some(path) = args.next() else {
+        eprintln!("usage: kevy keygen <file>");
+        std::process::exit(2);
+    };
+    match kevy::secure::keygen(&path) {
+        Ok(public) => {
+            println!("{}", kevy_config::key_to_hex(&public));
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("kevy: keygen {path}: {e}");
+            std::process::exit(1);
         }
     }
 }
@@ -110,6 +134,7 @@ kevy {v} — pure-Rust Redis-compatible KV server.
 
 USAGE:
     kevy [OPTIONS]
+    kevy keygen <FILE>  Write a private key for encrypted links; prints its public key
 
 OPTIONS:
     --config <PATH>     TOML config file (auto-detected: ./kevy.toml,
@@ -148,28 +173,91 @@ Docs: https://github.com/goliajp/kevy"
 /// Parse CLI into `(--config PATH, CliOverrides)`. Backward-compatible with
 /// the pre-`kevy-config` flag set: `--bind`, `--port`, `--threads`, `--dir`,
 /// `--no-aof` all still work and override env + file values.
+///
+/// Strict, like the env and TOML layers: an unknown flag, a flag given
+/// twice, a missing value or a value that does not parse exits 2 naming
+/// it. (`--port abc` used to be dropped, and the server listened on 6004.)
 fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
-    let config_path = arg_value("--config").map(PathBuf::from);
-    let aof = if std::env::args().any(|a| a == "--no-aof") { Some(false) } else { None };
-    let cluster = if std::env::args().any(|a| a == "--cluster") { Some(true) } else { None };
-    let overrides = CliOverrides {
-        bind: arg_value("--bind").and_then(|s| parse_ipv4(&s)),
-        port: arg_value("--port").and_then(|s| s.parse().ok()),
-        threads: arg_value("--threads").and_then(|s| s.parse::<usize>().ok()).filter(|&n| n > 0),
-        accept_shards: arg_value("--accept-shards")
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&n| n > 0),
-        data_dir: arg_value("--dir").map(PathBuf::from),
-        aof,
-        cluster,
-        tiering_budget: arg_value("--tiering-budget").map(|s| {
-            kevy_config::TierBudgetSpec::parse(&s).unwrap_or_else(|e| {
-                eprintln!("kevy: --tiering-budget: {e}");
-                std::process::exit(2);
-            })
-        }),
-    };
-    (config_path, overrides)
+    parse_args(std::env::args().skip(1)).unwrap_or_else(|msg| {
+        eprintln!("kevy: {msg} (kevy --help lists the flags)");
+        std::process::exit(2);
+    })
+}
+
+/// The flags, from `args` (without the program name).
+fn parse_args(
+    args: impl IntoIterator<Item = String>,
+) -> Result<(Option<PathBuf>, CliOverrides), String> {
+    let mut config = None;
+    let mut o = CliOverrides::default();
+    let mut seen: Vec<String> = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (arg.clone(), None),
+        };
+        if matches!(flag.as_str(), "--help" | "-h" | "--version" | "-V") {
+            continue; // answered before config is read
+        }
+        if seen.contains(&flag) {
+            return Err(format!("{flag} given twice"));
+        }
+        seen.push(flag.clone());
+        if matches!(flag.as_str(), "--no-aof" | "--cluster") {
+            if inline.is_some() {
+                return Err(format!("{flag} takes no value"));
+            }
+            if flag == "--no-aof" {
+                o.aof = Some(false)
+            } else {
+                o.cluster = Some(true)
+            }
+            continue;
+        }
+        const VALUED: &[&str] = &[
+            "--config",
+            "--dir",
+            "--bind",
+            "--port",
+            "--threads",
+            "--accept-shards",
+            "--tiering-budget",
+        ];
+        if !VALUED.contains(&flag.as_str()) {
+            return Err(format!("unknown flag '{flag}'"));
+        }
+        let value = inline.or_else(|| args.next()).ok_or(format!("{flag} needs a value"))?;
+        apply_flag(&flag, value, &mut config, &mut o)?;
+    }
+    Ok((config, o))
+}
+
+/// One flag that takes a value.
+fn apply_flag(
+    flag: &str,
+    value: String,
+    config: &mut Option<PathBuf>,
+    o: &mut CliOverrides,
+) -> Result<(), String> {
+    let bad = |what: &str| format!("{flag} takes {what}, not '{value}'");
+    match flag {
+        "--config" => *config = Some(PathBuf::from(&value)),
+        "--dir" => o.data_dir = Some(PathBuf::from(&value)),
+        "--bind" => o.bind = Some(parse_ipv4(&value).ok_or_else(|| bad("an IPv4 address"))?),
+        "--port" => o.port = Some(value.parse().map_err(|_| bad("a port (0-65535)"))?),
+        "--threads" => o.threads = Some(value.parse().map_err(|_| bad("a shard count"))?),
+        "--accept-shards" => {
+            o.accept_shards = Some(value.parse().map_err(|_| bad("a shard count"))?)
+        }
+        "--tiering-budget" => {
+            o.tiering_budget = Some(
+                kevy_config::TierBudgetSpec::parse(&value).map_err(|e| format!("{flag}: {e}"))?,
+            )
+        }
+        other => return Err(format!("unknown flag '{other}'")),
+    }
+    Ok(())
 }
 
 /// Snapshot the process env as `(String, String)` pairs for
@@ -178,21 +266,6 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
 /// without touching the global env).
 fn env_vars() -> impl IntoIterator<Item = (String, String)> {
     std::env::vars().collect::<Vec<_>>()
-}
-
-/// Find `--flag value` or `--flag=value` in the args.
-fn arg_value(flag: &str) -> Option<String> {
-    let mut args = std::env::args().skip(1);
-    let eq_prefix = format!("{flag}=");
-    while let Some(arg) = args.next() {
-        if arg == flag {
-            return args.next();
-        }
-        if let Some(v) = arg.strip_prefix(&eq_prefix) {
-            return Some(v.to_string());
-        }
-    }
-    None
 }
 
 /// Parse a dotted-quad IPv4 string into four octets.
@@ -223,17 +296,69 @@ fn is_loopback(bind: [u8; 4]) -> bool {
 /// stunnel/nginx + IP allowlist.
 fn warn_unprotected_bind(bind: [u8; 4]) {
     let [a, b, c, d] = bind;
-    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");
+    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback, and kevy has no AUTH or TLS.");
     eprintln!("kevy WARN: anyone who can reach this socket can read/write every key.");
     eprintln!("kevy WARN: safe only on trust-bounded networks (docker-compose internal,");
     eprintln!("kevy WARN: kubernetes pod network, VPC private subnet). Do NOT expose to");
-    eprintln!("kevy WARN: the public internet. Front with stunnel/nginx + IP allowlist");
-    eprintln!("kevy WARN: until AUTH/TLS lands in v0.3+.");
+    eprintln!("kevy WARN: the public internet: put a TLS proxy that checks client");
+    eprintln!("kevy WARN: certificates in front (see docs/deploy-behind-a-proxy.md).");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parsed(line: &str) -> Result<(Option<PathBuf>, CliOverrides), String> {
+        parse_args(line.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn server_flags_are_parsed_or_refused_by_name() {
+        let (config, o) =
+            parsed("--port 6380 --bind=0.0.0.0 --threads 0 --no-aof --config k.toml").unwrap();
+        assert_eq!(
+            (o.port, o.bind, o.threads, o.aof),
+            (Some(6380), Some([0, 0, 0, 0]), Some(0), Some(false))
+        );
+        assert_eq!(config, Some(PathBuf::from("k.toml")));
+        for (line, msg) in [
+            ("--port abc", "--port takes a port (0-65535), not 'abc'"),
+            ("--port 70000", "--port takes a port (0-65535), not '70000'"),
+            ("--bind 1.2.3", "--bind takes an IPv4 address, not '1.2.3'"),
+            ("--threads -1", "--threads takes a shard count, not '-1'"),
+            ("--port", "--port needs a value"),
+            ("--port 1 --port 2", "--port given twice"),
+            ("--no-aof=yes", "--no-aof takes no value"),
+            ("--save 60", "unknown flag '--save'"),
+            ("6004", "unknown flag '6004'"),
+        ] {
+            assert_eq!(parsed(line).err().as_deref(), Some(msg), "{line}");
+        }
+        assert!(parsed("--help --port 1").is_ok(), "help is answered earlier");
+    }
+
+    #[test]
+    fn every_flag_reaches_its_override() {
+        let (config, o) = parsed(
+            "--dir /data --accept-shards 3 --tiering-budget 70% --cluster --config=/etc/kevy.toml",
+        )
+        .unwrap();
+        assert_eq!(config, Some(PathBuf::from("/etc/kevy.toml")));
+        assert_eq!(
+            (o.data_dir, o.accept_shards, o.cluster),
+            (Some(PathBuf::from("/data")), Some(3), Some(true))
+        );
+        assert!(o.tiering_budget.is_some(), "--tiering-budget parsed");
+        assert_eq!(
+            parsed("--tiering-budget junk").err().as_deref(),
+            Some("--tiering-budget: tiering budget: size literal \"junk\" has no number")
+        );
+        assert_eq!(
+            parsed("--accept-shards two").err().as_deref(),
+            Some("--accept-shards takes a shard count, not 'two'")
+        );
+        assert_eq!(parsed("--dir").err().as_deref(), Some("--dir needs a value"));
+    }
 
     #[test]
     fn loopback_classification() {

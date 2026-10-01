@@ -16,6 +16,27 @@
 //! start. AOFs are not rewritten — each new snapshot is its shard's full
 //! state and a fresh (empty) log opens on bring-up; the old logs live on in
 //! the `.premigration.<stamp>` backups.
+//!
+//! ```
+//! use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources, recover_journal};
+//! use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+//! use kevy_store::{SetCondition, Store};
+//!
+//! let dir = kevy_tmpdir::unique_dir("reshard-doc");
+//! for i in 0..2 {
+//!     let mut shard = Store::new();
+//!     shard.set(format!("k{i}").as_bytes(), b"v".to_vec(), None, SetCondition::Always);
+//!     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+//! }
+//! recover_journal(&dir, &StdLayout)?; // startup: finish any interrupted reshard first
+//! // two shards become one
+//! let mut merged = Store::new();
+//! merge_sources(&dir, 2, &StdLayout, &mut merged, |_, _| {})?;
+//! commit_reshard(&dir, 2, ShardsMeta::new(1, Routing::KevyHash), &[merged], None, &StdLayout)?;
+//! assert_eq!(layout::infer_files_n(&dir), 1);
+//! # std::fs::remove_dir_all(&dir)?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Best-effort removal, on paths where the file is being abandoned.
 // A file that will not delete is a stray the next sweep collects,
@@ -23,9 +44,7 @@
 #![expect(clippy::let_underscore_must_use, reason = "removing what is already meant to be gone")]
 
 use crate::layout;
-use crate::{
-    Argv, Routing, ShardsMeta, load_snapshot, replay_aof, save_snapshot, write_shards_meta,
-};
+use crate::{Argv, ShardsMeta, replay_aof, save_snapshot};
 use kevy_store::Store;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,14 +56,67 @@ use std::path::{Path, PathBuf};
 /// Recovery resolves paths through the layout *currently in effect* — a
 /// journal left by a crash is rolled forward under the caller's present
 /// file-name configuration, which must match the one that wrote it.
+///
+/// Implementations are the host's: each must be a pure function of its
+/// arguments (recovery re-derives every path from them after a crash), and
+/// must give distinct shards of one layout distinct paths (two shards
+/// sharing a file would overwrite each other's snapshot at commit).
+///
+/// ```
+/// use kevy_persist::reshard::{ShardLayout, recover_journal};
+/// use std::path::{Path, PathBuf};
+///
+/// // one shard keeps the host's own file names; more use the standard ones
+/// struct Named;
+/// impl ShardLayout for Named {
+///     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+///         if n == 1 { dir.join("app.rdb") } else { kevy_persist::layout::snapshot_path(dir, i) }
+///     }
+///     fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+///         if n == 1 { dir.join("app.aof") } else { kevy_persist::layout::aof_path(dir, i) }
+///     }
+/// }
+/// let dir = kevy_tmpdir::unique_dir("shard-layout-doc");
+/// assert_eq!(Named.aof_path(&dir, 0, 1), dir.join("app.aof"));
+/// recover_journal(&dir, &Named)?; // no journal: nothing to roll forward
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub trait ShardLayout {
     /// Shard `i`'s snapshot path under an `n`-shard layout.
+    ///
+    /// ```
+    /// use kevy_persist::reshard::{ShardLayout, StdLayout};
+    /// use std::path::Path;
+    ///
+    /// let p = StdLayout.snapshot_path(Path::new("/data"), 1, 4);
+    /// assert_eq!(p, Path::new("/data/dump-1.rdb"));
+    /// ```
     fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
     /// Shard `i`'s AOF path under an `n`-shard layout.
+    ///
+    /// ```
+    /// use kevy_persist::reshard::{ShardLayout, StdLayout};
+    /// use std::path::Path;
+    ///
+    /// let p = StdLayout.aof_path(Path::new("/data"), 1, 4);
+    /// assert_eq!(p, Path::new("/data/aof-1.aof"));
+    /// ```
     fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf;
 }
 
 /// The standard per-shard file names, for every shard count.
+///
+/// ```
+/// use kevy_persist::layout;
+/// use kevy_persist::reshard::{ShardLayout, StdLayout};
+/// use std::path::Path;
+///
+/// let dir = Path::new("/data");
+/// // the same names whatever the shard count
+/// assert_eq!(StdLayout.aof_path(dir, 0, 1), layout::aof_path(dir, 0));
+/// assert_eq!(StdLayout.aof_path(dir, 0, 8), layout::aof_path(dir, 0));
+/// ```
 #[derive(Debug)]
 pub struct StdLayout;
 
@@ -57,7 +129,7 @@ impl ShardLayout for StdLayout {
     }
 }
 
-const JOURNAL: &str = "reshard.journal";
+use crate::reshard_journal::{JOURNAL, parse_journal, write_journal};
 
 /// A target snapshot's temp name: written here first, renamed into place
 /// only after the journal commits.
@@ -71,6 +143,25 @@ fn reshard_tmp(target: &Path) -> PathBuf {
 /// load directly, AOF frames go through `replay` (the caller applies them
 /// with its own command set). Returns the source paths found — they stay in
 /// place; `commit_reshard` backs them up.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources};
+/// use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let dir = kevy_tmpdir::unique_dir("merge-doc");
+/// for (i, key) in [b"a", b"b"].into_iter().enumerate() {
+///     let mut shard = Store::new();
+///     shard.set(key, b"v".to_vec(), None, SetCondition::Always);
+///     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+/// }
+/// let mut temp = Store::new();
+/// let sources = merge_sources(&dir, 2, &StdLayout, &mut temp, |_, _| {})?;
+/// assert_eq!(sources.len(), 2);
+/// assert_eq!(temp.dbsize(), 2);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn merge_sources<L: ShardLayout>(
     dir: &Path,
     src_n: usize,
@@ -81,11 +172,19 @@ pub fn merge_sources<L: ShardLayout>(
     let mut sources: Vec<PathBuf> = Vec::new();
     for i in 0..src_n {
         let snap = lay.snapshot_path(dir, i, src_n);
+        let aof = lay.aof_path(dir, i, src_n);
+        let log = aof.exists().then_some(aof.as_path());
+        if crate::settle_snapshot(&snap, log)? {
+            let file = std::io::BufReader::new(std::fs::File::open(&snap)?);
+            // the frame kept beside the keyspace goes the way of a logged one
+            if let Some(aux) = crate::load_snapshot_with_aux(temp, file, |_| true)? {
+                replay(temp, aux);
+            }
+        }
         if snap.exists() {
-            load_snapshot(temp, &snap)?;
+            // a snapshot a complete log supersedes is still an old source
             sources.push(snap);
         }
-        let aof = lay.aof_path(dir, i, src_n);
         if aof.exists() {
             replay_aof(&aof, |args| replay(temp, args))?;
             sources.push(aof);
@@ -99,11 +198,34 @@ pub fn merge_sources<L: ShardLayout>(
 /// finalize — back every `prev_n`-layout source up as
 /// `.premigration.<stamp>`, move the temps into place, record the layout,
 /// drop the journal. Returns the backup stamp.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources};
+/// use kevy_persist::{Routing, ShardsMeta, layout, save_snapshot};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let dir = kevy_tmpdir::unique_dir("commit-doc");
+/// for (i, key) in [b"a", b"b"].into_iter().enumerate() {
+///     let mut shard = Store::new();
+///     shard.set(key, b"v".to_vec(), None, SetCondition::Always);
+///     save_snapshot(&shard, &layout::snapshot_path(&dir, i))?;
+/// }
+/// let mut temp = Store::new();
+/// merge_sources(&dir, 2, &StdLayout, &mut temp, |_, _| {})?;
+/// let target = ShardsMeta::new(1, Routing::KevyHash);
+/// let stamp = commit_reshard(&dir, 2, target, &[temp], None, &StdLayout)?;
+/// assert_eq!(ShardsMeta::read(&layout::shards_meta_path(&dir)), Some(target));
+/// let backup = format!("dump-1.rdb.premigration.{stamp}");
+/// assert!(dir.join(backup).exists(), "the old layout is kept aside");
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn commit_reshard<L: ShardLayout>(
     dir: &Path,
     prev_n: usize,
     target: ShardsMeta,
     stores: &[Store],
+    aux: Option<&Argv>,
     lay: &L,
 ) -> io::Result<u128> {
     // Stale `.reshard` temps from a pre-journal crash are dead weight —
@@ -112,7 +234,8 @@ pub fn commit_reshard<L: ShardLayout>(
         let _ = std::fs::remove_file(reshard_tmp(&lay.snapshot_path(dir, i, target.n)));
     }
     for (i, store) in stores.iter().enumerate() {
-        save_snapshot(store, &reshard_tmp(&lay.snapshot_path(dir, i, target.n)))?;
+        let src = crate::WithAux::new(store, aux);
+        save_snapshot(&src, &reshard_tmp(&lay.snapshot_path(dir, i, target.n)))?;
     }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -120,23 +243,6 @@ pub fn commit_reshard<L: ShardLayout>(
     write_journal(dir, prev_n, target, stamp)?; // ── commit point ──
     finish_reshard(dir, prev_n, target, stamp, lay)?;
     Ok(stamp)
-}
-
-/// Persist the reshard commit record durably (write + fsync) — once this
-/// exists, the migration is committed and any crash is rolled *forward*.
-fn write_journal(dir: &Path, prev_n: usize, target: ShardsMeta, stamp: u128) -> io::Result<()> {
-    use std::io::Write;
-    let routing = match target.routing {
-        Routing::KevyHash => "kevyhash",
-        Routing::Slots => "slots",
-    };
-    let body = format!(
-        "kevy-reshard-journal v1\nstamp={stamp}\nprev_n={prev_n}\nn={}\nrouting={routing}\n",
-        target.n,
-    );
-    let mut f = std::fs::File::create(dir.join(JOURNAL))?;
-    f.write_all(body.as_bytes())?;
-    f.sync_all()
 }
 
 /// The post-journal half of a reshard: rename every old-layout source to
@@ -172,7 +278,7 @@ fn finish_reshard<L: ShardLayout>(
             std::fs::rename(&tmp, &dst)?;
         }
     }
-    write_shards_meta(&layout::shards_meta_path(dir), target)?;
+    target.write(&layout::shards_meta_path(dir))?;
     std::fs::remove_file(dir.join(JOURNAL))
 }
 
@@ -188,6 +294,18 @@ fn rename_to_backup(src: &Path, stamp: u128) -> io::Result<()> {
 /// commit point was never reached: the old layout is fully intact, so the
 /// torn journal (and any `.reshard` temps, cleaned by the next
 /// `commit_reshard`) is safely discarded.
+///
+/// ```
+/// use kevy_persist::reshard::{StdLayout, recover_journal};
+///
+/// let dir = kevy_tmpdir::unique_dir("recover-doc");
+/// // a crash mid-journal-write leaves a torn journal: the commit never happened
+/// std::fs::write(dir.join("reshard.journal"), "kevy-resh")?;
+/// recover_journal(&dir, &StdLayout)?;
+/// assert!(!dir.join("reshard.journal").exists());
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn recover_journal<L: ShardLayout>(dir: &Path, lay: &L) -> io::Result<()> {
     let path = dir.join(JOURNAL);
     let body = match std::fs::read_to_string(&path) {
@@ -210,38 +328,10 @@ pub fn recover_journal<L: ShardLayout>(dir: &Path, lay: &L) -> io::Result<()> {
     }
 }
 
-fn parse_journal(body: &str) -> Option<(usize, ShardsMeta, u128)> {
-    let mut lines = body.lines();
-    if lines.next() != Some("kevy-reshard-journal v1") {
-        return None;
-    }
-    let mut stamp = None;
-    let mut prev_n = None;
-    let mut n = None;
-    let mut routing = None;
-    for line in lines {
-        let (k, v) = line.split_once('=')?;
-        match k {
-            "stamp" => stamp = v.parse::<u128>().ok(),
-            "prev_n" => prev_n = v.parse::<usize>().ok(),
-            "n" => n = v.parse::<usize>().ok(),
-            "routing" => {
-                routing = match v {
-                    "kevyhash" => Some(Routing::KevyHash),
-                    "slots" => Some(Routing::Slots),
-                    _ => None,
-                }
-            }
-            _ => return None,
-        }
-    }
-    Some((prev_n?, ShardsMeta { n: n?, routing: routing? }, stamp?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_shards_meta;
+    use crate::{Routing, load_snapshot};
 
     fn temp_dir(name: &str) -> PathBuf {
         kevy_tmpdir::unique_dir(&format!("reshard-{name}"))
@@ -285,7 +375,7 @@ mod tests {
         assert!(dir.join("dump-0.rdb").exists() && dir.join("dump-1.rdb").exists());
         assert!(!dir.join("dump-0.rdb.reshard").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -306,7 +396,7 @@ mod tests {
         assert!(!dir.join("dump-0.rdb.premigration.7").exists(), "finalized snapshot re-backed-up");
         assert!(dir.join("dump-1.rdb").exists());
         assert!(!dir.join(JOURNAL).exists());
-        assert_eq!(read_shards_meta(&dir.join("shards.meta")), Some(TARGET));
+        assert_eq!(ShardsMeta::read(&dir.join("shards.meta")), Some(TARGET));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -354,17 +444,17 @@ mod tests {
         // Shrink 2 → 1 under custom names: merge, commit, verify the
         // custom-named snapshot landed and the std-named sources moved.
         let mut a = Store::new();
-        a.set(b"alpha", b"1".to_vec(), None, false, false);
+        a.set(b"alpha", b"1".to_vec(), None, kevy_store::SetCondition::Always);
         save_snapshot(&a, &dir.join("dump-0.rdb")).unwrap();
         let mut b = Store::new();
-        b.set(b"beta", b"2".to_vec(), None, false, false);
+        b.set(b"beta", b"2".to_vec(), None, kevy_store::SetCondition::Always);
         save_snapshot(&b, &dir.join("dump-1.rdb")).unwrap();
 
         let mut temp = Store::new();
         let sources = merge_sources(&dir, 2, &Custom, &mut temp, |_, _| {}).unwrap();
         assert_eq!(sources.len(), 2);
         let target = ShardsMeta { n: 1, routing: Routing::KevyHash };
-        let stamp = commit_reshard(&dir, 2, target, &[temp], &Custom).unwrap();
+        let stamp = commit_reshard(&dir, 2, target, &[temp], None, &Custom).unwrap();
 
         assert!(dir.join("snap.bin").exists());
         assert!(dir.join(format!("dump-0.rdb.premigration.{stamp}")).exists());

@@ -21,15 +21,19 @@ const pkg = join(here, '../crates/kevy-wasm/pkg')
 const wasm = join(pkg, 'kevy.wasm')
 const built = join(here, '../target/wasm32-unknown-unknown/release/kevy_wasm.wasm')
 
-if (!existsSync(wasm) || (existsSync(built) && statSync(built).mtimeMs > statSync(wasm).mtimeMs)) {
-  if (process.env.KEVY_NO_WASM_BUILD) {
+// Cargo is asked every time rather than the two files' mtimes compared:
+// only cargo knows whether the sources moved, and the mtime test kept a
+// month-old engine in place on any machine that had built one once.
+if (process.env.KEVY_NO_WASM_BUILD) {
+  if (!existsSync(wasm)) {
     console.error(
-      `engine: ${wasm} is missing or stale, and KEVY_NO_WASM_BUILD is set.\n` +
+      `engine: ${wasm} is missing, and KEVY_NO_WASM_BUILD is set.\n` +
         `  cargo build -p kevy-wasm --target wasm32-unknown-unknown --release\n` +
         `  cp target/wasm32-unknown-unknown/release/kevy_wasm.wasm crates/kevy-wasm/pkg/kevy.wasm`,
     )
     process.exit(1)
   }
+} else {
   console.log('engine: building the wasm from this checkout')
   execFileSync(
     'cargo',

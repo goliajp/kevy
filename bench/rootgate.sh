@@ -59,7 +59,9 @@ if [ "$n_tracked" -lt 100 ]; then
     echo "  answer about nothing." >&2
     exit 2
 fi
-tracked=$(git ls-files | grep -E '(^|/)(aof-[0-9]+\.aof|dump-[0-9]+\.rdb|shards\.meta|feed-[0-9]+\.(gen|meta)|index-catalog\.meta|tier/[0-9]+/|segs-[0-9]+/)' || true)
+# A file name matches whole: a test fixture carrying a store's files under
+# an inert suffix (`aof-0.aof.in`) is source, the store never writes it.
+tracked=$(git ls-files | grep -E '(^|/)((aof-[0-9]+\.aof|dump-[0-9]+\.rdb|shards\.meta|feed-[0-9]+\.(gen|meta)|index-catalog\.meta|LOCK)$|tier/[0-9]+/|segs-[0-9]+/)' || true)
 if [ -n "$tracked" ]; then
     echo "rootgate: FAIL — runtime artifacts are tracked in git:"
     echo "$tracked" | sed 's/^/  /'
@@ -105,7 +107,18 @@ done
 #    only the index one, so table-catalog.meta walked straight past it
 #    the same afternoon. Same mistake as the shapes list above, one
 #    hour later.
-elsewhere=$(find . -path ./target -prune -o -path ./.git -prune -o \
+#
+#    A git worktree parked inside this one is another checkout: its files
+#    are that tree's business, and its running tests would be billed here.
+nested=()
+while read -r wt; do
+    case $wt in "$PWD"/*) nested+=(-path "./${wt#"$PWD"/}" -prune -o) ;; esac
+done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+# build and package output is never a test's cwd: prune it by name
+# wherever it sits (node_modules, a fuzz crate's target, an Xcode .build)
+elsewhere=$(find . -path ./.git -prune -o \
+    \( -name target -o -name node_modules -o -name .build \) -prune -o \
+    ${nested[@]+"${nested[@]}"} \
     \( -name '*-catalog.meta' -o -name 'shards.meta' -o -name 'aof-*.aof' \
        -o -name 'dump-*.rdb' -o -name 'feed-*.gen' -o -name 'feed-*.meta' \) \
     -print 2>/dev/null || true)

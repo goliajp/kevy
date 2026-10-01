@@ -11,6 +11,8 @@
 //! rolling back (the 3.18 black hole).
 //!
 //!   crash_check <dir> [--shards N] [--feed] [--mark]
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use kevy_embedded::{Config, Store};
 
 fn main() {
@@ -27,8 +29,9 @@ fn main() {
             other => panic!("unknown flag {other}"),
         }
     }
-    let mut cfg =
-        Config::default().with_persist(&dir).with_shards(shards).with_replay_resync(resync);
+    let mode =
+        if resync { kevy_embedded::ReplayMode::Resync } else { kevy_embedded::ReplayMode::Strict };
+    let mut cfg = Config::default().with_persist(&dir).with_shards(shards).with_replay_mode(mode);
     if feed {
         cfg = cfg.with_feed(16 << 20);
     }

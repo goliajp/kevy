@@ -25,6 +25,8 @@ stone = [
   "kevy-ring",     # ring buffer
   "kevy-seg",      # segment store
   "kevy-time",     # clock
+  "kevy-crypto",   # ChaCha20-Poly1305 / X25519 / BLAKE2s
+  "kevy-noise",    # Noise IK handshake + transport, no I/O
   "kevy-sys",      # the one OS boundary (sockets/poller/mmap)
   "kevy-uring",    # io_uring bindings
   "kevy-text",     # full-text segments
@@ -40,6 +42,7 @@ steel = [
   "kevy-store",    # the keyspace
   "kevy-vlog",     # value log (cold values)
   "kevy-resp",     # RESP protocol + ops table
+  "kevy-verbs",    # single-shard command layer (server + embedded)
   "kevy-resp-client",
   "kevy-persist",  # AOF + snapshots
   "kevy-index",    # secondary indexes

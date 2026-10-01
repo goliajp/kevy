@@ -3,7 +3,7 @@
 //! `kevy_sub_next` returns each frame RESP-encoded (`*3…message…`), which a
 //! known-channel push subscriber does not want: it only needs the payload
 //! bytes. These two entry points hand back **just the payload**, moved out of
-//! the delivered [`PubsubFrame`] with no RESP framing and no re-copy — the
+//! the delivered [`PubsubEvent`] with no RESP framing and no re-copy — the
 //! `encode_frame` cost the framed lane pays per frame is gone. Split out of
 //! `lib.rs` for the house 500-LOC rule; a NEW lane, additive to the framed one.
 
@@ -27,6 +27,26 @@ use crate::{KevyBuf, KevySub};
 /// a known-channel push subscriber that only wants the bytes. A pattern
 /// subscriber that needs the channel keeps using the framed
 /// [`kevy_sub_next`](crate::kevy_sub_next).
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_sub_close, kevy_sub_next_raw, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; the payload
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2);
+///     assert_eq!(kevy_sub_next_raw(sub, &mut out), 1); // the ack is skipped
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"hi"); // no RESP framing
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     assert_eq!(kevy_sub_next_raw(sub, &mut out), 0); // drained
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
@@ -80,6 +100,28 @@ pub unsafe extern "C" fn kevy_sub_next_raw(sub: *mut KevySub, out: *mut KevyBuf)
 /// blocking companion so a push poller can run a fully RESP-free lane: park in
 /// `kevy_sub_wait_raw` for the first frame, then drain the rest with
 /// `kevy_sub_next_raw`.
+///
+/// ```
+/// use kevy_ffi::{KevyBuf, kevy_buf_free, kevy_close, kevy_open_mem, kevy_publish};
+/// use kevy_ffi::{kevy_sub_close, kevy_sub_wait_raw, kevy_subscribe};
+///
+/// let db = kevy_open_mem();
+/// let mut out = KevyBuf { ptr: std::ptr::null_mut(), len: 0, cap: 0 };
+/// // SAFETY: `db` is live; every name pointer covers its length; the payload
+/// // is read before its single free; each handle is closed once.
+/// unsafe {
+///     let sub = kevy_subscribe(db, b"news".as_ptr(), 4);
+///     kevy_publish(db, b"news".as_ptr(), 4, b"hi".as_ptr(), 2);
+///     let mut rc = 0;
+///     while rc != 1 {
+///         rc = kevy_sub_wait_raw(sub, 1_000, &mut out); // 0 for the ack: wait again
+///     }
+///     assert_eq!(std::slice::from_raw_parts(out.ptr, out.len), b"hi");
+///     kevy_buf_free(out.ptr, out.len, out.cap);
+///     kevy_sub_close(sub);
+///     kevy_close(db);
+/// }
+/// ```
 ///
 /// # Safety
 /// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.

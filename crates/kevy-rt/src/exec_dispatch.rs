@@ -15,24 +15,21 @@ use kevy_resp::{ArgvView, RespVersion};
 use kevy_store::Store;
 use std::time::Instant;
 
-/// Dispatch `args` into `out` under the per-command protocol version.
-/// V2 is the default + the hot path; the V3 arm only fires after a HELLO 3
-/// negotiation upstream. A free function over the disjoint `Shard` fields
-/// so both the inline fast path (`out` = the conn's output buffer, borrowed
-/// from `self.conns`) and `run_dispatch` (`out` = the reply scratch) share
-/// it.
+/// Dispatch `args` into `out` under the per-command protocol version,
+/// with the verb id the origin's resolve() found. A free function over the
+/// disjoint `Shard` fields so both the inline fast path (`out` = the conn's
+/// output buffer, borrowed from `self.conns`) and `run_dispatch` (`out` =
+/// the reply scratch) share it.
 #[inline]
 pub(crate) fn dispatch_proto<C: Commands, A: ArgvView + ?Sized>(
     commands: &C,
     store: &mut Store,
     args: &A,
     proto: RespVersion,
+    meta: DispatchMeta,
     out: &mut Vec<u8>,
 ) {
-    match proto {
-        RespVersion::V2 => commands.dispatch_into(store, args, out),
-        RespVersion::V3 => commands.dispatch_into_resp3(store, args, out),
-    }
+    commands.dispatch_verb_into(store, args, meta.verb, proto, out);
 }
 
 /// L1: case-insensitive 3-byte compare against "GET". Three byte ops
@@ -101,7 +98,7 @@ impl<C: Commands> Shard<C> {
             // dispatch straight off the borrowed argv — no owned
             // materialise needed.
             let part = self.run_dispatch(args, proto, meta);
-            self.fold(conn_id, seq, part);
+            self.fold_unless_held(conn_id, seq, part);
         } else {
             self.forward_to(shard, conn_id, seq, args, proto, meta);
         }
@@ -122,7 +119,7 @@ impl<C: Commands> Shard<C> {
         meta: DispatchMeta,
     ) {
         let argv = self.argv_pool.take_filled(args);
-        self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
+        self.request_batch[shard].reqs.push((conn_id, seq, argv, proto, meta));
         self.request_batch_nonempty |= 1u64 << shard;
     }
 
@@ -152,33 +149,12 @@ impl<C: Commands> Shard<C> {
         // Field-only read, before the conn borrow.
         let t0 = self.slowlog_t0();
 
-        // A BRPOPLPUSH whose destination lives on another shard must NOT run
-        // the local dispatch below: `Store::rpoplpush` pushes into whatever
-        // store it is handed, so the element would land in THIS shard's
-        // keyspace and be invisible to every later read of the destination.
-        // The command still returned the moved value, so the caller believed
-        // it had worked — 9 of 12 elements vanished on an 8-shard server.
-        //
-        // Park it instead. The cross-shard arbiter arms on the source, sees it
-        // is already non-empty, and hands the serve to the orchestrator in
-        // `exec_listmove`, which pops on the source's shard and pushes on the
-        // destination's.
-        if let crate::BlockHint::Block { kind: crate::BlockKind::Brpoplpush, keys, timeout_ms } =
-            &block_hint
-            && args.len() == 4
-            && !keys.is_empty()
-            && self.shard_of(&args[2]) != self.shard_of(&keys[0])
+        if let crate::BlockHint::Block { kind, keys, timeout_ms } = &block_hint
+            && self.parks_before_running(args, *kind, keys)
         {
-            let (keys, timeout_ms) = (keys.clone(), *timeout_ms);
+            let (kind, keys, timeout_ms) = (*kind, keys.clone(), *timeout_ms);
             self.slowlog_maybe(t0, args);
-            self.park_dispatch(
-                conn_id,
-                args,
-                crate::BlockKind::Brpoplpush,
-                keys,
-                timeout_ms,
-                proto,
-            );
+            self.park_dispatch(conn_id, args, kind, keys, timeout_ms, proto);
             return true;
         }
         // GET handled in ONE keyspace lookup here, with
@@ -199,7 +175,11 @@ impl<C: Commands> Shard<C> {
             //
             // Conn lookup happens FIRST so we can pre-check `conn.pending`
             // (and bail without touching the store on out-of-order conns).
-            let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
+                return false;
+            };
             if !conn.pending.is_empty() {
                 return false;
             }
@@ -233,17 +213,21 @@ impl<C: Commands> Shard<C> {
             }
             return true;
         }
-        let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+        let Some(conn) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return false;
+        };
         if !conn.pending.is_empty() {
             return false;
         }
         let out_pre_len = conn.output.len();
-        dispatch_proto(&self.commands, &mut self.store, args, proto, &mut conn.output);
+        dispatch_proto(&self.commands, &mut self.store, args, proto, meta, &mut conn.output);
         let wrote_reply = conn.output.len() > out_pre_len;
         // Park-on-miss for BLPOP / BRPOP / XREAD BLOCK that wrote nothing:
         // the reply is deferred to the wake / timeout path.
         if !wrote_reply && let crate::BlockHint::Block { kind, keys, timeout_ms } = block_hint {
             self.slowlog_maybe(t0, args);
+            self.record_armed(args);
             self.park_dispatch(conn_id, args, kind, keys, timeout_ms, proto);
             return true;
         }
@@ -256,6 +240,9 @@ impl<C: Commands> Shard<C> {
         self.slowlog_maybe(t0, args);
         if meta.is_write {
             self.post_write_housekeeping(args, meta);
+            if let Some(t) = self.send_ext(true) {
+                self.hold_inline_reply(conn_id, out_pre_len, t);
+            }
         }
         true
     }
@@ -375,8 +362,7 @@ impl<C: Commands> Shard<C> {
             self.store.bump_if_watched(&args[idx as usize]);
             // Synchronous index maintenance (default no-op; the
             // kevy impl gates on a process-wide catalog-empty atomic).
-            let key = args[idx as usize].to_vec();
-            self.commands.on_write(&mut self.store, &key);
+            self.commands.on_write(&mut self.store, &args[idx as usize]);
         }
         // Propagation override: a verb whose effect is nondeterministic
         // (SPOP's random pick) replaced its wire frame with the
@@ -389,8 +375,15 @@ impl<C: Commands> Shard<C> {
         // `is_applying_replicated` apply path: the take below runs
         // there too, and the frame — if any — goes to the replica's
         // own AOF while the gated push stays suppressed). Deterministic
-        // writes (the overwhelming default) pay one thread-local take.
-        let prop = crate::propagation::take_override();
+        // writes (the overwhelming default) pay one thread-local flag
+        // read: the override and the Lua wake buffer are only taken when
+        // something armed them since the last write.
+        let armed = crate::propagation::take_armed();
+        let prop = if armed {
+            crate::propagation::take_override()
+        } else {
+            crate::propagation::Propagate::AsIs
+        };
         if matches!(prop, crate::propagation::Propagate::AsIs) {
             // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
             // branch so the predictor learns the off case + LLVM keeps the
@@ -421,50 +414,26 @@ impl<C: Commands> Shard<C> {
                 src.push_mutation(args);
             }
         } else {
-            self.record_propagation_override(prop);
+            self.record_propagation_override(prop, args);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,
         // wake it. Gated on `wake_idx` (None for non-wake writes), so a
         // None-only workload pays one Option discriminant check per write.
         if let Some(idx) = meta.wake_idx
-            && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
+            && let Some(key) = args.get(idx as usize)
         {
-            self.wake_key(&key);
+            self.wake_key(key);
         }
         // Drain the Lua wake bridge. `redis.call` inside an
         // EVAL script pushes affected write keys to a thread-local
         // buffer (see `crate::lua_wake_bridge`); this is the runtime's
-        // catch-point. The drain is cheap on non-Lua dispatches —
-        // empty buffer → one Vec capacity check.
-        let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
-        for key in lua_wakes {
-            self.wake_key(&key);
-        }
-    }
-
-    /// Cold sibling of the AsIs arm in [`Self::post_write_housekeeping`]:
-    /// record a `Replace` effect frame to the AOF + replication backlog
-    /// (same gates as the AsIs path), or record nothing (`Suppress`).
-    /// Out-of-line — only nondeterministic verbs (SPOP) land here.
-    #[cold]
-    #[inline(never)]
-    fn record_propagation_override(&mut self, prop: crate::propagation::Propagate) {
-        let crate::propagation::Propagate::Replace(frame) = prop else {
-            return; // Suppress: nothing recorded, nothing pushed.
-        };
-        let total: usize = frame.iter().map(Vec::len).sum();
-        let mut argv = kevy_resp::Argv::with_capacity(frame.len(), total);
-        for part in &frame {
-            argv.push(part);
-        }
-        if self.aof.is_some() {
-            self.log_write(&argv);
-        }
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(&argv);
+        // catch-point. A push arms the flag read above, so a non-Lua
+        // write never touches the buffer.
+        if armed {
+            for key in crate::lua_wake_bridge::drain_lua_wake_buffer() {
+                self.wake_key(&key);
+            }
         }
     }
 

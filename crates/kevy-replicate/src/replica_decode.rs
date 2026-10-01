@@ -3,7 +3,7 @@
 //! project ceiling. The state-machine helpers live here; the type
 //! definitions, `connect`, and `next_frame` stay in `replica.rs`.
 
-use crate::replica::{DecodedFrame, ReplicaClient, ReplicaError, ReplicaEvent};
+use crate::replica::{ReplicaClient, ReplicaError, ReplicaEvent};
 use crate::wire::{
     SnapshotMarker, WireError, decode_frame, decode_snapshot_chunk, decode_snapshot_marker,
 };
@@ -18,7 +18,7 @@ impl ReplicaClient {
     /// Snapshot bookkeeping:
     /// - Entering `SnapshotBegin` sets `in_snapshot = true`; chunk
     ///   bytes are valid until `SnapshotEnd`.
-    /// - `SnapshotEnd { ack_offset, routed: false }` sets `expected_offset =
+    /// - `SnapshotEnd { ack_offset }` sets `expected_offset =
     ///   ack_offset` (so the next live `Frame` has no gap) and
     ///   clears `in_snapshot`.
     /// - Live `*2\r\n` bytes during a snapshot return
@@ -31,14 +31,20 @@ impl ReplicaClient {
             }
             // Need more bytes off the socket.
             let mut chunk = [0u8; 4096];
-            match self.sock.read(&mut chunk) {
+            let read = match self.noise.as_mut() {
+                Some(noise) => noise.read(&mut self.sock, &mut chunk, &mut self.buf),
+                None => {
+                    self.sock.read(&mut chunk).inspect(|&n| self.buf.extend_from_slice(&chunk[..n]))
+                }
+            };
+            match read {
                 Ok(0) => {
                     if self.cursor < self.buf.len() {
                         return Some(Err(ReplicaError::Truncated));
                     }
                     return None;
                 }
-                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Some(Err(ReplicaError::Io(e))),
             }
@@ -65,17 +71,17 @@ impl ReplicaClient {
 
     fn try_decode_live_frame(&mut self) -> Option<Result<ReplicaEvent, ReplicaError>> {
         match decode_frame(&self.buf[self.cursor..]) {
-            Ok((offset, argv, used)) => {
+            Ok((frame, used)) => {
                 self.cursor += used;
                 self.maybe_compact_buf();
-                if offset != self.expected_offset {
+                if frame.offset != self.expected_offset {
                     return Some(Err(ReplicaError::OffsetGap {
                         expected: self.expected_offset,
-                        got: offset,
+                        got: frame.offset,
                     }));
                 }
                 self.expected_offset = self.expected_offset.saturating_add(1);
-                Some(Ok(ReplicaEvent::Frame(DecodedFrame { offset, argv })))
+                Some(Ok(ReplicaEvent::Frame(frame)))
             }
             Err(WireError::Truncated) => None,
             Err(e) => Some(Err(ReplicaError::Frame(e))),
@@ -90,10 +96,10 @@ impl ReplicaClient {
                 self.in_snapshot = true;
                 Some(Ok(ReplicaEvent::SnapshotBegin))
             }
-            Ok(Some((SnapshotMarker::Ping { generation, next_offset }, used))) => {
+            Ok(Some((SnapshotMarker::Ping(tail), used))) => {
                 self.cursor += used;
                 self.maybe_compact_buf();
-                Some(Ok(ReplicaEvent::Ping { generation, primary_offset: next_offset }))
+                Some(Ok(ReplicaEvent::Ping(tail)))
             }
             Ok(Some((SnapshotMarker::End(ack_offset), used))) => {
                 self.cursor += used;

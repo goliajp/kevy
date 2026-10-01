@@ -7,108 +7,87 @@ use std::path::PathBuf;
 
 // ───────────── enums ─────────────
 
-/// AOF fsync policy. Matches Redis `appendfsync`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppendFsync {
-    /// `fsync` after every write command. Zero data-loss but ~50% throughput.
-    Always,
-    /// Background `fsync` every second. Lose at most 1s on crash. Default.
-    EverySec,
-    /// No explicit `fsync`; let OS pagecache flush. Lose ~30s on crash.
-    No,
-}
+/// AOF fsync policy (Redis `appendfsync`): the log's own type, which
+/// enforces it, so the parsed config and the AOF cannot disagree.
+pub use kevy_persist::Fsync as AppendFsync;
 
-impl AppendFsync {
-    /// Canonical Redis-compatible name (`always` / `everysec` / `no`).
-    /// Used by `CONFIG GET appendfsync` and `CONFIG REWRITE`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Always => "always",
-            Self::EverySec => "everysec",
-            Self::No => "no",
-        }
-    }
-    /// Inverse of [`Self::as_str`] — case-insensitive. `None` for any
-    /// other input; used by both the TOML parser and `CONFIG SET`.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "always" => Some(Self::Always),
-            "everysec" => Some(Self::EverySec),
-            "no" => Some(Self::No),
-            _ => None,
-        }
-    }
-}
-
-/// Maxmemory eviction policy. 8 variants matching Redis. `NoEviction`
-/// (default) returns an error on writes once `maxmemory` is hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvictionPolicy {
-    /// Refuse writes once `maxmemory` is hit. Default.
-    NoEviction,
-    /// Approximated LRU across all keys.
-    AllKeysLru,
-    /// Approximated LFU across all keys.
-    AllKeysLfu,
-    /// Random key across all keys.
-    AllKeysRandom,
-    /// Approximated LRU across keys with a TTL.
-    VolatileLru,
-    /// Approximated LFU across keys with a TTL.
-    VolatileLfu,
-    /// Random key from those with a TTL.
-    VolatileRandom,
-    /// Key with the shortest remaining TTL.
-    VolatileTtl,
-}
-
-impl EvictionPolicy {
-    /// Canonical Redis-compatible name.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::NoEviction => "noeviction",
-            Self::AllKeysLru => "allkeys-lru",
-            Self::AllKeysLfu => "allkeys-lfu",
-            Self::AllKeysRandom => "allkeys-random",
-            Self::VolatileLru => "volatile-lru",
-            Self::VolatileLfu => "volatile-lfu",
-            Self::VolatileRandom => "volatile-random",
-            Self::VolatileTtl => "volatile-ttl",
-        }
-    }
-    /// Inverse of [`Self::as_str`] — case-insensitive.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "noeviction" => Some(Self::NoEviction),
-            "allkeys-lru" => Some(Self::AllKeysLru),
-            "allkeys-lfu" => Some(Self::AllKeysLfu),
-            "allkeys-random" => Some(Self::AllKeysRandom),
-            "volatile-lru" => Some(Self::VolatileLru),
-            "volatile-lfu" => Some(Self::VolatileLfu),
-            "volatile-random" => Some(Self::VolatileRandom),
-            "volatile-ttl" => Some(Self::VolatileTtl),
-            _ => None,
-        }
-    }
-}
+/// Maxmemory eviction policy: the store's own type, which enforces it, so
+/// the parsed config and the keyspace cannot disagree on a policy.
+pub use kevy_store::EvictionPolicy;
 
 /// Log verbosity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_config::LogLevel;
+///
+/// assert_eq!(LogLevel::default(), LogLevel::Info);
+/// assert_eq!(LogLevel::parse("warn").map(|l| l.as_str()), Some("warning"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum LogLevel {
     /// Very chatty, useful when debugging a kevy internal bug.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str("[log]\nlevel = \"trace\"\n", None)?;
+    /// assert_eq!(cfg.log.level, LogLevel::Trace);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     Trace,
     /// Per-command / per-event detail; turn on locally to chase issues.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str("[log]\nlevel = \"debug\"\n", None)?;
+    /// assert_eq!(cfg.log.level, LogLevel::Debug);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     Debug,
     /// Default; startup banner, WARNs, errors, key lifecycle events.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str("[log]\nlevel = \"INFO\"\n", None)?;
+    /// assert_eq!(cfg.log.level, LogLevel::Info);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
+    #[default]
     Info,
     /// Only non-fatal warnings (e.g. unprotected bind) and errors.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str("[log]\nlevel = \"warn\"\n", None)?;
+    /// assert_eq!(cfg.log.level, LogLevel::Warn);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     Warn,
     /// Only fatal errors.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str("[log]\nlevel = \"error\"\n", None)?;
+    /// assert_eq!(cfg.log.level, LogLevel::Error);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     Error,
 }
 
 impl LogLevel {
     /// Canonical name. `Warn` renders as `warning` (Redis convention).
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// assert_eq!(LogLevel::Info.as_str(), "info");
+    /// assert_eq!(LogLevel::Warn.as_str(), "warning"); // Redis spelling
+    /// ```
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Trace => "trace",
@@ -120,6 +99,14 @@ impl LogLevel {
     }
     /// Inverse of [`Self::as_str`] — case-insensitive; accepts both
     /// `warn` and `warning` for the Warn level.
+    ///
+    /// ```
+    /// use kevy_config::LogLevel;
+    ///
+    /// assert_eq!(LogLevel::parse("Warning"), Some(LogLevel::Warn));
+    /// assert_eq!(LogLevel::parse("warn"), Some(LogLevel::Warn));
+    /// assert_eq!(LogLevel::parse("verbose"), None);
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "trace" => Some(Self::Trace),
@@ -133,27 +120,68 @@ impl LogLevel {
 }
 
 /// Where to write log output.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_config::LogOutput;
+///
+/// assert_eq!(LogOutput::default(), LogOutput::Stderr);
+/// let cfg = kevy_config::Config::from_toml_str("[log]\noutput = \"stdout\"\n", None)?;
+/// assert_eq!(cfg.log.output, LogOutput::Stdout);
+/// # Ok::<(), kevy_config::ConfigError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum LogOutput {
     /// Write to standard error (default).
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::LogOutput::parse("stderr"), kevy_config::LogOutput::Stderr);
+    /// ```
+    #[default]
     Stderr,
     /// Write to standard output.
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::LogOutput::parse("stdout"), kevy_config::LogOutput::Stdout);
+    /// ```
     Stdout,
     /// Append to the named file (path resolved relative to cwd at startup).
+    ///
+    /// ```
+    /// use kevy_config::LogOutput;
+    /// use std::path::PathBuf;
+    ///
+    /// assert_eq!(LogOutput::parse("kevy.log"), LogOutput::File(PathBuf::from("kevy.log")));
+    /// ```
     File(PathBuf),
 }
 
 impl LogOutput {
-    /// Canonical name. `File(p)` renders as the path string.
-    pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+    /// Canonical name. `File(p)` renders as the path string, which costs
+    /// an allocation — hence `to_`, not `as_`.
+    ///
+    /// ```
+    /// use kevy_config::LogOutput;
+    /// assert_eq!(LogOutput::Stderr.to_config_str(), "stderr");
+    /// assert_eq!(LogOutput::parse("/var/log/kevy.log").to_config_str(), "/var/log/kevy.log");
+    /// ```
+    pub fn to_config_str(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Stderr => "stderr".into(),
             Self::Stdout => "stdout".into(),
             Self::File(p) => p.display().to_string().into(),
         }
     }
-    /// Inverse of [`Self::as_str`]: `stderr` / `stdout` reserved; any
-    /// other string is treated as a file path.
+    /// Inverse of [`Self::to_config_str`]: `stderr` / `stdout` reserved;
+    /// any other string is treated as a file path.
+    ///
+    /// ```
+    /// use kevy_config::LogOutput;
+    ///
+    /// assert_eq!(LogOutput::parse("stdout"), LogOutput::Stdout);
+    /// let file = LogOutput::parse("/var/log/kevy.log");
+    /// assert_eq!(file.to_config_str(), "/var/log/kevy.log");
+    /// ```
     pub fn parse(s: &str) -> Self {
         match s {
             "stderr" => Self::Stderr,

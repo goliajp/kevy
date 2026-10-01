@@ -27,8 +27,10 @@ data_dir = "."
 aof          = true
 # AOF fsync policy:
 #   "always"   — fsync per write command (zero data-loss, ~50% throughput)
-#   "everysec" — background fsync every second (lose at most 1s; default)
-#   "no"       — let the OS pagecache decide (lose up to 30s on crash)
+#   "everysec" — background fsync about every second (power loss: ~1s plus
+#                one fsync; default)
+#   "no"       — never fsync; the OS decides when data reaches the disk
+#                (power loss: up to ~30s)
 appendfsync  = "everysec"
 # BGREWRITEAOF triggers when current AOF size ≥ this percent over the
 # last rewrite. 100 = rewrite when AOF doubles.
@@ -76,3 +78,23 @@ output   = "stderr"
 enabled   = false
 # First cluster port. 0 (default) = server port + 1.
 port_base = 0
+# Encrypt and authenticate the election links (off by default). Needs
+# [secure] private_key_file and every other node's key:
+# secure    = true
+# peer_keys = ["n1=<public key>", "n3=<public key>"]
+
+# [secure]
+# This node's private key, written by `kevy keygen <file>`. Only read when
+# a link sets secure = true or listen_port is set.
+# private_key_file = "/etc/kevy/node.key"
+# A second client port that only speaks kevy's encrypted protocol
+# (kevys:// URLs); the plaintext port stays as it is. 0 = off.
+# listen_port = 0
+# Client public keys allowed on that port; empty accepts any client,
+# still encrypted.
+# client_keys = []
+# With [cluster] enabled, shard i also gets an encrypted cluster port at
+# cluster_port_base + i (0 = listen_port + 1); announce_cluster_port_base
+# is the first port told to clients behind a proxy or NAT (0 = the same).
+# cluster_port_base = 0
+# announce_cluster_port_base = 0

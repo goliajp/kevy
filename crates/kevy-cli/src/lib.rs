@@ -5,6 +5,16 @@
 //! crate so they're reusable by integration tests / scripts / other tools.
 //! This file is the CLI-specific bit (how a redis-cli user expects bulk
 //! strings quoted, arrays numbered, nil shown as `(nil)`).
+//!
+//! ```
+//! use kevy_cli::{DEFAULT_HOST, format_reply};
+//! # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+//! let mut client = kevy_resp_client::RespClient::connect(DEFAULT_HOST, port)?;
+//! client.request_borrowed(&[b"RPUSH", b"langs", b"rust", b"zig"])?;
+//! let reply = client.request_borrowed(&[b"LRANGE", b"langs", b"0", b"-1"])?;
+//! assert_eq!(format_reply(&reply, 0), "1) \"rust\"\n2) \"zig\"");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -19,11 +29,119 @@ pub mod backup;
 /// [`migrate::run_export`] and [`migrate::run_import`].
 pub mod migrate;
 
+/// kevy-cli's own tools, the second half of `--help`.
+pub(crate) const TOOLS_HELP: &str = "\
+KEVY TOOLS: kevy-cli [connection options] --kevy <tool> [args]
+    (in the REPL: \\<tool> [args]; a bare word is always a server command)
+
+  catalog
+    tables [pattern]                            TABLE.LIST as rows
+    indexes [table|pattern]                     IDX.LIST, with each index's table
+    views [pattern]                             VIEW.LIST
+    describe[+] <table|index|view>              columns and access paths, an
+                                                index's fields, a view's tree
+                                                (+ runs its VERIFY)
+    show-create <name> [--as kevy|sql]          the declaration that recreates it
+
+  query
+    query [--all] [--max-rows n] <IDX.QUERY|VIEW.QUERY …>
+                                                rows, following the cursor
+    explain <index> <shape…> | view <name>      the path a query takes
+    explain --analyze <query…>                  run it; measured by this client
+    advise                                      paths refused queries asked for
+    sql run [--max-rows n] 'SELECT …'           one SELECT over declared paths,
+                                                sent as the IDX.QUERY for it
+    sql compile <file.sql> [--apply]            CREATE TABLE/INDEX/VIEW as
+                                                TABLE.DECLARE / VIEW.CREATE and
+                                                query cards (--apply declares)
+    sql plan <file.sql>                         what becomes of every query
+    sql eval '<SELECT …>' [--at <ts>]           fold a table-free SELECT
+
+  data, one level per pair
+    backup --data-dir <d> --to <f>              a data directory, offline
+    restore --from <f> --to <d>
+    export [--prefix p] <file>                  the keyspace as RESP, online
+    import [--resume] [--strict] <file>
+    dump --schema [--table t]… [--as kevy|sql]  declarations as a script
+    dump --all <dir>                            + each table's declared columns
+    load <dir>                                  rows, declarations, wait-ready,
+                                                doctor
+    export-csv (--prefix p --columns a,b | --table t) [--via \"IDX.QUERY …\"] <f|->
+    import-csv <f> (--prefix p --pk c | --table t | --key-column c)
+               (--header|--columns a,b)
+    copy-prefix [--rate n] <from> <to>
+    delete-prefix [--rate n] [--dry-run] <prefix>
+
+  checks
+    digest <prefix>                             hash a prefix
+    diff <other host:port|redis://…> <prefix>…  compare it with another server
+    inspect <prefix>                            sample keys: types and sizes
+    doctor [--warn-is-failure] [--indexes] [--views]
+                                                VERIFY every table (and bare
+                                                index, view); exit code answers
+    lint overlap --prefix <p:>                  a name under more than one owner?
+    lint columns <table>                        column pairs that agree on most rows
+    backfill-keys --from-index <k> --from-prefix <p:> --from-file <f>
+                                                the union of every source
+    shadow --old <cmd> --new <cmd>              old and new read paths, compared
+                                                in membership and order
+    wait-ready [--index n|--table t|--all] [--timeout s]
+    status                                      server, role, keys, catalogs
+
+  running
+    run [-f file]… [-c cmd]… [--force] [--echo] [--atomic]
+                                                exit 3 on an error reply, 2 on a
+                                                lost link
+    watch <seconds> [count] <command…>
+    feed follow [--prefix p]… [--shard n|all] [--from tail|gen:off]
+                [--checkpoint f] [--as json|resp] [--on-resync stop|jump]
+
+  Rows: --format table|tsv|csv|json, --no-header, --null s, --expanded,
+        --timing (a table on a terminal, tsv when piped).
+
+EXAMPLES:
+    kevy-cli                            # REPL against 127.0.0.1:6379
+    kevy-cli -p 6004                    # REPL against kevy default port
+    kevy-cli -h prod.internal ping      # one-shot PING
+    kevy-cli -p 6004 set greet hello    # one-shot SET, exits 0
+
+    # move a keyspace, and prove it arrived
+    kevy-cli -p 6379 --kevy export --prefix user: dump.resp
+    kevy-cli -p 6380 --kevy import --strict dump.resp
+    kevy-cli -p 6379 --kevy diff 127.0.0.1:6380 user:
+
+Docs: https://github.com/goliajp/kevy
+";
+
+/// `kevy-cli [options] [command]`: the redis-cli half of the binary.
+///
+/// # Examples
+///
+/// ```
+/// // Parsing refuses what redis-cli refuses, with redis-cli's exit code.
+/// assert_eq!(kevy_cli::rcli::run(&[b"-2".to_vec(), b"-3".to_vec()]), 1);
+/// ```
+pub mod rcli;
+
 /// Where a subcommand connects when the caller says nothing. Shared
 /// rather than repeated: two copies of a default is a drift waiting to
 /// be reported as a bug.
+///
+/// ```
+/// use kevy_cli::DEFAULT_HOST;
+/// // loopback, the same default redis-cli has
+/// let ip: std::net::IpAddr = DEFAULT_HOST.parse()?;
+/// assert!(ip.is_loopback());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 /// The port half of the same default.
+///
+/// ```
+/// use kevy_cli::{DEFAULT_HOST, DEFAULT_PORT};
+/// // what `kevy-cli` with no -h / -p connects to
+/// assert_eq!(format!("{DEFAULT_HOST}:{DEFAULT_PORT}"), "127.0.0.1:6379");
+/// ```
 pub const DEFAULT_PORT: u16 = 6379;
 
 /// Prefix bulk ops + diagnostics (`copy-prefix` /
@@ -32,31 +150,42 @@ pub mod bulk;
 
 /// `shadow` — run the old query and the new one side by side and
 /// report where they disagree, in membership AND in order.
+///
+/// ```
+/// use kevy_cli::shadow::{Shape, run};
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// client.request_borrowed(&[b"ZADD", b"feed", b"1", b"a", b"2", b"b", b"3", b"c"])?;
+/// client.request_borrowed(&[b"RPUSH", b"feed:new", b"a", b"c"])?;
+/// let argv = |s: &str| s.split(' ').map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+/// let r = run(&mut client, &argv("ZRANGE feed 0 -1"), &argv("LRANGE feed:new 0 -1"),
+///     Shape::Flat, Shape::Flat, 3)?;
+/// assert_eq!((r.samples, r.diverged), (3, 3));
+/// let (_, first) = r.first.as_ref().expect("the paths disagree");
+/// assert_eq!(first.missing, [b"b".to_vec()], "the writer that never updated feed:new");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub mod shadow;
 
-/// `doctor` — every table's VERIFY counters, turned into an exit code
-/// a cron can act on.
 pub mod backfill_keys;
 pub(crate) mod collections;
+/// `doctor` — every table's VERIFY counters, turned into an exit code
+/// a cron can act on.
 pub mod doctor;
+pub mod link;
 pub mod lint;
-
-/// Route the migration-playbook tools, which share a shape: they read
-/// and report, none of them moves data, and each exits with its own
-/// verdict. `None` when `args` names something else.
-pub fn route_tool(args: &[String]) -> Option<std::process::ExitCode> {
-    let rest = args.get(1..).unwrap_or(&[]);
-    match args.first().map(String::as_str)? {
-        "doctor" => Some(doctor::run_doctor_cli(rest)),
-        "shadow" => Some(shadow::run_shadow_cli(rest)),
-        "lint" => Some(lint::run_lint_cli(rest)),
-        "backfill-keys" => Some(backfill_keys::run_backfill_keys_cli(rest)),
-        _ => None,
-    }
-}
+mod tools;
 
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
+///
+/// ```
+/// use kevy_cli::{Reply, format_reply};
+/// assert_eq!(format_reply(&Reply::Nil, 0), "(nil)");
+/// assert_eq!(format_reply(&Reply::Int(3), 0), "(integer) 3");
+/// let nested = Reply::Array(vec![Reply::Bulk(b"a".to_vec()), Reply::Array(vec![Reply::Int(1)])]);
+/// assert_eq!(format_reply(&nested, 0), "1) \"a\"\n2)    1) (integer) 1");
+/// ```
 pub fn format_reply(reply: &Reply, indent: usize) -> String {
     match reply {
         Reply::Simple(s) => String::from_utf8_lossy(s).into_owned(),
@@ -104,6 +233,31 @@ pub fn format_reply(reply: &Reply, indent: usize) -> String {
         Reply::BigNumber(s) => format!("(bignum) {}", String::from_utf8_lossy(s)),
     }
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<backfill_keys::Source>();
+    send_sync::<backfill_keys::SourceReport>();
+    send_sync::<backfill_keys::Union>();
+    send_sync::<bulk::DeleteMode>();
+    send_sync::<bulk::RateLimiter>();
+    send_sync::<doctor::Health>();
+    send_sync::<doctor::OnWarning>();
+    send_sync::<doctor::Scope>();
+    send_sync::<doctor::TableHealth>();
+    send_sync::<lint::Coincidence>();
+    send_sync::<lint::Overlap>();
+    send_sync::<migrate::Export>();
+    send_sync::<migrate::ImportReport>();
+    send_sync::<migrate::ImportStart>();
+    send_sync::<migrate::OnErrorReply>();
+    send_sync::<shadow::Compared>();
+    send_sync::<shadow::Divergence>();
+    send_sync::<shadow::ShadowReport>();
+    send_sync::<shadow::Shape>();
+};
 
 #[cfg(test)]
 mod format_reply_tests {

@@ -107,10 +107,10 @@ absolute budget.
 ## The budget model
 
 One budget for the whole process, split evenly across shards. Each
-shard demotes toward a unified watermark:
+shard holds `used_memory` to a unified watermark:
 
 ```
-demote target = budget·19/20 − index_reserved_bytes − stub_bytes
+demote target = budget·19/20 − index_reserved_bytes − overhead − growth reserve
 ```
 
 - **Indexes and views are the premium fixed layer** — they are never
@@ -119,15 +119,73 @@ demote target = budget·19/20 − index_reserved_bytes − stub_bytes
   alone exceeds the budget, `IDX.CREATE` / `TABLE.DECLARE` **refuse**
   with a named error rather than admitting an index the budget cannot
   hold.
-- **Stub bytes are subtracted too**: the stubs of already-cold keys
-  are RAM the budget must carry, so the watermark tightens as the cold
-  tier grows. When the fixed floors exceed the 19/20 line the
-  effective target saturates to 0 — visible in `INFO`, not hidden.
+- **Cold keys are charged once, from the moment they are inserted.**
+  A key's slot in the keyspace table and its key bytes are part of
+  `used_memory` whether its value is hot or cold, so a demotion takes
+  the value's bytes off and leaves the key's; the target does not
+  subtract the stubs again. When the fixed floors exceed the 19/20 line
+  the effective target saturates to 0 — visible in `INFO`, not hidden.
+- **The overhead is measured, not assumed.** Receive rings, connection
+  buffers, allocator overhead, an index holding more than it reports:
+  the server reads what the allocator holds live (kevy-alloc's own
+  figures; on a build with the system allocator, glibc's `mallinfo2` or
+  macOS's zone statistics) once a second while RSS is past half the
+  budget, and whatever `used_memory` and the index floor do not cover
+  is taken off the target (`tier_overhead_bytes`).
+- **The keyspace table's next growth is set aside before it lands.**
+  The table doubles; within the last eighth before a doubling, the
+  bytes it will add are reserved, so demotion makes room first. A
+  mapped table hands its pages back as it empties into the new one, so
+  a growth costs what it adds and never both tables at once.
 - The 19/20 factor is the hysteresis band: demotion starts above it
   and stops below it, so the store does not oscillate on the line.
 - Spilling is **budgeted**: at most 32 records per demotion call, with
   continuation on the shard tick — a single `SET` never funds an
   unbounded synchronous spill storm.
+
+### What the budget bounds: the process
+
+The budget is a bound on **resident memory**, RSS ≤ budget × 1.05, not
+only on the store's own accounting. Two things stand between the two,
+and a separate thread in the server (never a shard) handles them:
+
+- **Freed memory the allocator keeps.** A demoted value leaves a hole
+  where it sat. The server's allocator, kevy-alloc, returns every 4 KiB
+  page that holds nothing live on the shard tick, and a compaction pass
+  copies values out of sparse spans so their pages empty too
+  ([alloc.md](alloc.md)). On a build with the system allocator
+  (`--no-default-features`), the blocks go back to glibc's free lists
+  and stay resident until the allocator is asked to return whole pages:
+  when RSS exceeds what is live by more than 1% of the budget, the
+  server trims the heap (`malloc_trim`), at most once a second — once
+  every five seconds after a trim that found next to nothing whole to
+  return.
+- **Live memory past the line.** If what the process holds live stays
+  past budget × 1.05 for two consecutive readings a second apart —
+  demotion has nothing left it can demote — every shard refuses growing
+  writes with `-OOM command not allowed when the process holds more
+  memory than the tiering budget allows` until it falls back under.
+  Reads, deletes and every other shrinking command keep working.
+
+On the system allocator, the reading and the trim lock each allocator
+arena while they walk it (milliseconds on a fragmented heap), which is
+why they run on
+their own thread and only when RSS calls for them; `heap_walk_us_total`
+and `heap_trim_us_total` say what they cost. The embedded store does
+not run this thread: an embedded process's RSS is its host's.
+
+Measured on a 16-core x86_64 Linux box on the system allocator (glibc 2.41), D1's rows (five
+fields, one of 900 bytes) at ten million rows on a 3 GiB budget, before
+any index: RSS at the end of the load went from 1.30 × budget to
+0.99 ×, and its peak during the load from 1.30 × to 1.10 ×. What remains
+is the keyspace table's last doubling: the eight shards' tables double
+within a second of each other, 0.6 GB at once on a 3 GiB budget, paid
+for by demoting rows whose blocks the allocator hands back only as
+their neighbours are freed too, over the following seconds. At ten
+million keys the table is 1.2 GB of the budget. The hash-workload
+gate (`bench/tierrssgate.sh`, 600,000 rows on 256 MiB) holds RSS at
+1.00–1.05 × budget through load, cold reads and overwrite where the
+previous release reached 1.33 ×.
 
 ### RAM per key, hot vs cold
 
@@ -175,9 +233,10 @@ from the capacity model:
   stub it leaves behind. Narrow records are the case to size by hand.
 - **Worked example (sized from the model, not measured into it)**:
   10 M rows × ~1 KiB (≈10 GB of data) with 2
-  secondary indexes + stored VALUES columns fits a **3 GB** budget:
-  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (68 + 68 +
-  ~30 VALUES bytes) ≈ 1.7 GB ≈ 2.8 GB ≤ 3 GB. At 4 KiB values the
+  secondary indexes + stored VALUES columns fits a **4 GB** budget:
+  stub floor 10 M × ~108 B ≈ 1.1 GB, index floor 10 M × (2 × 94–105
+  per index at a ~12-byte key + ~30 VALUES bytes) ≈ 2.2–2.4 GB
+  ≈ 3.3–3.5 GB ≤ 4 GB. At 4 KiB values the
   ratio gate is ≥ 10× data:RAM (5 M × 4 KiB = 20 GB on a 2 GB
   budget; stub floor ≈ 540 MB). Per-key fixed costs dominate narrow
   rows: size a deployment from the formulas above — the stub and
@@ -252,10 +311,10 @@ server and embedded listener.
 |---|---|
 | `tiering_enabled` | `1` (the section is absent when off) |
 | `tier_budget_bytes` | the resolved budget (auto/percent → bytes, live) |
-| `tier_effective_target` | `budget·19/20 − reserved − stubs`, saturating at 0 — 0 means the fixed floors alone exceed the watermark |
+| `tier_effective_target` | `budget·19/20 − reserved − overhead − growth reserve`, saturating at 0 — 0 means the fixed floors alone exceed the watermark |
 | `cold_keys` | keys currently demoted |
 | `cold_bytes` | original (pre-demotion) bytes of those values |
-| `stub_bytes` | RAM the stubs of cold keys occupy |
+| `stub_bytes` | RAM the stubs of cold keys occupy — an estimate, already inside `used_memory` |
 | `index_reserved_bytes` | the index/view floor subtracted from the watermark |
 | `vlog_size_bytes` | value log size on disk |
 | `vlog_live_bytes` | bytes still referenced (the rest is compactable) |
@@ -265,10 +324,27 @@ server and embedded listener.
 | `promotions_total` | values paged back in since boot |
 | `peek_preads_total` | no-promote cold reads (one per cold **row**) |
 | `batch_submissions_total` | batched cold-read submissions (hydration pages) |
+| `vlog_raw_bytes` | value bytes before compression, over the vlog files on disk |
+| `vlog_payload_bytes` | compressed payload bytes on disk |
+| `vlog_frame_header_bytes` | per-record frame headers on disk (tag + original length) |
+| `vlog_dict_bytes` | compression dictionaries held in memory, one per vlog file |
+| `tier_rss_line_bytes` | budget × 1.05, the RSS the server holds itself under |
+| `tier_refusing_writes` | `1` while growing writes are refused for live memory past that line |
+| `tier_live_bytes` | what the allocator held live at the last reading, plus the keyspace tables mapped outside it |
+| `tier_overhead_bytes` | the part of that neither `used_memory` nor the index floor accounts for, taken off the target |
+| `heap_walks_total` / `heap_walk_us_total` | allocator readings, and the time they took |
+| `heap_trims_total` / `heap_trimmed_bytes` / `heap_trim_us_total` | heap trims, the RSS they gave back, and the time they took |
 
 `vlog_size_bytes / cold_bytes` is the space-amplification ratio the
 acceptance gate clamps at ≤ 2.0×; `peek_preads_total` is how you
 verify a hydration page paid one read per row, not per field.
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` is the
+compression ratio over what the vlog holds, dead records included. What
+compression leaves is those two terms plus the dictionaries; the payload is
+the data's own entropy plus whatever repetition the encoder did not find,
+and the two cannot be told apart from inside the log. The rest of
+`vlog_size_bytes` is record framing: 12 bytes and the key per record.
 
 ## Performance expectations
 

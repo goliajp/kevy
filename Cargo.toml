@@ -42,6 +42,8 @@ members = [
     "crates/kevy-tmpdir",
     "crates/kevy-testnet",
     "crates/kevy-time",
+    "crates/kevy-crypto",
+    "crates/kevy-noise",
     "crates/kevy-scalar",
     "crates/kevy-sys",
     "crates/kevy-seg",
@@ -51,6 +53,7 @@ members = [
     "crates/kevy-resp",
     "crates/kevy-ring",
     "crates/kevy-store",
+    "crates/kevy-verbs",
     "crates/kevy-compress",
     "crates/kevy-vlog",
     "crates/kevy-rt",
@@ -100,7 +103,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "6.4.0"
+version = "7.0.0"
 edition = "2024"
 rust-version = "1.97.0"
 authors = ["GOLIA K.K."]
@@ -125,9 +128,17 @@ warnings = "deny"
 # Four crates were declaring it individually; this is the workspace
 # saying it once.
 unsafe_op_in_unsafe_fn = "deny"
+# Every public item in library code says what it is. Test code is exempt by
+# construction: rustc does not report missing_docs in a test harness.
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+# Library code does not unwrap or panic without saying why at the site
+# (an `#[allow]` with its reason). Tests are exempt through clippy.toml: a
+# test that unwraps is stating a precondition rather than ducking one.
+unwrap_used = "deny"
+panic = "deny"
 # Every `unsafe` block in this workspace states the premise it rests on. The
 # lint is in clippy's `restriction` group, so it is off by default and
 # `clippy::all` being green says nothing about it — which is exactly how 378
@@ -154,6 +165,12 @@ cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_possible_wrap = "allow"
 
+# the vector index's recall test runs 2000 inserts and a brute-force scan
+# through f32 distance loops; unoptimized, that one test is a tenth of the
+# workspace test run. debug-assertions and overflow-checks stay on
+[profile.dev.package.kevy-vector]
+opt-level = 2
+
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -172,6 +189,18 @@ strip = true
 inherits = "release"
 strip = false
 debug = 1
+
+# The release-profile test run. What it has to prove is that the suite
+# holds with optimizations on and debug assertions and overflow checks off,
+# which is where release-only defects come from; those three settings are
+# inherited. Fat LTO over one codegen unit is not part of that question and,
+# applied to every test executable separately, it was most of the run. The
+# shipped fat-LTO server is exercised by the gates that start
+# target/release/kevy.
+[profile.release-tests]
+inherits = "release"
+lto = false
+codegen-units = 16
 
 # Size-optimized profile: opt-level "z" + same hardening. Used to measure
 # the size/perf trade-off of opt-level "z" vs the default release profile.

@@ -2,6 +2,8 @@
 //! echoes back a canned RESP reply for each request, drive it with RespClient,
 //! assert the parsed reply matches.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 use std::io::{Read, Write};
@@ -13,7 +15,7 @@ use std::time::Duration;
 /// Start a one-shot mock RESP server that, after accepting one connection,
 /// reads `expect_in_at_least` bytes of request and responds with `reply_bytes`,
 /// then closes. Returns the bound port.
-fn mock_server(expect_in_at_least: usize, reply_bytes: &'static [u8]) -> u16 {
+fn mock_server(reply_bytes: &'static [u8]) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (started_tx, started_rx) = mpsc::channel();
@@ -21,15 +23,8 @@ fn mock_server(expect_in_at_least: usize, reply_bytes: &'static [u8]) -> u16 {
         started_tx.send(()).unwrap();
         let (mut sock, _) = listener.accept().unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        // Read until we've seen at least the expected request length (chunked
-        // reads are fine; we just need to know "client sent request").
-        let mut buf = vec![0u8; 1024];
-        let mut total = 0;
-        while total < expect_in_at_least {
-            match sock.read(&mut buf) {
-                Ok(n) if n > 0 => total += n,
-                _ => break, // Ok(0) eof or Err — same handling
-            }
+        if !kevy_testnet::read_request(&mut sock, &mut Vec::new()) {
+            return;
         }
         let _ = sock.write_all(reply_bytes);
         // Linger so the client can read fully before close.
@@ -42,7 +37,7 @@ fn mock_server(expect_in_at_least: usize, reply_bytes: &'static [u8]) -> u16 {
 #[test]
 fn ping_pong_roundtrip() {
     // PING request bytes = *1\r\n$4\r\nPING\r\n (14 bytes)
-    let port = mock_server(14, b"+PONG\r\n");
+    let port = mock_server(b"+PONG\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"PING".to_vec()]).unwrap();
     match reply {
@@ -54,7 +49,7 @@ fn ping_pong_roundtrip() {
 #[test]
 fn get_returns_bulk_string() {
     // GET foo (multibulk; ≥ 17 bytes)
-    let port = mock_server(17, b"$5\r\nhello\r\n");
+    let port = mock_server(b"$5\r\nhello\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"GET".to_vec(), b"foo".to_vec()]).unwrap();
     match reply {
@@ -65,7 +60,7 @@ fn get_returns_bulk_string() {
 
 #[test]
 fn missing_key_returns_nil() {
-    let port = mock_server(17, b"$-1\r\n");
+    let port = mock_server(b"$-1\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"GET".to_vec(), b"foo".to_vec()]).unwrap();
     assert!(matches!(reply, Reply::Nil));
@@ -73,7 +68,7 @@ fn missing_key_returns_nil() {
 
 #[test]
 fn integer_reply() {
-    let port = mock_server(17, b":42\r\n");
+    let port = mock_server(b":42\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"INCR".to_vec(), b"x".to_vec()]).unwrap();
     assert!(matches!(reply, Reply::Int(42)));
@@ -81,7 +76,7 @@ fn integer_reply() {
 
 #[test]
 fn array_reply() {
-    let port = mock_server(14, b"*2\r\n$1\r\na\r\n$1\r\nb\r\n");
+    let port = mock_server(b"*2\r\n$1\r\na\r\n$1\r\nb\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"KEYS".to_vec()]).unwrap();
     match reply {
@@ -96,7 +91,7 @@ fn array_reply() {
 
 #[test]
 fn error_reply() {
-    let port = mock_server(14, b"-WRONGTYPE oops\r\n");
+    let port = mock_server(b"-WRONGTYPE oops\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let reply = c.request(&[b"GET".to_vec()]).unwrap();
     match reply {
@@ -110,7 +105,7 @@ fn malformed_reply_yields_invalid_data_error() {
     // Server sends bytes that can NEVER be a valid RESP frame (unknown
     // type tag '!') — RespClient must surface ErrorKind::InvalidData,
     // not retry forever or yield UnexpectedEof.
-    let port = mock_server(14, b"!garbage\r\n");
+    let port = mock_server(b"!garbage\r\n");
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let err = c.request(&[b"PING".to_vec()]).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -134,4 +129,13 @@ fn server_close_mid_reply_yields_io_error() {
     let mut c = RespClient::connect("127.0.0.1", port).unwrap();
     let err = c.request(&[b"PING".to_vec()]).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
+#[test]
+fn connecting_where_nothing_listens_is_refused() {
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let Err(err) = RespClient::connect("127.0.0.1", port) else {
+        panic!("the listener was dropped, so nothing accepts")
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
 }

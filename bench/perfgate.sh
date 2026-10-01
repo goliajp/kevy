@@ -1,570 +1,64 @@
-#!/bin/bash
-# perfgate — the throughput regression gate. No feature finishes and no
-# release ships while this is red.
+#!/usr/bin/env bash
+# perfgate — the perf tool: two kevy builds on one box, measured in one run.
 #
-#   bash bench/perfgate.sh <KEVY_BIN>                    # gate against baseline
-#   bash bench/perfgate.sh <KEVY_BIN> --update-baseline  # record a new baseline
+#   bash bench/perfgate.sh compare A B        # per-angle ratio table, B / A
+#   bash bench/perfgate.sh gate [CANDIDATE]   # CANDIDATE (default HEAD) against the
+#                                             # reference, pass / fail / noisy
+#   bash bench/perfgate.sh callgrind A B      # exact instructions per op, per function
 #
-# Runs on the dedicated bench box (lx64-class: io_uring, >=16 hw threads,
-# cores 0-7 for the server / 8-15 for the load generators). Angles and
-# discipline encode every measurement trap the 2026-06-10 campaign hit:
+# A build is a path to a kevy binary, or a git rev built on demand with the
+# release-perf profile and cached under bench/.perfgate-ref/: v6.4.0, HEAD,
+# a branch, HEAD+kevy-alloc (cargo features after the +), merge-base (where
+# HEAD left origin/develop) or last-release. The gate's reference is
+# `reference` in bench/perfgate.json (merge-base) unless --ref names one.
+# A_ENV / B_ENV add environment to one side, so one binary can be compared
+# with itself: A_ENV=KEVY_IO_URING=0 B_ENV=KEVY_IO_URING=1 compares reactors.
 #
-#   * pinned-hashtag angle, ONE TEST PER INVOCATION, long N — plain-mode
-#     redis-benchmark pinned per shard via {tag}. `--cluster` client mode is
-#     client-bound (~6.6M) and skews keys across nodes when -t lists several
-#     tests; short N under-amortises ramp by ~30%. Never measure with those.
-#   * legacy 8sh fixed-key angle — historical comparability (REPORT.md).
-#     Since v4 T4 the same topology also gates the five arena cells
-#     (INCR/SADD/HSET/LPUSH/ZADD) so the observation items ratchet
-#     automatically instead of living as per-release ledger footnotes.
-#   * preflight refuses to run on a dirty box (leftover kevy/redis-benchmark
-#     processes, or load >= 1.0): a polluted run costs hours of false
-#     debugging, a refused run costs one retry.
-#   * 3 fresh server INSTANCES per angle, median across instances, compared
-#     against bench/PERF-BASELINE.json with per-metric tolerance.
-#   * the --threads angles do NOT read redis-benchmark's reported rps.
-#     Under --threads, the benchmark's only exit is its own 250ms
-#     showThroughput timer (redis-benchmark.c:52 SHOW_THROUGHPUT_INTERVAL,
-#     :1653 aeStop; without --threads it stops in clientDone at :425), so
-#     totlatency is rounded UP to a multiple of 250ms and the reported
-#     throughput is quantized to N/(k*250ms) — 7% buckets at this angle —
-#     and systematically understated. Every "instance mode" and "attractor"
-#     this gate ever chased was a bucket of that grid; the 2026-06-11 note
-#     calling instance spread "the dominant noise axis" was reading the
-#     ruler, not the box. These angles now take throughput from the server's
-#     own command counter over a wall window timed here, which has no grid.
+# Options: --rounds N (5), --angles "pinned_get pinned_set ..." (all),
+# --windows N and --secs S per side (2 x 3 s), --ops N for callgrind (200000).
 #
-# Exit codes: 0 = PASS (or baseline updated), 1 = FAIL/regression, 2 = refused
-# (dirty box / missing tools / bad usage).
-set -u
-
-BIN=${1:?usage: perfgate.sh <KEVY_BIN> [--update-baseline]}
-MODE=${2:-gate}
+# What it measures. Each angle is a workload shape (perfgate_angles.py). In
+# every round, each side gets a fresh server pinned to the box's server cpus,
+# its keys, its load on the load cpus, and windows in which the tool reads
+#   ops/s        the server's own command counter over a timed window
+#   instr/op     instructions per command, user and kernel (perf stat -p)
+#   cyc/op       cycles per command
+#   sys/op       syscalls per command
+#   util         server cpu time / (window x server cpus)
+#   fgn%         cpu the rest of the box used during the window
+# The side that goes first alternates by round and angle. Every metric is
+# reported as the median of its per-round ratios B / A with the half-range
+# of those ratios next to it, and the medians per side below that.
+#
+# Verdicts (the limits in bench/perfgate.json, on B / A): throughput
+# at least 0.92, instructions per op at most 1.03, cycles per op at most
+# 1.05, hybrid p95 at most 1.20. A metric passes when every round is inside
+# its limit and fails when every round is beyond it; rounds on both sides of
+# the limit are judged on their median if their spread is inside the noise
+# bound, and are NOISY otherwise. Noisy means run it again. `gate` exits
+# 0 pass, 1 fail, 3 noisy, 2 when it could not measure; `compare` prints the
+# same verdicts and exits 0.
+#
+# The only checks before measuring: the box must be at least 95% idle
+# (PERFGATE_IDLE_MIN=0 measures a busy box anyway, for a correctness run whose
+# numbers nobody quotes), and
+# the machine's bench lock is held for the whole run (builds happen before
+# it is taken). After the run it names the other processes that used CPU.
+# Topology per box is in bench/perfgate.json, picked by hostname or
+# PERFGATE_BOX. Counters: perf stat as root; otherwise the bench account's
+# /usr/local/sbin/kevy-perfstat helper through sudo.
+#
+# callgrind runs one shard under valgrind for a fixed request count per
+# angle (get set incr sadd hset lpush zadd; default get set) and prints
+# instructions per op for the whole server and per function, A against B.
+# It does not depend on the box's load, so it is the first answer to "did
+# instructions regress"; it cannot see cycles or the kernel.
+set -eu
+[ $# -gt 0 ] || { sed -n '2,17p' "$0"; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd)
-BASELINE="$HERE/PERF-BASELINE.json"
-N_PINNED=${N_PINNED:-30000000}   # per process x8 — long N, ramp amortised
-# The --threads angles measure a wall window, not a request count, so N only
-# has to outlast RAMP + WINDOW at the slowest angle. 60M at ~3M ops/s is 20s
-# of headroom over a 4s measurement.
-N_LEGACY=${N_LEGACY:-60000000}
-# ZINTERSTORE merges two 1000-member zsets per command: this angle runs at
-# ~3k ops/s, not ~8M. 200k requests is ~70s of load, ample for a 4s window.
-N_ZALG=${N_ZALG:-200000}
-RAMP=${RAMP:-1.0}                # skip the connect/ramp transient
-WINDOW=${WINDOW:-3.0}            # the measured steady-state window
-INSTANCES=${INSTANCES:-3}
-# Optional angle filter (space-separated metric names): measure ONLY
-# these angles — the bisect driver's handle. Unmeasured metrics take
-# the skip-with-notice path; empty = everything.
-ANGLES=${PERFGATE_ANGLES:-}
-# Hashtags pinning shard 0..7 under the contiguous slot split (CRC16).
-TAGS=(t3 t43 t2 t42 t1 t41 t0 t40)
-
-refuse() { echo "perfgate: REFUSED — $1" >&2; exit 2; }
-fail()   { echo "perfgate: FAIL — $1" >&2; exit 1; }
-
-# Every gated metric, in report order. The single source of truth for
-# the measure loop, --update-baseline, and the gate comparison — three
-# hand-copied lists drifted once already.
-#
-# The tiered_hotset_* metrics (capacity arc A2: hot-set throughput with
-# tiering ON, working set fully resident — must match untiered within
-# tolerance) follow the same skip-with-notice discipline until lx64
-# records them against a tiered instance.
-# The table_* metrics (capacity arc T7: C4 point lookup / C5
-# filter+sort page / C7 write tax) have no measurement body yet — their
-# baselines get recorded on lx64 (kevybench discipline) when the T9
-# envelope lands the workload; until then the gate SKIPS them with a
-# notice (never invents a number, never crashes on the hole).
-METRICS="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
-legacy_8sh_get legacy_8sh_set \
-legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd \
-zalg_zinterstore \
-table_point_get table_filter_sort_page table_write_tax \
-tiered_hotset_get tiered_hotset_set"
-
-# ---------- preflight: never measure on a dirty box ----------
-# A perf comparison of two userland binaries never legitimately needs the
-# ability to SIGTERM init. Running this as root is what turned a foot-gun
-# into three site outages (
-# hard rule 4) — the privilege is the difference between "killed my own
-# processes" and "killed sshd". No override flag: an escape hatch here would
-# be used, and then it would be the default again.
-[ "$(id -u)" -ne 0 ] || refuse "refusing to run as root — use an unprivileged \
-bench account (lx64: kevybench, checkout ~/kevy)"
-# Per-run scratch. A fixed /tmp/perfgate_* path is unwritable the moment a
-# different account ran the gate before you — which is exactly what the
-# root-to-kevybench migration produced.
-RUNDIR=$(mktemp -d "${TMPDIR:-/tmp}/perfgate-XXXXXX")
-# Kept on a failed/refused run — the server log in there is the only
-# evidence of why it did not come up.
-on_exit() {
-  local rc=$?
-  if [ $rc -eq 0 ]; then rm -rf "$RUNDIR"
-  else echo "perfgate: scratch kept at $RUNDIR" >&2; fi
-}
-trap on_exit EXIT
-command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
-command -v redis-cli >/dev/null || refuse "redis-cli not installed (the --threads angles read the server's counter through it)"
-[ -x "$BIN" ] || refuse "$BIN is not executable"
-# The sweep pattern "kevy" also matches the bench ACCOUNT NAME inside
-# a driver's `sudo -u kevybench …` cmdline — a wrapper script that
-# never touched a server would be refused as a leftover. Exclude the
-# sudo wrapper line itself; real leftover servers/benchmarks are
-# direct processes, not sudo shells.
-# …and exclude this gate's own ANCESTRY. A runner that invokes the gate
-# (tools/suite.py, a wrapper shell, nohup) has "kevy" in its cmdline by
-# way of the repo path, and the name-based excludes above cannot know
-# every runner's name — the suite's first box run was refused because
-# the sweep matched the suite itself. Real leftovers are never our own
-# ancestors.
-ANCESTORS=""
-APID=$$
-while [ "$APID" -gt 1 ] 2>/dev/null; do
-  ANCESTORS="$ANCESTORS|^$APID "
-  APID=$(awk '{print $4}' "/proc/$APID/stat" 2>/dev/null || echo 1)
-done
-LEFTOVER=$(pgrep -af "kevy|redis-benchmark" | grep -Ev "${ANCESTORS#|}" \
-  | grep -v perfgate | grep -v claude | grep -v kevypgcmp | grep -v suite.py \
-  | grep -v "sudo -u kevybench" || true)
-[ -n "$LEFTOVER" ] && refuse "leftover bench processes (sweep first):
-$LEFTOVER"
-# Instantaneous idle%, not 1-min loadavg: loadavg measures the past, so a
-# back-to-back run (baseline then gate) would refuse on its own wake. Two
-# /proc/stat samples 1s apart = what the box is doing RIGHT NOW.
-read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
-IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
-[ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
-
-server_stop() {
-  # HARD GUARD: an empty $BIN makes "^$BIN" == "^", which pkill -f matches
-  # against EVERY process cmdline — as root that SIGTERMs sshd/systemd/the whole
-  # box. This has happened: `refuse`/`exit` inside the $(ref_binary …) command
-  # substitution only exits the subshell, so a failed reference build left BIN
-  # empty and `pkill -f "^"` took lx64 offline (2026-07 outages). Never pkill on
-  # an empty pattern.
-  # Bounded by construction first: the PID we ourselves spawned. The pkill
-  # below is only the leftover sweep (a server from a previous angle/binary
-  # that outlived its measure_all).
-  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null
-  [ -n "$BIN" ] || { echo "perfgate: server_stop refusing pkill with empty BIN" >&2; return 0; }
-  pkill -f "^$BIN" 2>/dev/null
-  while pgrep -f "^$BIN" >/dev/null; do sleep 0.1; done
-}
-server_start() { # $1 = extra flags
-  server_stop
-  # Fresh data dir per instance, never the invoker's cwd: a server
-  # started with dir=. in the repo root loads the PREVIOUS instance's
-  # snapshot, pays a re-shard migration, and litters dump/premigration
-  # files there forever (2336 of them by 2026-08-02). Instances are
-  # meant to be fresh — the angles prepopulate everything they measure.
-  rm -rf "$RUNDIR/data" && mkdir -p "$RUNDIR/data"
-  env KEVY_IO_URING=1 KEVY_BIND=127.0.0.1 taskset -c 0-7 \
-    "$BIN" --threads 8 --port 7001 $1 --no-aof --dir "$RUNDIR/data" >"$RUNDIR/srv.log" 2>&1 &
-  SRV=$!
-  for _ in $(seq 1 100); do
-    timeout 2 redis-benchmark -p 7001 -t ping -n 1 -c 1 -q >/dev/null 2>&1 && return 0
-    sleep 0.1
-  done
-  refuse "server did not come up (see $RUNDIR/srv.log)"
-}
-
-sum_rps() { # files...
-  cat "$@" | tr "\r" "\n" | grep -oE "[0-9.]+ requests per second" \
-    | awk '{s+=$1} END {printf "%.0f", s}'
-}
-
-run_pinned() { # $1 = get|set, $2 = cluster|compat -> echoes total rps
-  local t=$1 mode=$2 pids=() outs=() port i tag out
-  for i in $(seq 0 7); do
-    port=7001; [ "$mode" = cluster ] && port=$((7002 + i))
-    tag=${TAGS[$i]}
-    out=$RUNDIR/${mode}_${t}_$i.out; outs+=("$out")
-    if [ "$t" = set ]; then
-      taskset -c 8-15 redis-benchmark -p $port -n "$N_PINNED" -r 1000000 \
-        -c 6 -P 256 -q SET "{$tag}:__rand_int__" v >"$out" 2>&1 &
-    else
-      taskset -c 8-15 redis-benchmark -p $port -n "$N_PINNED" -r 1000000 \
-        -c 6 -P 256 -q GET "{$tag}:__rand_int__" >"$out" 2>&1 &
-    fi
-    pids+=($!)
-  done
-  wait "${pids[@]}"
-  sum_rps "${outs[@]}"
-}
-
-# The server's own view of how much work it did. `--threads` makes
-# redis-benchmark's reported rps a quantized, understated number (see the
-# header); the command counter does not lie about that. Two INFO calls per
-# measurement are lost in the noise of tens of millions of ops.
-#
-# The timeout is not decoration. A shard saturated by a heavy workload can
-# leave a fresh connection's INFO queued for a very long time, and an
-# unbounded read here parks the whole gate behind it — which is exactly how
-# the first run of this harness hung for an hour.
-srv_cmds() {
-  # Up to 3 probes: a heavy pipelined angle (zalg's ZINTERSTORE at
-  # -P 16) can starve a fresh INFO connection past one 5s timeout —
-  # observed twice (2026-08-02), both times only on that angle. The
-  # counter window stays sound under retries because the caller takes
-  # its timestamp AFTER the read returns; a retried probe is printed
-  # so the starvation stays visible instead of vanishing into a pass.
-  local n try
-  for try in 1 2 3; do
-    n=$(timeout 5 redis-cli -p 7001 INFO stats 2>/dev/null | tr -d '\r' \
-      | awk -F: '/^total_commands_processed:/ {print $2}')
-    if [ -n "$n" ]; then
-      [ "$try" -gt 1 ] \
-        && echo "perfgate: INFO answered on probe $try — heavy-angle starvation" >&2
-      echo "$n"
-      return 0
-    fi
-  done
-  return 0
-}
-
-# Drive the load, then read the server counter across a window we time
-# ourselves. The load generator is left running for the whole window and
-# killed afterwards, so N only has to be large enough to outlast RAMP +
-# WINDOW at THIS angle's rate — it is not the unit of measurement any more.
-# The generator is killed before the samples are judged, so a failed read
-# cannot leave a 60M-request benchmark running behind the gate.
-steady_rps() { # $1... = the redis-benchmark argv after the pinning
-  local bpid c0 t0 c1 t1
-  taskset -c 8-15 "$@" >/dev/null 2>&1 &
-  bpid=$!
-  sleep "$RAMP"
-  c0=$(srv_cmds); t0=$(date +%s%N)
-  sleep "$WINDOW"
-  c1=$(srv_cmds); t1=$(date +%s%N)
-  kill "$bpid" 2>/dev/null
-  wait "$bpid" 2>/dev/null
-  # This runs inside a command substitution, so `refuse` here would exit only
-  # the subshell and the caller would carry on with an empty sample. Emit 0
-  # instead and let the measure loop refuse on it — an unmeasured angle must
-  # stop the gate, never pass quietly.
-  if [ -z "$c0" ] || [ -z "$c1" ]; then
-    echo "perfgate: INFO stats unreadable during '$*' — is a shard wedged?" >&2
-    printf "0"
-    return
-  fi
-  awk -v c0="$c0" -v c1="$c1" -v t0="$t0" -v t1="$t1" \
-    'BEGIN {printf "%.0f", (c1 - c0) / ((t1 - t0) / 1e9)}'
-}
-
-run_legacy() { # $1 = get|set|incr|... -> steady-state ops/s (fixed key, REUSEPORT)
-  steady_rps redis-benchmark -h 127.0.0.1 -p 7001 -t "$1" \
-    -n "$N_LEGACY" -c 50 -P 256 --threads 8 -q
-}
-
-# v2.2 zset-algebra hot line: pipelined ZINTERSTORE over two warmed
-# zsets on the plain-mode server (arbitrary-command form; reuses the
-# legacy topology). Sources warmed once per instance by the caller.
-#
-# N_ZALG is its own number and much smaller than N_LEGACY on purpose: each
-# ZINTERSTORE merges two 1000-member zsets, so this angle runs at ~3k ops/s,
-# not ~8M. 200k requests is ~70s of load — ample cover for a 4s window. Handing
-# it N_LEGACY (60M) would queue nearly six hours of work at the server and
-# starve everything else on the shard.
-run_zalg() {
-  steady_rps redis-benchmark -h 127.0.0.1 -p 7001 \
-    -n "$N_ZALG" -c 50 -P 16 --threads 8 -q \
-    ZINTERSTORE "zalg:dst:__rand_int__" 2 zalg:a zalg:b
-}
-
-median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
-
-# ---------- the reference binary ----------
-# The gate is RELATIVE: the candidate is compared against a binary built from
-# the baseline's own commit, measured on this box in this session. Comparing
-# today's number against a number recorded weeks ago cannot work here — the
-# box drifts (2026-07-12: the SAME code measured 24.3M when the baseline was
-# taken and 21.0M three weeks later, a 13% slide that dwarfs the 8% gate).
-# Interleaving the two binaries makes that drift cancel instead of deciding
-# the verdict.
-ref_binary() {
-  # Two statements, not one: `local` expands ALL its arguments before it
-  # assigns any of them, so an `out=...${sha}` sharing the line with
-  # `sha=$1` reads sha BEFORE it exists — under `set -u` that aborts the
-  # gate ("sha: unbound variable"), which is exactly what it did.
-  local sha=$1
-  local cache="$HERE/.perfgate-ref" out="$HERE/.perfgate-ref/kevy-${sha:0:12}"
-  [ -x "$out" ] && { printf "%s" "$out"; return 0; }
-  mkdir -p "$cache"
-  local wt="$cache/wt-${sha:0:12}"
-  git -C "$HERE/.." worktree add -f --detach "$wt" "$sha" >/dev/null 2>&1 \
-    || refuse "cannot check out the baseline commit $sha (fetch it first?)"
-  ( cd "$wt" && cargo build -q --profile release-perf -p kevy --bin kevy ) \
-    || { git -C "$HERE/.." worktree remove --force "$wt" >/dev/null 2>&1; refuse "reference build failed at $sha"; }
-  cp "$wt/target/release-perf/kevy" "$out"
-  git -C "$HERE/.." worktree remove --force "$wt" >/dev/null 2>&1
-  printf "%s" "$out"
-}
-
-# ---------- measure ----------
-# One instance pass = boot a fresh server, warm it, measure every angle once.
-# Each instance measures BOTH binaries, and the order flips every instance:
-# the box slows monotonically across a long run, so a fixed "reference first,
-# candidate second" order systematically favours whichever went first. That
-# single confound is what manufactured the "disjoint distributions" of the
-# v4 SET regression that never existed.
-declare -A SAMPLES
-sample() { # $1 = cand|ref, $2 = metric, $3 = value
-  SAMPLES["$1:$2"]="${SAMPLES["$1:$2"]:-}$3 "
-}
-
-# Warm each shard's keyspace (1M random keys per tag at P64).
-# NB: wait MUST name the pids — a bare `wait` also waits on the $SRV
-# background job, which never exits (this exact hang has bitten twice).
-warm_cluster() {
-  local i
-  WPIDS=()
-  for i in $(seq 0 7); do
-    taskset -c 8-15 redis-benchmark -p $((7002 + i)) -n 1000000 -r 1000000 \
-      -P 64 -q SET "{${TAGS[$i]}}:__rand_int__" v >/dev/null 2>&1 &
-    WPIDS+=($!)
-  done; wait "${WPIDS[@]}"
-}
-
-warm_legacy() {
-  taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
-}
-
-# zalgebra sources: two 1k-member zsets for the pipelined ZINTERSTORE.
-warm_zalg() {
-  local i j args
-  for i in $(seq 0 9); do
-    args=""
-    for j in $(seq 0 99); do args="$args $((i*100+j)) m$((i*100+j))"; done
-    redis-cli -p 7001 ZADD zalg:a $args >/dev/null 2>&1
-    redis-cli -p 7001 ZADD zalg:b $args >/dev/null 2>&1
-  done
-}
-
-# One angle's measurement body, against the server the caller booted.
-angle_run() { # $1 = metric name -> ops/s on stdout
-  case $1 in
-    pinned_cluster_get) run_pinned get cluster ;;
-    pinned_cluster_set) run_pinned set cluster ;;
-    pinned_compat_get)  run_pinned get compat ;;
-    pinned_compat_set)  run_pinned set compat ;;
-    legacy_8sh_get)     run_legacy get ;;
-    legacy_8sh_set)     run_legacy set ;;
-    legacy_8sh_incr)    run_legacy incr ;;
-    legacy_8sh_sadd)    run_legacy sadd ;;
-    legacy_8sh_hset)    run_legacy hset ;;
-    legacy_8sh_lpush)   run_legacy lpush ;;
-    legacy_8sh_zadd)    run_legacy zadd ;;
-    zalg_zinterstore)   run_zalg ;;
-    *) printf "0" ;;
-  esac
-}
-
-# Whether the filter admits this metric (no filter = everything).
-want_angle() { [ -z "$ANGLES" ] || [[ " $ANGLES " == *" $1 "* ]]; }
-group_wanted() { local m; for m in $2; do want_angle "$m" && return 0; done; return 1; }
-
-measure_all() { # $1 = cand|ref, $2 = binary
-  local who=$1 m
-  BIN=$2
-  local pinned="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set"
-  local legacy="legacy_8sh_get legacy_8sh_set legacy_8sh_incr legacy_8sh_sadd \
-legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd"
-  if group_wanted x "$pinned"; then
-    server_start "--cluster"
-    warm_cluster
-    for m in $pinned; do
-      want_angle "$m" && sample "$who" "$m" "$(angle_run "$m")"
-    done
-  fi
-  if group_wanted x "$legacy" || want_angle zalg_zinterstore; then
-    server_start ""   # legacy angle: cluster off (the historical configuration)
-    warm_legacy
-    # get/set plus the five arena cells, gated here instead of living
-    # as per-release ledger footnotes (LPUSH and ZADD are the noisiest).
-    for m in $legacy; do
-      want_angle "$m" && sample "$who" "$m" "$(angle_run "$m")"
-    done
-    if want_angle zalg_zinterstore; then
-      warm_zalg
-      sample "$who" zalg_zinterstore "$(run_zalg)"
-    fi
-  fi
-  server_stop
-}
-
-# Boot + warm + measure ONE angle — the targeted-retest path. Same
-# server configuration and warm the full pass gave that angle, so the
-# extra samples are commensurable with the originals.
-measure_single() { # $1 = cand|ref, $2 = binary, $3 = metric
-  local who=$1 m=$3
-  BIN=$2
-  case $m in
-    pinned_*) server_start "--cluster"; warm_cluster ;;
-    zalg_*)   server_start "";          warm_legacy; warm_zalg ;;
-    *)        server_start "";          warm_legacy ;;
-  esac
-  sample "$who" "$m" "$(angle_run "$m")"
-  server_stop
-}
-
-CAND_BIN=$BIN
-if [ "$MODE" = "--update-baseline" ]; then
-  echo "perfgate: recording a baseline from $(basename "$CAND_BIN") ($INSTANCES instances/angle)"
-  for inst in $(seq 1 "$INSTANCES"); do measure_all cand "$CAND_BIN"; done
-else
-  [ -f "$BASELINE" ] || refuse "no baseline ($BASELINE) — run with --update-baseline first"
-  REF_SHA=$(python3 -c "import json;print(json.load(open('$BASELINE')).get('ref_commit',''))")
-  [ -n "$REF_SHA" ] || refuse "baseline has no ref_commit — re-record it with --update-baseline"
-  REF_BIN=${PERFGATE_REF_BIN:-$(ref_binary "$REF_SHA")}
-  # `refuse`/`exit` inside the $(ref_binary …) subshell above does NOT abort this
-  # parent — a failed reference build returns empty. Catch it here (before it
-  # reaches measure_all → server_stop → pkill) or the empty binary is fatal.
-  [ -n "$REF_BIN" ] && [ -x "$REF_BIN" ] || fail "reference binary unavailable for ${REF_SHA:0:12} (build failed?) — aborting before it can nuke the box"
-  echo "perfgate: candidate $(basename "$CAND_BIN") vs reference ${REF_SHA:0:12}, interleaved, $INSTANCES instances/angle"
-  for inst in $(seq 1 "$INSTANCES"); do
-    if [ $((inst % 2)) -eq 1 ]; then
-      measure_all ref "$REF_BIN"; measure_all cand "$CAND_BIN"
-    else
-      measure_all cand "$CAND_BIN"; measure_all ref "$REF_BIN"
-    fi
-  done
-fi
-
-declare -A MED REF_MED SKIPPED
-for m in $METRICS; do
-  # A metric with NO samples at all is one whose measurement body has
-  # not landed yet (the table_* group): skip with a notice — an absent
-  # baseline is a hole to report, not a number to invent or a crash.
-  if [ -z "${SAMPLES["cand:$m"]:-}" ]; then
-    SKIPPED[$m]=1
-    echo "perfgate: NOTE — $m has no measurement in this run (baseline pending; recorded on lx64)"
-    continue
-  fi
-  # An angle that produced a zero or an empty sample was not measured. That is
-  # a broken run, not a slow one — refuse rather than gate on a hole.
-  for s in ${SAMPLES["cand:$m"]:-} ${SAMPLES["ref:$m"]:-}; do
-    [ -n "$s" ] && [ "$s" -gt 0 ] 2>/dev/null \
-      || refuse "angle $m produced an unmeasurable sample ('$s') — see the stderr above"
-  done
-  # shellcheck disable=SC2086 — word-splitting the collected samples is the point
-  MED[$m]=$(median_of ${SAMPLES["cand:$m"]})
-  if [ "$MODE" != "--update-baseline" ]; then
-    # shellcheck disable=SC2086
-    REF_MED[$m]=$(median_of ${SAMPLES["ref:$m"]})
-  fi
-done
-
-# ---------- compare or record ----------
-# The recorded numbers are the reference commit plus that commit's absolute
-# medians. The medians are for the trend record only — the gate never reads
-# them, because an absolute number recorded on a past box state is not a
-# statement about the code. What the gate reads is `ref_commit`, which it
-# rebuilds and re-measures alongside the candidate.
-if [ "$MODE" = "--update-baseline" ]; then
-  REF_SHA=$(git -C "$HERE/.." rev-parse HEAD)
-  {
-    echo "{"
-    echo "  \"recorded\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
-    echo "  \"bin\": \"$(basename "$CAND_BIN")\","
-    echo "  \"ref_commit\": \"$REF_SHA\","
-    echo "  \"tolerance\": 0.92,"
-    echo "  \"_note\": \"metrics are the reference commit's medians on the box of the day — a trend record, not the gate. The gate rebuilds ref_commit and measures it against the candidate in the same session.\","
-    echo "  \"metrics\": {"
-    first=1
-    for k in $METRICS; do
-      [ $first -eq 0 ] && echo ","
-      # A skipped metric records null — the explicit "not yet measured"
-      # marker (json-parsable; the gate skips null lines by name).
-      printf '    "%s": %s' "$k" "${MED[$k]:-null}"
-      first=0
-    done
-    echo ""
-    echo "  }"
-    echo "}"
-  } > "$BASELINE"
-  echo "perfgate: baseline recorded (ref_commit ${REF_SHA:0:12}) -> $BASELINE"
-  exit 0
-fi
-
-TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
-
-# Whether one metric's current medians clear the floor. Prints nothing.
-below_floor() { # $1 = metric -> 0 iff below
-  local got=${MED[$1]} ref=${REF_MED[$1]:-}
-  { [ -z "$ref" ] || [ "$ref" -eq 0 ]; } 2>/dev/null && return 1
-  [ "$got" -lt "$(awk -v b="$ref" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')" ]
-}
-
-# ---------- targeted retest ----------
-# A first-pass red on a high-variance angle (sadd and zalg have run at
-# ±10%) is as often a bad draw as a regression: 3 samples/side is a
-# thin median. Instead of failing on the draw — or rerunning the whole
-# gate, which resamples nothing WHERE it matters — each red angle gets
-# RETEST more interleaved sample pairs of exactly its own
-# configuration, the medians recompute over the widened set, and the
-# verdict stands on that. A real regression stays red; a draw drowns.
-RETEST=${RETEST:-2}
-FAILED_ANGLES=""
-for k in $METRICS; do
-  [ -n "${SKIPPED[$k]:-}" ] && continue
-  below_floor "$k" && FAILED_ANGLES="$FAILED_ANGLES $k"
-done
-if [ -n "$FAILED_ANGLES" ]; then
-  echo "perfgate: first pass red on:$FAILED_ANGLES — retesting each with $RETEST more interleaved pairs"
-  for k in $FAILED_ANGLES; do
-    for r in $(seq 1 "$RETEST"); do
-      if [ $((r % 2)) -eq 1 ]; then
-        measure_single ref "$REF_BIN" "$k"; measure_single cand "$CAND_BIN" "$k"
-      else
-        measure_single cand "$CAND_BIN" "$k"; measure_single ref "$REF_BIN" "$k"
-      fi
-    done
-    # shellcheck disable=SC2086
-    MED[$k]=$(median_of ${SAMPLES["cand:$k"]})
-    # shellcheck disable=SC2086
-    REF_MED[$k]=$(median_of ${SAMPLES["ref:$k"]})
-  done
-fi
-
-STATUS=0
-echo "perfgate: gate — candidate vs reference ${REF_SHA:0:12}, both measured just now (floor = reference x $TOL)"
-for k in $METRICS; do
-  if [ -n "${SKIPPED[$k]:-}" ]; then
-    echo "  ~ $k: SKIPPED (no measurement body yet — baseline pending, recorded on lx64)"
-    continue
-  fi
-  GOT=${MED[$k]}
-  REF=${REF_MED[$k]:-}
-  RETESTED=""
-  [[ " $FAILED_ANGLES " == *" $k "* ]] && RETESTED=" [retested, n=$((INSTANCES + RETEST))/side]"
-  if [ -z "$REF" ] || [ "$REF" -eq 0 ] 2>/dev/null; then
-    echo "  ~ $k: $GOT (reference produced no sample — angle is new to the reference commit)"
-    continue
-  fi
-  FLOOR=$(awk -v b="$REF" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')
-  RATIO=$(awk -v g="$GOT" -v b="$REF" 'BEGIN{printf "%+.1f%%", (g/b - 1) * 100}')
-  if [ "$GOT" -lt "$FLOOR" ]; then
-    echo "  ✗ $k: $GOT vs ref $REF ($RATIO) — below floor $FLOOR$RETESTED"; STATUS=1
-  else
-    echo "  ✓ $k: $GOT vs ref $REF ($RATIO)$RETESTED"
-  fi
-done
-
-# Print how far the box itself has moved since the baseline was recorded.
-# This used to be invisible, and it was decided verdicts: the same code that
-# measured 24.3M when the baseline was taken measured 21.0M three weeks
-# later. Now the reference absorbs it, and the number is on the record.
-echo "perfgate: box drift since the baseline was recorded (reference commit, same code):"
-for k in $METRICS; do
-  [ -n "${SKIPPED[$k]:-}" ] && continue
-  BASE=$(python3 -c "import json
-v = json.load(open('$BASELINE'))['metrics'].get('$k')
-print(v if isinstance(v, int) else '')")
-  REF=${REF_MED[$k]:-}
-  [ -n "$BASE" ] && [ -n "$REF" ] && [ "$BASE" -ne 0 ] 2>/dev/null \
-    && awk -v k="$k" -v b="$BASE" -v r="$REF" 'BEGIN{printf "    %-22s recorded %10d  now %10d  (%+.1f%%)\n", k, b, r, (r/b - 1) * 100}'
-done
-
-[ $STATUS -eq 0 ] && echo "perfgate: PASS" || echo "perfgate: FAIL — regression vs the reference commit; do not finish/release" >&2
-exit $STATUS
+# builds what is missing; a second pass, after the lock, finds it all built.
+# Skipping it when a caller already holds the lock left the reference
+# unbuilt, and the run died before measuring anything.
+python3 "$HERE/perfgate.py" prepare --for "${1:-}" "${@:2}"
+. "$HERE/bench-lock.sh"
+exec python3 "$HERE/perfgate.py" "$@"

@@ -21,6 +21,20 @@
 //! - datetime literals
 //!
 //! See [`Config`] for the schema, [`Config::load`] for the precedence chain.
+//!
+//! ```
+//! use kevy_config::{AppendFsync, Config};
+//!
+//! let mut cfg = Config::from_toml_str(
+//!     "[server]\nport = 7000\n\n[persistence]\nappendfsync = \"always\"\n",
+//!     None,
+//! )?;
+//! cfg.merge_env([("KEVY_PORT", "7001")])?;
+//! assert_eq!(cfg.server.port, 7001, "env over file");
+//! assert_eq!(cfg.persistence.appendfsync, AppendFsync::Always);
+//! assert!(cfg.to_toml_string().contains("appendfsync"));
+//! # Ok::<(), kevy_config::ConfigError>(())
+//! ```
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -30,20 +44,27 @@ mod emit;
 mod enums;
 mod error;
 mod lex;
+mod notify;
 mod parse;
+mod peer;
 mod preserve;
 mod replication;
 mod schema;
+mod sections;
+mod secure;
 mod size;
 mod tiering;
+mod tuning;
 
 pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
+pub use error::ValueError;
 pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
-    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
-    LogOutput, LogSection, LuaSection, MemorySection, NotificationFlags, NotificationSection,
-    PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
+    AdvancedSection, AppendFsync, AuditSection, Config, ConfigError, EvictionPolicy, ExpirySection,
+    FeedSection, LogLevel, LogOutput, LogSection, LuaSection, MemorySection, MetricsSection,
+    NotificationFlags, NotificationSection, PersistenceSection, ServerSection, SlowlogSection,
 };
+pub use secure::{SecureSection, key_from_hex, key_to_hex};
 pub use size::parse_size;
 pub use tiering::{TierBudgetSpec, TieringSection};
 
@@ -62,6 +83,20 @@ impl Config {
     ///
     /// If `path` is `Some`, that file is required to exist; otherwise
     /// returns `Ok(Config::default())` if no auto-detect path matched.
+    ///
+    /// ```
+    /// use kevy_config::Config;
+    ///
+    /// let path = std::env::temp_dir().join(format!("kevy-config-load-{}.toml", std::process::id()));
+    /// std::fs::write(&path, "[server]\nport = 7100\n").expect("write the temp config");
+    /// let cfg = Config::load(Some(&path));
+    /// std::fs::remove_file(&path).expect("remove the temp config");
+    /// let cfg = cfg?;
+    /// assert_eq!(cfg.server.port, 7100);
+    /// assert_eq!(cfg.source_path.as_deref(), Some(path.as_path()));
+    /// assert!(Config::load(Some(&path)).is_err(), "an explicit path must exist");
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub fn load(path: Option<&Path>) -> Result<Self, ConfigError> {
         if let Some(p) = path {
             let text = read_required(p)?;
@@ -83,6 +118,19 @@ impl Config {
     /// `CONFIG REWRITE`, never on the request hot path. Keeps the
     /// ~15.9 KB TOML-parse code off the iTLB pages around the steady-state
     /// dispatcher.
+    ///
+    /// ```
+    /// use kevy_config::{Config, EvictionPolicy};
+    ///
+    /// let cfg = Config::from_toml_str(
+    ///     "# a comment\n[memory]\nmaxmemory = \"64mb\"\nmaxmemory_policy = \"allkeys-lfu\"\n",
+    ///     None,
+    /// )?;
+    /// assert_eq!(cfg.memory.maxmemory, 64 << 20);
+    /// assert_eq!(cfg.memory.maxmemory_policy, EvictionPolicy::AllKeysLfu);
+    /// assert!(Config::from_toml_str("[nosuch]\nkey = 1\n", None).is_err());
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     #[cold]
     pub fn from_toml_str(text: &str, source_path: Option<&Path>) -> Result<Self, ConfigError> {
         let mut cfg = Self::default();
@@ -104,6 +152,15 @@ impl Config {
     ///
     /// Unknown variables are silently ignored (env may contain many
     /// unrelated keys).
+    ///
+    /// ```
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_env([("KEVY_PORT", "7002"), ("KEVY_AOF", "off"), ("HOME", "/root")])?;
+    /// assert_eq!(cfg.server.port, 7002);
+    /// assert!(!cfg.persistence.aof);
+    /// assert!(cfg.merge_env([("KEVY_PORT", "not-a-port")]).is_err());
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub fn merge_env<I, K, V>(&mut self, env: I) -> Result<(), ConfigError>
     where
         I: IntoIterator<Item = (K, V)>,
@@ -118,8 +175,16 @@ impl Config {
 
     /// Overlay parsed-from-CLI overrides onto `self`. Pass a struct of
     /// optional values (any `Some(_)` field overrides the corresponding
-    /// schema field). Tests pass a literal; the kevy binary builds one
-    /// from `std::env::args`.
+    /// schema field); the kevy binary builds one from `std::env::args`.
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.port = Some(7000);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.port, 7000);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub fn merge_cli(&mut self, cli: CliOverrides) -> Result<(), ConfigError> {
         if let Some(bind) = cli.bind {
             self.server.bind = bind;
@@ -158,26 +223,111 @@ impl Config {
 ///
 /// Any `Some(_)` field overrides the corresponding schema field. CLI is the
 /// highest-priority source (above env vars and the TOML file).
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_config::{CliOverrides, Config};
+///
+/// let mut cfg = Config::from_toml_str("[server]\nport = 7000\nthreads = 2\n", None)?;
+/// let mut cli = CliOverrides::default();
+/// cli.port = Some(7001);
+/// cfg.merge_cli(cli)?;
+/// assert_eq!(cfg.server.port, 7001, "CLI over file");
+/// assert_eq!(cfg.server.threads, 2, "unset overrides leave the file value");
+/// # Ok::<(), kevy_config::ConfigError>(())
+/// ```
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CliOverrides {
     /// Override `server.bind` (`--bind A.B.C.D`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.bind = Some([0, 0, 0, 0]);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.bind, [0, 0, 0, 0]);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub bind: Option<[u8; 4]>,
     /// Override `server.port` (`--port N`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.port = Some(6380);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.port, 6380);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub port: Option<u16>,
     /// Override `server.threads` (`--threads N`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.threads = Some(8);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.threads, 8);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub threads: Option<usize>,
     /// Override `server.accept_shards` (`--accept-shards N`).
     /// `Some(N)` = only shards 0..N arm accept SQE; rest are compute-only.
     /// Use to fold conns onto fewer shards on sparse-conn workloads.
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.accept_shards = Some(1);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.accept_shards, Some(1));
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub accept_shards: Option<usize>,
     /// Override `server.data_dir` (`--dir PATH`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.data_dir = Some("/srv/kevy".into());
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.server.data_dir.to_str(), Some("/srv/kevy"));
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub data_dir: Option<PathBuf>,
     /// Override `persistence.aof` (`--no-aof` → `Some(false)`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.aof = Some(false);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert!(!cfg.persistence.aof); // `--no-aof`
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub aof: Option<bool>,
     /// Override `cluster.enabled` (`--cluster` → `Some(true)`).
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.cluster = Some(true);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert!(cfg.cluster.enabled);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub cluster: Option<bool>,
     /// Override `tiering.budget` (`--tiering-budget auto|70%|4gb`).
     /// `Some(_)` turns tiering on with that budget.
+    ///
+    /// ```
+    /// let mut cli = kevy_config::CliOverrides::default();
+    /// cli.tiering_budget = Some(kevy_config::TierBudgetSpec::Auto);
+    /// let mut cfg = kevy_config::Config::default();
+    /// cfg.merge_cli(cli)?;
+    /// assert_eq!(cfg.tiering.budget, Some(kevy_config::TierBudgetSpec::Auto));
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub tiering_budget: Option<TierBudgetSpec>,
 }
 
@@ -201,6 +351,25 @@ fn autodetect() -> Option<PathBuf> {
     }
     None
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Config>();
+    send_sync::<CliOverrides>();
+    send_sync::<ConfigError>();
+    send_sync::<ValueError>();
+    send_sync::<NotificationFlags>();
+    send_sync::<PeerEntry>();
+    send_sync::<ScopeEntry>();
+    send_sync::<TierBudgetSpec>();
+    send_sync::<AppendFsync>();
+    send_sync::<EvictionPolicy>();
+    send_sync::<LogLevel>();
+    send_sync::<LogOutput>();
+    send_sync::<ReplicationRole>();
+};
 
 #[cfg(test)]
 mod tests {

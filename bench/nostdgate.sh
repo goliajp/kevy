@@ -8,17 +8,17 @@
 # `packed_row.rs` shipped ten errors into the `iot` job — and it was caught
 # after the branch had already merged.
 #
-# The commands are read out of `.github/workflows/ci.yml` rather than
-# restated, so a target or feature set added there cannot leave this behind,
-# and finding none is a refusal rather than a pass.
+# The commands are read out of `bench/iotcheck.sh`, which CI's iot job runs,
+# rather than restated, so a target or feature set added there cannot leave
+# this behind, and finding none is a refusal rather than a pass.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CI=.github/workflows/ci.yml
+CI=bench/iotcheck.sh
 [ -f "$CI" ] || { echo "nostdgate: REFUSED — no $CI to read the checks from" >&2; exit 2; }
 
 # Every `cargo check --target <triple> ... --no-default-features ...` line in
-# the workflow. One per line, whitespace-normalised.
+# the script. One per line, whitespace-normalised.
 # `mapfile` is bash 4; this runs on a Mac's bash 3.2 too, so read a
 # newline-separated list the portable way.
 CHECKS=()
@@ -28,7 +28,7 @@ done < <(grep -oE 'cargo check --target [a-z0-9_-]+ -p [a-z-]+ --no-default-feat
 
 if [ ${#CHECKS[@]} -eq 0 ]; then
   echo "nostdgate: REFUSED — parsed no no_std checks out of $CI." >&2
-  echo "The workflow's shape changed; a gate that finds nothing must not read as PASS." >&2
+  echo "The script's shape changed; a gate that finds nothing must not read as PASS." >&2
   exit 2
 fi
 

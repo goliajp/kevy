@@ -255,7 +255,8 @@ impl TextSegment {
         sort: Option<crate::Sort>,
         distinct: Option<crate::Distinct>,
     ) -> Vec<TextMatch> {
-        let order = Order { desc: sort.is_some_and(|s| s.desc), sorted: sort.is_some() };
+        let order =
+            Order { dir: sort.map_or(crate::SortOrder::Asc, |s| s.order), sorted: sort.is_some() };
         let mut top = TopK::new(limit, order);
         match distinct {
             // The plain path stays streaming: a candidate that loses is

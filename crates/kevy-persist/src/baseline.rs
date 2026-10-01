@@ -40,9 +40,25 @@ impl Write for CountWriter {
 /// trailing segment frames are not counted — the estimate errs low,
 /// which for the baseline's purpose is the safe direction (at worst one
 /// rewrite fires earlier than strictly needed).
+///
+/// ```
+/// use kevy_persist::{Aof, Fsync, estimate_rewrite_size};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let path = std::env::temp_dir().join(format!("estimate-doc-{}.aof", std::process::id()));
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let estimate = estimate_rewrite_size(&store);
+/// let mut aof = Aof::open(&path, Fsync::No)?;
+/// assert_eq!(aof.rewrite_from(&store)?.bytes, estimate, "no file written to know it");
+/// # drop(aof);
+/// # std::fs::remove_file(&path)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn estimate_rewrite_size<S: SnapshotSource>(src: &S) -> u64 {
     let mut w = CountWriter(crate::record::AOF2_MAGIC.len() as u64);
     let mut scratch = Vec::new();
+    let _ = crate::log_base::write_image_base(&mut w, &mut scratch);
     src.for_each_entry(|key, value, ttl_ms| {
         if matches!(value, kevy_store::Value::Cold(_)) {
             return;

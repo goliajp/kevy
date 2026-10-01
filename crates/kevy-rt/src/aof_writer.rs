@@ -19,7 +19,7 @@
 // become "never" with nothing saying so. Open question §2.
 #![expect(
     clippy::let_underscore_must_use,
-    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+    reason = "a persistent fsync failure is invisible; an open question"
 )]
 
 use std::fs::File;
@@ -273,11 +273,13 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let due = match aof.fsync_policy() {
-            kevy_persist::Fsync::Always => aof.queued_watermark() > lane.durable_watermark,
             kevy_persist::Fsync::EverySec => {
                 lane.dirty_since_sync && lane.last_sync.elapsed().as_secs() >= 1
             }
             kevy_persist::Fsync::No => false,
+            // always, and any policy this writer cannot name: prove every
+            // record, the choice that never loses an acknowledged write
+            _ => aof.queued_watermark() > lane.durable_watermark,
         };
         if !due {
             return;
@@ -348,8 +350,7 @@ impl<C: Commands> Shard<C> {
     /// counterpart of `uring_aof_restructure_ready`.)
     pub(crate) fn epoll_aof_restructure_ready(&self) -> bool {
         !self.aof_lane.enabled
-            || (self.aof_lane.appends_drained()
-                && self.aof.as_ref().is_none_or(kevy_persist::Aof::queued_is_empty))
+            || (self.aof_lane.appends_drained() && self.aof.as_ref().is_none_or(queue_settled))
     }
 
     /// Tick wrapper for the persistence trio (the epoll counterpart of
@@ -373,8 +374,10 @@ impl<C: Commands> Shard<C> {
             return;
         }
         if let Some(aof) = &self.aof {
-            self.aof_lane.durable_watermark =
-                self.aof_lane.durable_watermark.max(aof.queued_watermark());
+            if aof.queued_is_empty() {
+                self.aof_lane.durable_watermark =
+                    self.aof_lane.durable_watermark.max(aof.queued_watermark());
+            }
             match aof.queued_file_clone() {
                 Some(Ok(f)) => {
                     if self.aof_lane.submit(Job::Reopen(f)).is_err() {
@@ -403,4 +406,10 @@ impl<C: Commands> Shard<C> {
             std::thread::yield_now();
         }
     }
+}
+
+/// The append queue is empty, or holds only writes made during a swap
+/// hold, which the swap's reopen hands to the new log.
+pub(crate) fn queue_settled(aof: &kevy_persist::Aof) -> bool {
+    aof.queued_is_empty() || aof.swap_holding()
 }

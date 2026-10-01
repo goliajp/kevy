@@ -24,7 +24,16 @@ in it that the workspace step could not see. CI grew a hand-written step
 for that one crate. Hand-written is how `global` was missed: the list has
 to be derived, so every crate is linted alone here.
 
-Both lists come from `cargo metadata`, so a crate added tomorrow, or a
+**Features taken away.** A crate built with fewer than its defaults — the
+minimal cut an embedded user asks for, or one default feature on top of
+it — compiles code whose imports and lint expectations were only ever
+checked with every default on. `kevy-embedded --no-default-features
+--features core` stopped building on an unused import, and nothing said
+so. These run on the library and binaries only: `--all-targets` pulls
+in dev-dependencies, and a dev-dependency that asks for the defaults
+puts them straight back.
+
+The lists come from `cargo metadata`, so a crate added tomorrow, or a
 feature added tomorrow, is covered tomorrow with no edit.
 
 `--target <triple>` passes through, for the same reason the axes exist:
@@ -49,8 +58,24 @@ EXCLUSIVE = {
 }
 
 
-def default_closure(features: dict) -> set:
-    seen = set(features.get("default", []))
+# Crates whose empty feature set is not a configuration, with the smallest
+# one that is. Same staleness rule as EXCLUSIVE.
+MINIMAL = {
+    "kevy-store": {
+        "reason": "without `std` the TTL clock must be host-fed; lib.rs refuses "
+        "to build without `external-clock`",
+        "set": ["alloc", "external-clock"],
+    },
+    "kevy-embedded": {
+        "reason": "`core` is the empty marker its Cargo.toml names the minimal "
+        "archetype with; spelled the way its users spell it",
+        "set": ["core"],
+    },
+}
+
+
+def closure(features: dict, start) -> set:
+    seen = set(start)
     stack = list(seen)
     while stack:
         for dep in features.get(stack.pop(), []):
@@ -58,6 +83,10 @@ def default_closure(features: dict) -> set:
                 seen.add(dep)
                 stack.append(dep)
     return seen
+
+
+def default_closure(features: dict) -> set:
+    return closure(features, features.get("default", []))
 
 
 def main() -> int:
@@ -98,6 +127,26 @@ def main() -> int:
         else:
             jobs.append((name, "all-features (" + ",".join(off) + ")", ["--all-features"]))
 
+    # Axis 3 — features taken away: the minimal set, then each default
+    # feature alone on top of it. Library and binaries only (see above).
+    for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
+        name, features = pkg["name"], pkg["features"]
+        defaults = features.get("default", [])
+        if not defaults or name in EXCLUSIVE:
+            continue
+        base = MINIMAL.get(name, {}).get("set", [])
+        whole = default_closure(features)
+        # a default feature that already implies every other is the
+        # default build, which axis 1 lints
+        sets = [base] + [
+            sorted({*base, f}) for f in defaults
+            if f not in base and closure(features, [*base, f]) != whole
+        ]
+        for s in sets:
+            args = ["--no-default-features", *(["--features", ",".join(s)] if s else [])]
+            label = "minimal" if s == base else "minimal + " + ",".join(x for x in s if x not in base)
+            jobs.append((name, f"{label} [{','.join(s) or 'none'}], lib", args))
+
     # The floor. Finding little to lint is what this script looks like
     # when `cargo metadata` changes shape under it, and that reads exactly
     # like a clean tree. The workspace has 47 members and 5 crates with
@@ -107,14 +156,21 @@ def main() -> int:
         print(f"FAIL: only {len(jobs)} configurations found; the tree has far more")
         return 1
 
-    stale = [c for c in EXCLUSIVE if c not in {p["name"] for p in meta["packages"]}]
+    names = {p["name"] for p in meta["packages"]}
+    stale = [c for c in (*EXCLUSIVE, *MINIMAL) if c not in names]
     if stale:
-        print(f"FAIL: EXCLUSIVE names crates that are gone: {stale}")
+        print(f"FAIL: EXCLUSIVE / MINIMAL name crates that are gone: {stale}")
+        return 1
+    feats = {p["name"]: p["features"] for p in meta["packages"]}
+    gone = [(c, f) for c, m in MINIMAL.items() if c in feats for f in m["set"] if f not in feats[c]]
+    if gone:
+        print(f"FAIL: MINIMAL names features that are gone: {gone}")
         return 1
 
     bad = []
     for crate, label, args in jobs:
-        cmd = ["cargo", "clippy", "-p", crate, "--all-targets", *target, *args,
+        scope = ["--lib", "--bins"] if label.endswith(", lib") else ["--all-targets"]
+        cmd = ["cargo", "clippy", "-p", crate, *scope, *target, *args,
                "--", "-D", "warnings"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         mark = "ok " if r.returncode == 0 else "FAIL"

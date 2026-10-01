@@ -2,8 +2,9 @@
 //! pulled out of `transport.rs` so that file stays under the
 //! project's 500-LOC ceiling. The listener / per-peer outbound /
 //! orchestrator threads spawned by `Transport::spawn_with_callback`
-//! run these functions; the handle type, shared state, and spawn
-//! plumbing stay in `transport.rs`.
+//! run these functions, and the helpers that spawn the listener and
+//! outbound threads live here with them; the handle type and shared
+//! state stay in `transport.rs`.
 
 // Socket options are advisory here. `set_nodelay`, `set_read_timeout`
 // and `set_nonblocking` shape latency, not correctness — a kernel that
@@ -12,25 +13,72 @@
 // election timing out, which is the signal this module already watches.
 #![expect(clippy::let_underscore_must_use, reason = "socket tuning is advisory to an election")]
 
-use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::elector::Outbound;
+use crate::elector::{Elector, Outbound};
+use crate::link::{Link, initiate, respond};
 use crate::message::Message;
-use crate::transport::{
-    InboundEvent, MAX_PENDING_PER_PEER, PeerAddr, READ_BUF_CAP, READ_RETRY_BACKOFF, Shared,
-    TopologyCallback,
-};
-use crate::wire::{DecodeError, decode, encode};
+use crate::transport::{PeerAddr, TopologyCallback};
+use crate::wire::DecodeError;
+
+/// Maximum buffer the per-connection reader holds before declaring
+/// the framing busted. Election frames are ≤ 256 B; 16 KiB is
+/// generous for misaligned partial reads.
+pub(crate) const READ_BUF_CAP: usize = 16 * 1024;
+
+/// Read-loop sleep on transient EAGAIN-equivalents (peer closed,
+/// I/O error during decode). Keeps the worker from a tight retry
+/// loop while still recovering on reconnect.
+pub(crate) const READ_RETRY_BACKOFF: Duration = Duration::from_millis(100);
+
+/// One inbound event the orchestrator processes. Either a decoded
+/// election message from a peer, or a "the connection from $peer
+/// went down" notification (so the orchestrator can clear any
+/// state that assumed the link was up).
+#[derive(Debug)]
+pub(crate) enum InboundEvent {
+    /// `(from_node_id, msg)`.
+    Message(String, Message),
+    /// An inbound connection failed its handshake, closed, or sent a
+    /// frame that does not decode.
+    InboundConnFailed,
+}
+
+/// Shared state between the orchestrator + worker threads. Wraps
+/// the elector in a Mutex so the per-peer outbound threads can read
+/// the latest `epoch` / `repl_offset` for the next heartbeat
+/// without round-tripping through the orchestrator — but **only the
+/// orchestrator mutates** via `tick` / `on_message`.
+#[derive(Debug)]
+pub(crate) struct Shared {
+    pub(crate) elector: Mutex<Elector>,
+    /// `Some` when every election link must be Noise-authenticated.
+    pub(crate) secure: Option<crate::link::SecureLinks>,
+    /// Per-peer outbound queue. Indexed by `node_id`. Each worker
+    /// drains its own queue + writes onto the persistent TCP
+    /// stream; on stream death the queue is held until the worker
+    /// reconnects. Bounded by `MAX_PENDING_PER_PEER` to prevent a
+    /// dead peer from leaking memory.
+    pub(crate) out_queues:
+        Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
+}
+
+pub(crate) const MAX_PENDING_PER_PEER: usize = 256;
 
 // needless_pass_by_value: thread entry point — it owns its channel/flag for
 // the thread's whole lifetime; references cannot cross `thread::spawn`.
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop: Arc<AtomicBool>) {
+pub(crate) fn accept_loop(
+    listener: TcpListener,
+    tx: Sender<InboundEvent>,
+    stop: Arc<AtomicBool>,
+    shared: Arc<Shared>,
+) {
     // Non-blocking + short sleep so the loop can observe `stop`
     // between accepts. Blocking `accept` would need a Shutdown-on-
     // try_clone trick to interrupt; the non-blocking poll keeps the
@@ -43,11 +91,21 @@ pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop:
                 let _ = stream.set_nonblocking(false); // children block on reads.
                 let tx_clone = tx.clone();
                 let stop_clone = stop.clone();
+                let shared = Arc::clone(&shared);
                 let addr_str = addr.to_string();
                 let _ = std::thread::Builder::new()
                     .name(format!("kevy-elect-in-{addr_str}"))
                     .spawn(move || {
-                        inbound_read_loop(stream, addr_str, tx_clone, stop_clone);
+                        // the handshake runs on this thread, never on the acceptor
+                        let link = match &shared.secure {
+                            None => Some((Link::Plain(stream), None)),
+                            Some(secure) => {
+                                respond(stream, secure).ok().map(|(l, id)| (l, Some(id)))
+                            }
+                        };
+                        if let Some((link, verified)) = link {
+                            inbound_read_loop(link, verified, tx_clone, stop_clone);
+                        }
                     });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -63,31 +121,30 @@ pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop:
 // needless_pass_by_value: thread entry point (see `accept_loop`).
 #[allow(clippy::needless_pass_by_value)]
 fn inbound_read_loop(
-    mut stream: TcpStream,
-    peer_addr: String,
+    mut link: Link,
+    verified: Option<String>,
     tx: Sender<InboundEvent>,
     stop: Arc<AtomicBool>,
 ) {
-    let _ = stream.set_nodelay(true);
+    let _ = link.stream().set_nodelay(true);
     // Short read timeout so the loop can observe `stop` between
     // reads. Blocking read otherwise can't be interrupted by a
     // flag.
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let _ = link.stream().set_read_timeout(Some(Duration::from_millis(200)));
     let mut buf: Vec<u8> = Vec::with_capacity(READ_BUF_CAP);
     let mut chunk = [0u8; 1024];
     while !stop.load(Ordering::Relaxed) {
-        match stream.read(&mut chunk) {
+        match link.read_into(&mut chunk, &mut buf) {
             Ok(0) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return;
             }
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
+            Ok(_) => {
                 if buf.len() > READ_BUF_CAP {
-                    let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                    let _ = tx.send(InboundEvent::InboundConnFailed);
                     return;
                 }
-                if !drain_frames(&mut buf, &tx, &peer_addr) {
+                if !drain_frames(&mut buf, &tx, verified.as_deref()) {
                     return;
                 }
             }
@@ -98,7 +155,7 @@ fn inbound_read_loop(
                 // Read timeout — fall through to re-check `stop`.
             }
             Err(_) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return;
             }
         }
@@ -108,17 +165,23 @@ fn inbound_read_loop(
 /// Decode + dispatch every complete frame sitting in `buf`. Returns
 /// `false` when the framing is busted — an `InboundConnFailed` has
 /// been sent and the caller must drop the connection.
-fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<InboundEvent>, peer_addr: &str) -> bool {
+fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<InboundEvent>, verified: Option<&str>) -> bool {
     while !buf.is_empty() {
-        match decode(buf) {
+        match Message::decode(buf) {
             Ok((msg, used)) => {
                 let from = message_sender(&msg);
+                // on a secure link the key names the sender; a message
+                // claiming anyone else is a forgery
+                if verified.is_some_and(|id| id != from) {
+                    let _ = tx.send(InboundEvent::InboundConnFailed);
+                    return false;
+                }
                 let _ = tx.send(InboundEvent::Message(from, msg));
                 buf.drain(..used);
             }
             Err(DecodeError::Truncated) => break,
             Err(_) => {
-                let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.to_string()));
+                let _ = tx.send(InboundEvent::InboundConnFailed);
                 return false;
             }
         }
@@ -141,10 +204,13 @@ fn message_sender(msg: &Message) -> String {
 // needless_pass_by_value: thread entry point (see `accept_loop`).
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn outbound_loop(peer: PeerAddr, shared: Arc<Shared>, stop: Arc<AtomicBool>) {
-    let mut stream: Option<TcpStream> = None;
+    let mut stream: Option<Link> = None;
     while !stop.load(Ordering::Relaxed) {
         if stream.is_none() {
-            stream = dial(&peer);
+            stream = dial(&peer).and_then(|s| match &shared.secure {
+                None => Some(Link::Plain(s)),
+                Some(secure) => initiate(s, secure, &peer.node_id).ok(),
+            });
             if stream.is_none() {
                 std::thread::sleep(READ_RETRY_BACKOFF);
                 continue;
@@ -159,14 +225,14 @@ pub(crate) fn outbound_loop(peer: PeerAddr, shared: Arc<Shared>, stop: Arc<Atomi
             std::thread::sleep(Duration::from_millis(1));
             continue;
         };
-        let bytes = encode(&msg);
+        let bytes = msg.encode();
         let Some(s) = stream.as_mut() else {
             continue;
         };
         if s.write_all(&bytes).is_err() {
             // Connection died. Drop + reconnect next iter; re-
             // queue the in-flight message at the head.
-            let _ = s.shutdown(Shutdown::Both);
+            let _ = s.stream().shutdown(Shutdown::Both);
             stream = None;
             let mut qs = shared.out_queues.lock().expect("out_queues lock");
             qs.entry(peer.node_id.clone()).or_default().push_front(msg);
@@ -238,7 +304,7 @@ fn pump_inbound(
             outs.extend(e.on_message(&from, msg, now));
             outs.extend(e.tick(now));
         }
-        Ok(InboundEvent::InboundConnFailed(_)) => {
+        Ok(InboundEvent::InboundConnFailed) => {
             // Logged elsewhere; no elector state change here
             // (DOWN detection is driven by the lack of HBs, not
             // by the absence of a TCP socket).
@@ -309,4 +375,74 @@ mod sender_key_tests {
         assert_eq!(message_sender(&accept), "n-accept");
         assert_eq!(message_sender(&announce), "n-announce");
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InboundEvent;
+    use super::drain_frames;
+    use crate::message::Message;
+
+    fn hb(from: &str) -> Vec<u8> {
+        (Message::Hb {
+            node_id: from.to_string(),
+            epoch: 1,
+            role: crate::message::Role::Replica,
+            repl_offset: 0,
+        })
+        .encode()
+    }
+
+    #[test]
+    fn a_verified_link_drops_a_message_that_claims_another_sender() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut buf = hb("b");
+        assert!(drain_frames(&mut buf, &tx, Some("b")));
+        assert!(matches!(rx.try_recv(), Ok(InboundEvent::Message(from, _)) if from == "b"));
+        let mut forged = hb("c");
+        assert!(!drain_frames(&mut forged, &tx, Some("b")));
+        assert!(matches!(rx.try_recv(), Ok(InboundEvent::InboundConnFailed)));
+        // an unverified (plain) link keeps today's behaviour
+        let mut plain = hb("c");
+        assert!(drain_frames(&mut plain, &tx, None));
+    }
+}
+
+/// Spawn the accept-side listener thread, appending its handle.
+pub(crate) fn spawn_listener_thread(
+    listener: TcpListener,
+    tx: Sender<InboundEvent>,
+    stop: Arc<AtomicBool>,
+    shared: &Arc<Shared>,
+    handles: &mut Vec<JoinHandle<()>>,
+) -> std::io::Result<()> {
+    let shared = Arc::clone(shared);
+    handles.push(std::thread::Builder::new().name("kevy-elect-listener".to_string()).spawn(
+        move || {
+            accept_loop(listener, tx, stop, shared);
+        },
+    )?);
+    Ok(())
+}
+
+/// Spawn one outbound worker thread per peer, appending the handles.
+pub(crate) fn spawn_outbound_threads(
+    peers: &[PeerAddr],
+    shared: &Arc<Shared>,
+    stop: &Arc<AtomicBool>,
+    handles: &mut Vec<JoinHandle<()>>,
+) -> std::io::Result<()> {
+    for peer in peers {
+        let peer_stop = stop.clone();
+        let peer_shared = shared.clone();
+        let peer_clone = peer.clone();
+        handles.push(
+            std::thread::Builder::new().name(format!("kevy-elect-out-{}", peer.node_id)).spawn(
+                move || {
+                    outbound_loop(peer_clone, peer_shared, peer_stop);
+                },
+            )?,
+        );
+    }
+    Ok(())
 }

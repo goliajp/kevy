@@ -80,6 +80,10 @@ pub(crate) struct TierGauges {
     pub vlog_bytes: AtomicU64,
     pub vlog_live_bytes: AtomicU64,
     pub vlog_epoch: AtomicU64,
+    pub vlog_raw_bytes: AtomicU64,
+    pub vlog_payload_bytes: AtomicU64,
+    pub vlog_frame_header_bytes: AtomicU64,
+    pub vlog_dict_bytes: AtomicU64,
 }
 
 /// One shard's `INFO # Allocator` slot — mirrors `kevy_alloc::Stats`,
@@ -161,6 +165,10 @@ pub(crate) struct TierTotals {
     pub vlog_bytes: u64,
     pub vlog_live_bytes: u64,
     pub vlog_epoch: u64,
+    pub vlog_raw_bytes: u64,
+    pub vlog_payload_bytes: u64,
+    pub vlog_frame_header_bytes: u64,
+    pub vlog_dict_bytes: u64,
 }
 
 /// The summed allocator terms. Each shard has its own heap and the
@@ -310,6 +318,10 @@ impl ObsState {
             t.tier.vlog_bytes += s.tier.vlog_bytes.load(Relaxed);
             t.tier.vlog_live_bytes += s.tier.vlog_live_bytes.load(Relaxed);
             t.tier.vlog_epoch += s.tier.vlog_epoch.load(Relaxed);
+            t.tier.vlog_raw_bytes += s.tier.vlog_raw_bytes.load(Relaxed);
+            t.tier.vlog_payload_bytes += s.tier.vlog_payload_bytes.load(Relaxed);
+            t.tier.vlog_frame_header_bytes += s.tier.vlog_frame_header_bytes.load(Relaxed);
+            t.tier.vlog_dict_bytes += s.tier.vlog_dict_bytes.load(Relaxed);
             if s.alloc.reporting.load(Relaxed) != 0 {
                 t.alloc_shards += 1;
                 t.alloc.add(&s.alloc);
@@ -412,8 +424,8 @@ mod tests {
 
     #[test]
     fn audit_records_one_sanitised_line() {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path: PathBuf = std::env::temp_dir().join(format!("kevy-audit-{nanos}"));
+        let dir = kevy_tmpdir::TmpDir::new("audit");
+        let path: PathBuf = dir.path().join("audit.log");
         let obs = ObsState::new(&path, 1);
         obs.audit_record(&[b"DEBUG", b"tab\there"]);
         let text = std::fs::read_to_string(&path).unwrap();

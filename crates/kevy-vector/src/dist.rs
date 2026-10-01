@@ -31,7 +31,7 @@
 
 /// Distance metric. Scores are "smaller = closer" for every variant
 /// (cosine → `1 - cos`, ip → `-dot`), so one ascending merge works.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
 /// # Examples
 ///
 /// ```
@@ -42,13 +42,50 @@
 /// assert_eq!(Distance::Ip.tag(), "ip");
 /// assert_eq!(Distance::parse(b"manhattan"), None, "refused, not defaulted");
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Distance {
     /// Cosine distance (vectors pre-normalized at insert).
+    ///
+    /// Direction only: a long vector and a short one pointing the same
+    /// way are equally close.
+    ///
+    /// ```
+    /// use kevy_vector::{Distance, Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(2, HnswParams::default().with_distance(Distance::Cosine));
+    /// h.apply(b"long", Some(vec![100.0, 1.0]));
+    /// h.apply(b"diagonal", Some(vec![1.0, 1.0]));
+    /// let hit = h.knn(&[1.0, 0.0], 1, 16);
+    /// assert_eq!(hit[0].0, b"long", "same direction wins, whatever the length");
+    /// assert!(hit[0].1 < 0.01, "score is 1 - cos");
+    /// ```
     #[default]
     Cosine,
     /// Squared euclidean.
+    ///
+    /// ```
+    /// use kevy_vector::{Distance, Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(2, HnswParams::default().with_distance(Distance::L2));
+    /// h.apply(b"long", Some(vec![100.0, 0.0]));
+    /// h.apply(b"diagonal", Some(vec![1.0, 1.0]));
+    /// let hit = h.knn(&[1.0, 0.0], 1, 16);
+    /// // Position matters: the nearby point wins, at squared distance 1.
+    /// assert_eq!(hit[0].0, b"diagonal");
+    /// assert_eq!(hit[0].1, 1.0);
+    /// ```
     L2,
     /// Negative inner product.
+    ///
+    /// ```
+    /// use kevy_vector::{Distance, Hnsw, HnswParams};
+    /// let mut h = Hnsw::new(2, HnswParams::default().with_distance(Distance::Ip));
+    /// h.apply(b"small", Some(vec![1.0, 0.0]));
+    /// h.apply(b"large", Some(vec![5.0, 0.0]));
+    /// let hit = h.knn(&[1.0, 0.0], 1, 16);
+    /// // Magnitude counts: the larger dot product is the smaller score.
+    /// assert_eq!(hit[0].0, b"large");
+    /// assert_eq!(hit[0].1, -5.0);
+    /// ```
     Ip,
 }
 

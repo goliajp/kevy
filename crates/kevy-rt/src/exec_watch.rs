@@ -52,8 +52,7 @@ impl<C: Commands> Shard<C> {
         }
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
             }
@@ -159,8 +158,7 @@ impl<C: Commands> Shard<C> {
     ) {
         let op = Op::CheckWatch(pairs);
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }
@@ -257,7 +255,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let ResolvedCmd { route, is_quit, is_write, wake_idx, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, wake_idx, verb, .. } = resolved;
         match route {
             // Pub/sub + WATCH inside MULTI is rejected at queue time
             // (`handle_command` errors before queuing). UNWATCH inside MULTI
@@ -279,12 +277,12 @@ impl<C: Commands> Shard<C> {
                 b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb };
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta);
             }
             Route::Single(idx) => {
                 let shard = self.shard_of(&args[idx]);
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
                 self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta);
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),
@@ -321,15 +319,15 @@ impl<C: Commands> Shard<C> {
         // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
         // happen inside `exec_op`, driven by `meta`.
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
-        if is_quit && let Some(c) = self.conns.get_mut(&conn_id) {
-            c.closing = true;
+        if is_quit {
+            self.mark_closing(conn_id);
         }
         if shard == self.id {
             let part = self.run_dispatch(args, proto, meta);
             self.fold(conn_id, seq, part);
         } else {
             let argv = self.argv_pool.take_filled(args);
-            self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
+            self.request_batch[shard].reqs.push((conn_id, seq, argv, proto, meta));
             self.request_batch_nonempty |= 1u64 << shard;
         }
     }
@@ -352,9 +350,9 @@ impl<C: Commands> Shard<C> {
                 slot.remaining = remaining;
                 slot.agg = agg;
             }
-            if is_quit {
-                c.closing = true;
-            }
+        }
+        if is_quit {
+            self.mark_closing(conn_id);
         }
         if targets.is_empty() {
             self.fold(conn_id, seq, Part::Int(0));

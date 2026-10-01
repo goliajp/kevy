@@ -5,7 +5,7 @@ use kevy_index::{IndexSpec, IndexValue, SegmentStats};
 use kevy_store::Store;
 
 use super::args::{KnnArgs, Query, Shape, parse_groups_args};
-use super::wire::{encode_hydration_row, encode_value, peek_hydration};
+use super::wire::{HydrationRow, encode_hydration_row, encode_value, peek_hydration};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
@@ -35,6 +35,12 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
+    run_parsed(ctx, store, &q, verb)
+}
+
+/// [`op_query`] past the parse, for a query whose page size the
+/// caller set (a global index's continuation, `IDX.PART`).
+pub(super) fn run_parsed(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
     // IDX.COUNT applies FILTER (the claused count — the total a
     // claused query's pages would reach, materializing nothing) and
     // refuses every clause it would not apply: SORT/DISTINCT/OFFSET
@@ -46,7 +52,7 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
             return vec![ST_BADARGS];
         }
         if !q.filters.is_empty() {
-            return super::query_claused::run_claused_count(ctx, store, &q);
+            return super::query_claused::run_claused_count(ctx, q);
         }
     }
     // Pure grammar, refused before the segment is consulted: the
@@ -56,20 +62,21 @@ pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb:
         return super::query_claused::clause_chunk(super::query_claused::CURSOR_CLAUSE_CONFLICT);
     }
     if matches!(q.shape, Shape::Verify)
-        && let Some(chunk) = verify_kind_stats(ctx, store, &q.name)
+        && let Some(chunk) = index_runtime::global_verify_chunk(ctx, store, &q.name)
+            .or_else(|| verify_kind_stats(ctx, store, &q.name))
     {
         return chunk;
     }
     if q.has_clauses() {
-        return super::query_claused::run_claused_query(ctx, store, &q);
+        return super::query_claused::run_claused_query(ctx, store, q);
     }
-    run_scalar_query(ctx, store, &q, verb)
+    run_scalar_query(ctx, store, q, verb)
 }
 
 /// Aggregate / ANN / text indexes answer VERIFY with their own stats
 /// (`None` = scalar kind, fall through to the segment path).
 fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
-    let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind))?;
+    let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind()))?;
     // Each kind answers with its own numbers UNDER ITS OWN NAMES. These
     // used to be four bare u64s that the reducer labelled positionally
     // with the scalar audit's vocabulary — a healthy 3-doc text index
@@ -79,11 +86,11 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
     // row also carried two facts in one number (`links +
     // rebuild_recommended`); they travel separately now.
     let res = match kind {
-        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, store, name, |a| {
+        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, name, |a| {
             let st = a.stats();
             (b'a', vec![st.rows, st.approx_bytes, st.excluded, st.groups])
         }),
-        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, store, name, |g| {
+        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, name, |g| {
             let st = g.stats();
             (
                 b'v',
@@ -119,40 +126,43 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
 
 /// Range / Eq / scalar-Verify against this shard's segment.
 fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
-    let res =
-        index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg, win| match q.shape {
-            Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
-                let now = (kevy_store::now_unix_ms() / 1000) as i64;
-                let (min, max) = match q.bounds_for(spec, now) {
-                    Ok(b) => b,
-                    Err(chunk) => return HitsOrChunk::Chunk(chunk),
-                };
-                super::probe_window(ctx, &q.name, win, &min);
-                scalar_range_or_count(q, verb, spec, seg, win, &min, &max)
+    let global = super::global::is_global(ctx, &q.name);
+    let res = index_runtime::with_ready_segment(ctx, &q.name, |spec, seg, win| match q.shape {
+        Shape::Range { .. } | Shape::Eq { .. } | Shape::Where(_) => {
+            let now = (kevy_store::now_unix_ms() / 1000) as i64;
+            let (min, max) = match q.bounds_for(spec, now) {
+                Ok(b) => b,
+                Err(chunk) => return HitsOrChunk::Chunk(chunk),
+            };
+            super::probe_window(ctx, &q.name, win, &min);
+            match scalar_range_or_count(q, verb, spec, seg, win, &min, &max) {
+                HitsOrChunk::Hits(hits) if global => stored_hits_chunk(spec, seg, &hits, q),
+                other => other,
             }
-            // VERIFY answers "does the index still agree with the keyspace?".
-            // The segment cannot be walked and the store re-read at the same time
-            // (`with_ready_segment` holds the store), so snapshot the held
-            // (key, value) pairs here and do the recheck outside — which is what
-            // this arm was always shaped for, except the snapshot was collected,
-            // thrown away with `let _ = (...)`, and the drift it was for never
-            // computed. That left an O(N) walk plus an O(N) allocation per shard
-            // per VERIFY, producing nothing, while `verb_meta` and the docs
-            // advertised a drift statistic the reply did not carry.
-            Shape::Verify => {
-                let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
-                seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
-                HitsOrChunk::Verify {
-                    spec: Box::new(spec.clone()),
-                    entries,
-                    stats: seg.stats(),
-                    window: win.and_then(|w| w.audit(spec.ty)),
-                }
+        }
+        // VERIFY answers "does the index still agree with the keyspace?".
+        // The segment cannot be walked and the store re-read at the same time
+        // (`with_ready_segment` holds the store), so snapshot the held
+        // (key, value) pairs here and do the recheck outside — which is what
+        // this arm was always shaped for, except the snapshot was collected,
+        // thrown away with `let _ = (...)`, and the drift it was for never
+        // computed. That left an O(N) walk plus an O(N) allocation per shard
+        // per VERIFY, producing nothing, while `verb_meta` and the docs
+        // advertised a drift statistic the reply did not carry.
+        Shape::Verify => {
+            let mut entries: Vec<(Vec<u8>, IndexValue)> = Vec::new();
+            seg.each_entry(|k, v| entries.push((k.to_vec(), v.clone())));
+            HitsOrChunk::Verify {
+                spec: Box::new(spec.clone()),
+                entries,
+                stats: seg.stats(),
+                window: win.and_then(|w| w.audit(spec.ty())),
             }
-        });
+        }
+    });
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
-        Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
+        Ok(HitsOrChunk::Hits(hits)) => local_hits_chunk(store, &hits, &q.fields),
         Ok(HitsOrChunk::Verify { spec, entries, stats, window }) => {
             encode_verify_chunk(store, &spec, &entries, &stats, window)
         }
@@ -176,7 +186,7 @@ fn scalar_range_or_count(
 ) -> HitsOrChunk {
     let cold = win.filter(|w| w.has_cold());
     if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
-        let cold_n = match cold.map(|w| w.cold_count(spec.ty, min, max)).transpose() {
+        let cold_n = match cold.map(|w| w.cold_count(spec.ty(), min, max)).transpose() {
             Ok(n) => n.unwrap_or(0),
             Err(_) => return HitsOrChunk::Chunk(vec![ST_NOINDEX]),
         };
@@ -184,9 +194,9 @@ fn scalar_range_or_count(
         chunk.extend_from_slice(&(seg.count(min, max) + cold_n).to_le_bytes());
         return HitsOrChunk::Chunk(chunk);
     }
-    let cursor = q.cursor(spec.ty);
+    let cursor = q.cursor(spec.ty());
     let (hits, _) = seg.range(min, max, cursor.as_ref(), q.limit);
-    match cold.map(|w| w.cold_hits(spec.ty, min, max, cursor.as_ref(), q.limit)).transpose() {
+    match cold.map(|w| w.cold_hits(spec.ty(), min, max, cursor.as_ref(), q.limit)).transpose() {
         Ok(None) => HitsOrChunk::Hits(hits),
         Ok(Some(cold_hits)) => HitsOrChunk::Hits(merge_cold(hits, cold_hits, q.limit)),
         Err(_) => HitsOrChunk::Chunk(vec![ST_NOINDEX]),
@@ -217,24 +227,46 @@ fn merge_cold(
     out
 }
 
-/// Hydration happens OUTSIDE the segment borrow: the hits' rows live
-/// on this shard, plain hash reads.
-fn encode_hits_chunk(
+/// A global index's page: its `FIELDS` come from the partition's stored
+/// values, read while the segment is borrowed.
+fn stored_hits_chunk(
+    spec: &IndexSpec,
+    seg: &kevy_index::Segment,
+    hits: &[(Vec<u8>, IndexValue)],
+    q: &Query,
+) -> HitsOrChunk {
+    let held: Vec<(&IndexValue, &[u8])> = hits.iter().map(|(k, v)| (v, k.as_slice())).collect();
+    HitsOrChunk::Chunk(match super::global::stored_page(spec, seg, &held, &q.fields) {
+        Ok(rows) => encode_hits_chunk(hits, q.fields.len(), &rows),
+        Err(chunk) => chunk,
+    })
+}
+
+/// A local index's page: its hydration rows are read outside the segment
+/// borrow — the hits' rows live on this shard, one batched page of hash
+/// reads (cold rows coalesce into one submission).
+fn local_hits_chunk(
     store: &mut Store,
     hits: &[(Vec<u8>, IndexValue)],
     fields: &[Vec<u8>],
 ) -> Vec<u8> {
+    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
+    encode_hits_chunk(hits, fields.len(), &peek_hydration(store, &keys, fields))
+}
+
+/// The plain hit chunk.
+fn encode_hits_chunk(
+    hits: &[(Vec<u8>, IndexValue)],
+    nfields: usize,
+    rows: &[HydrationRow],
+) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
-    // Hydration rows prefetched as ONE batched page (cold rows
-    // coalesce into one submission), then encoded in hit order.
-    let keys: Vec<&[u8]> = hits.iter().map(|(k, _)| k.as_slice()).collect();
-    let rows = peek_hydration(store, &keys, fields);
     for (i, (k, v)) in hits.iter().enumerate() {
         chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
         chunk.extend_from_slice(k);
         encode_value(&mut chunk, v);
-        encode_hydration_row(&mut chunk, fields.len(), &rows[i]);
+        encode_hydration_row(&mut chunk, nfields, &rows[i]);
     }
     chunk
 }
@@ -248,7 +280,7 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
         return vec![ST_NOINDEX];
     };
     let name = argv.get(1).map(Vec::as_slice).unwrap_or(b"");
-    let Some(spec) = cat.iter().map(|(s, _)| s).find(|s| s.name.as_slice() == name) else {
+    let Some(spec) = cat.iter().map(|(s, _)| s).find(|s| s.name() == name) else {
         return vec![ST_NOINDEX];
     };
     // Dry-run the same parses IDX.QUERY would run — arity/shape errors
@@ -272,8 +304,8 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     if !parsed {
         return vec![ST_BADARGS];
     }
-    let building = index_runtime::segment_building(ctx, store, &spec.name);
-    let entries = kind_entries(ctx, store, spec.kind, &spec.name);
+    let building = index_runtime::segment_building(ctx, spec.name());
+    let entries = kind_entries(ctx, store, spec.kind(), spec.name());
     let mut chunk = vec![ST_OK, u8::from(building)];
     chunk.extend_from_slice(&entries.to_le_bytes());
     chunk.push(shape.first().copied().unwrap_or(b'?').to_ascii_uppercase());
@@ -284,16 +316,16 @@ pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
 fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
     match kind {
         kevy_index::IndexKind::Agg => {
-            index_runtime::with_ready_agg(ctx, store, name, |a| a.rows()).unwrap_or_default()
+            index_runtime::with_ready_agg(ctx, name, |a| a.rows()).unwrap_or_default()
         }
         kevy_index::IndexKind::Ann => {
-            index_runtime::with_ready_ann(ctx, store, name, |g| g.vectors()).unwrap_or_default()
+            index_runtime::with_ready_ann(ctx, name, |g| g.vectors()).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
             index_runtime::with_ready_text_segment(ctx, store, name, |_, t, _, _| t.docs())
                 .unwrap_or_default()
         }
-        _ => index_runtime::with_ready_segment(ctx, store, name, |_, s, _| s.stats().entries)
+        _ => index_runtime::with_ready_segment(ctx, name, |_, s, _| s.stats().entries)
             .unwrap_or_default(),
     }
 }
@@ -306,28 +338,28 @@ pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
     };
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
-        let building = index_runtime::segment_building(ctx, store, &spec.name);
+        let building = index_runtime::segment_building(ctx, spec.name());
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
-        let quad = if spec.kind == kevy_index::IndexKind::Agg {
-            index_runtime::with_ready_agg(ctx, store, &spec.name, |a| {
+        let quad = if spec.kind() == kevy_index::IndexKind::Agg {
+            index_runtime::with_ready_agg(ctx, spec.name(), |a| {
                 let st = a.stats();
                 (st.rows, st.approx_bytes, st.excluded, st.groups)
             })
             .unwrap_or_default()
-        } else if spec.kind == kevy_index::IndexKind::Ann {
-            index_runtime::with_ready_ann(ctx, store, &spec.name, |g| {
+        } else if spec.kind() == kevy_index::IndexKind::Ann {
+            index_runtime::with_ready_ann(ctx, spec.name(), |g| {
                 let st = g.stats();
                 (st.vectors, st.approx_bytes, st.tombstones, st.links)
             })
             .unwrap_or_default()
-        } else if spec.kind == kevy_index::IndexKind::Text {
-            index_runtime::with_ready_text_segment(ctx, store, &spec.name, |_, ts, _, _| {
+        } else if spec.kind() == kevy_index::IndexKind::Text {
+            index_runtime::with_ready_text_segment(ctx, store, spec.name(), |_, ts, _, _| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)
             })
             .unwrap_or_default()
         } else {
-            index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg, _| {
+            index_runtime::with_ready_segment(ctx, spec.name(), |_, seg, _| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
             })
@@ -365,9 +397,6 @@ fn encode_verify_chunk(
 ) -> Vec<u8> {
     // VERIFY's recheck is a bulk sweep — inside the peek scope a
     // cold row costs one pread and never promotes or marks the gate.
-    let mut pattern = spec.prefix.clone();
-    pattern.push(b'*');
-    let row_keys = store.collect_keys(Some(&pattern), None);
     let indexed: std::collections::HashSet<&[u8]> =
         entries.iter().map(|(k, _)| k.as_slice()).collect();
     let (drift, missing) = store.peek_scope(|s| {
@@ -381,8 +410,7 @@ fn encode_verify_chunk(
         // The other direction, from the same classifier TABLE.VERIFY
         // uses — one implementation, so the two faces cannot disagree
         // about what a hole is.
-        let cls =
-            crate::cmd_table_verify::classify_prefix_rows(s, spec, &row_keys, &indexed, window);
+        let cls = crate::cmd_table_verify::classify_prefix_rows(s, spec, &indexed, window);
         (drift, cls[4])
     });
     let mut chunk = vec![ST_OK, b's'];

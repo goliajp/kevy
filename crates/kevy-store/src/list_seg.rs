@@ -15,6 +15,17 @@
 //! Lists at or below [`SEG_PROMOTE`] keep the flat `Value::List`
 //! representation — the segment indirection is only paid where the
 //! whole-value clone could hurt.
+//!
+//! ```
+//! use kevy_store::ListData;
+//! use kevy_store::list_seg::{SEG_PROMOTE, SegListData};
+//! let flat: ListData = (0..SEG_PROMOTE + 1).map(|i| i.to_string().into_bytes()).collect();
+//! let mut list = SegListData::from_flat(flat);
+//! let snapshot = list.clone(); // shares every segment
+//! list.push_back(b"tail".to_vec());
+//! assert_eq!(snapshot.len(), SEG_PROMOTE + 1);
+//! assert_eq!(list.len(), SEG_PROMOTE + 2);
+//! ```
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -25,11 +36,39 @@ use alloc::sync::Arc;
 /// Elements per segment. 16K × 64 B elements ≈ 1 MB — a COW clone of
 /// one segment is ~1 ms worst-case (RFC Phase A: whole-value clone
 /// measured ~50-70 ms per million elements; a segment caps the bound).
+///
+/// ```
+/// use kevy_store::ListData;
+/// use kevy_store::list_seg::{SEG_CAP, SegListData};
+/// let flat: ListData = (0..SEG_CAP + 1).map(|_| b"x".to_vec()).collect();
+/// let list = SegListData::from_flat(flat);
+/// // the element past SEG_CAP starts a second segment; indexing stays global
+/// assert_eq!(list.get(SEG_CAP).map(Vec::as_slice), Some(&b"x"[..]));
+/// ```
 pub const SEG_CAP: usize = 16 * 1024;
 /// Flat `Value::List` length at which a push promotes to `SegList`.
+///
+/// ```
+/// use kevy_store::Store;
+/// use kevy_store::list_seg::SEG_PROMOTE;
+/// let mut s = Store::new();
+/// let items: Vec<&[u8]> = vec![b"v"; SEG_PROMOTE + 1];
+/// assert_eq!(s.rpush(b"l", &items)?, SEG_PROMOTE + 1);
+/// assert_eq!(s.llen(b"l")?, SEG_PROMOTE + 1);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub const SEG_PROMOTE: usize = SEG_CAP;
 
 /// A giant list: a deque of `Arc`-shared segments plus an O(1) length.
+///
+/// ```
+/// use kevy_store::list_seg::SegListData;
+/// let mut list = SegListData::default();
+/// list.push_back(b"b".to_vec());
+/// list.push_front(b"a".to_vec());
+/// let all: Vec<&[u8]> = list.iter().map(Vec::as_slice).collect();
+/// assert_eq!(all, [&b"a"[..], b"b"]);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SegListData {
     segs: VecDeque<Arc<ListData>>,
@@ -40,12 +79,26 @@ impl SegListData {
     #[inline]
     /// Elements across every segment, held as a running count rather than
     /// summed over the deque.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.len(), 2);
+    /// ```
     pub fn len(&self) -> usize {
         self.len
     }
 
     #[inline]
     /// Whether the list holds nothing.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::default();
+    /// assert!(list.is_empty());
+    /// list.push_back(b"a".to_vec());
+    /// assert!(!list.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -57,6 +110,14 @@ impl SegListData {
     }
 
     /// Build from a flat list by moving its elements into segments.
+    ///
+    /// ```
+    /// use kevy_store::ListData;
+    /// use kevy_store::list_seg::SegListData;
+    /// let flat: ListData = [b"a".to_vec(), b"b".to_vec()].into();
+    /// let list = SegListData::from_flat(flat);
+    /// assert_eq!(list.get(1).map(Vec::as_slice), Some(&b"b"[..]));
+    /// ```
     pub fn from_flat(mut flat: ListData) -> Self {
         let mut out = SegListData::default();
         while !flat.is_empty() {
@@ -73,6 +134,14 @@ impl SegListData {
     /// copy-on-write clone is one segment plus the pointer deque — not the
     /// list. A full front segment is not split; a new one is pushed ahead
     /// of it.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::default();
+    /// list.push_front(b"b".to_vec());
+    /// list.push_front(b"a".to_vec());
+    /// assert_eq!(list.get(0).map(Vec::as_slice), Some(&b"a"[..]));
+    /// ```
     pub fn push_front(&mut self, v: Vec<u8>) {
         match self.segs.front_mut() {
             Some(s) if s.len() < SEG_CAP => Arc::make_mut(s).push_front(v),
@@ -86,6 +155,14 @@ impl SegListData {
     }
 
     /// Append, on the same one-segment terms as `push_front`.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::default();
+    /// list.push_back(b"a".to_vec());
+    /// list.push_back(b"b".to_vec());
+    /// assert_eq!(list.get(1).map(Vec::as_slice), Some(&b"b"[..]));
+    /// ```
     pub fn push_back(&mut self, v: Vec<u8>) {
         match self.segs.back_mut() {
             Some(s) if s.len() < SEG_CAP => Arc::make_mut(s).push_back(v),
@@ -100,6 +177,13 @@ impl SegListData {
 
     /// Take from the front. An emptied segment is dropped rather than
     /// kept, so a list that is drained does not keep its segment array.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.pop_front(), Some(b"a".to_vec()));
+    /// assert_eq!(list.len(), 1);
+    /// ```
     pub fn pop_front(&mut self) -> Option<Vec<u8>> {
         let seg = self.segs.front_mut()?;
         let v = Arc::make_mut(seg).pop_front()?;
@@ -111,6 +195,14 @@ impl SegListData {
     }
 
     /// Take from the back, on the same terms as `pop_front`.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.pop_back(), Some(b"b".to_vec()));
+    /// assert_eq!(list.pop_back(), Some(b"a".to_vec()));
+    /// assert_eq!(list.pop_back(), None);
+    /// ```
     pub fn pop_back(&mut self) -> Option<Vec<u8>> {
         let seg = self.segs.back_mut()?;
         let v = Arc::make_mut(seg).pop_back()?;
@@ -138,6 +230,13 @@ impl SegListData {
     /// contains `idx`, so this is O(segments) rather than O(1) — cheap at
     /// the sizes segmentation is for, since a segment holds `SEG_CAP`
     /// elements.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.get(0).map(Vec::as_slice), Some(&b"a"[..]));
+    /// assert_eq!(list.get(2), None);
+    /// ```
     pub fn get(&self, idx: usize) -> Option<&Vec<u8>> {
         if idx >= self.len {
             return None;
@@ -148,6 +247,13 @@ impl SegListData {
 
     /// Replace the element at `idx`; returns the old element. COW cost:
     /// the hit segment only.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.set(1, b"B".to_vec()), b"b".to_vec());
+    /// assert_eq!(list.get(1).map(Vec::as_slice), Some(&b"B"[..]));
+    /// ```
     pub fn set(&mut self, idx: usize, val: Vec<u8>) -> Vec<u8> {
         let (si, off) = self.locate(idx);
         core::mem::replace(&mut Arc::make_mut(&mut self.segs[si])[off], val)
@@ -156,6 +262,14 @@ impl SegListData {
     /// Insert at global `idx` (may equal `len` = append). A segment
     /// grown past `SEG_CAP` by the insert is split in half so repeated
     /// inserts can't re-create the unbounded-clone problem.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::from_flat([b"a".to_vec(), b"c".to_vec()].into());
+    /// list.insert(1, b"b".to_vec());
+    /// let all: Vec<&[u8]> = list.iter().map(Vec::as_slice).collect();
+    /// assert_eq!(all, [&b"a"[..], b"b", b"c"]);
+    /// ```
     pub fn insert(&mut self, idx: usize, val: Vec<u8>) {
         if idx >= self.len {
             self.push_back(val);
@@ -172,6 +286,13 @@ impl SegListData {
     }
 
     /// Global index of the first element equal to `val`.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// assert_eq!(list.position(b"b"), Some(1));
+    /// assert_eq!(list.position(b"z"), None);
+    /// ```
     pub fn position(&self, val: &[u8]) -> Option<usize> {
         let mut base = 0;
         for seg in &self.segs {
@@ -184,13 +305,27 @@ impl SegListData {
     }
 
     /// Every element front to back, flattening the segments.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec()].into());
+    /// let all: Vec<&[u8]> = list.iter().map(Vec::as_slice).collect();
+    /// assert_eq!(all, [&b"a"[..], b"b"]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.segs.iter().flat_map(|s| s.iter())
     }
 
     /// Iterate `count` elements starting at global `start` — seeks to
     /// the segment in O(segments) instead of skip-walking elements.
-    pub fn iter_range(&self, start: usize, count: usize) -> impl Iterator<Item = &Vec<u8>> {
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let list = SegListData::from_flat([b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+    /// let tail: Vec<&[u8]> = list.range(1, 2).map(Vec::as_slice).collect();
+    /// assert_eq!(tail, [&b"b"[..], b"c"]);
+    /// ```
+    pub fn range(&self, start: usize, count: usize) -> impl Iterator<Item = &Vec<u8>> {
         let (si, off) = if start >= self.len { (self.segs.len(), 0) } else { self.locate(start) };
         self.segs.iter().skip(si).flat_map(|s| s.iter()).skip(off).take(count)
     }
@@ -199,6 +334,17 @@ impl SegListData {
     /// (`count >= 0` head-first, `< 0` tail-first, `0` = all). Only
     /// segments containing a match are COW-cloned. Returns
     /// `(removed, weight_delta)`.
+    ///
+    /// ```
+    /// use kevy_store::list_item_weight;
+    /// use kevy_store::list_seg::SegListData;
+    /// let flat = [b"x".to_vec(), b"y".to_vec(), b"x".to_vec()].into();
+    /// let mut list = SegListData::from_flat(flat);
+    /// let (removed, delta) = list.remove_occurrences(b"x", -1);
+    /// assert_eq!(removed, 1);
+    /// assert_eq!(delta, -(list_item_weight(1) as i64));
+    /// assert_eq!(list.position(b"x"), Some(0)); // tail-first: the head one survives
+    /// ```
     pub fn remove_occurrences(&mut self, val: &[u8], count: i64) -> (usize, i64) {
         let limit = match count {
             0 => usize::MAX,
@@ -249,6 +395,15 @@ impl SegListData {
     /// Whole segments outside the range are dropped WITHOUT cloning —
     /// their elements are walked read-only for the weight delta, then
     /// the segment Arc is released. Returns the (negative) weight delta.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let flat = [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into();
+    /// let mut list = SegListData::from_flat(flat);
+    /// assert!(list.trim_to(1, 1) < 0);
+    /// let kept: Vec<&[u8]> = list.iter().map(Vec::as_slice).collect();
+    /// assert_eq!(kept, [&b"b"[..]]);
+    /// ```
     pub fn trim_to(&mut self, start: usize, stop: usize) -> i64 {
         let mut delta = 0i64;
         // Drop from the front: whole segments below `start`.
@@ -295,6 +450,13 @@ impl SegListData {
 
     /// Empty the list, returning the (negative) weight delta. Read-only
     /// walk for accounting; shared segments are released, not cloned.
+    ///
+    /// ```
+    /// use kevy_store::list_seg::SegListData;
+    /// let mut list = SegListData::from_flat([b"a".to_vec()].into());
+    /// assert!(list.clear() < 0);
+    /// assert!(list.is_empty());
+    /// ```
     pub fn clear(&mut self) -> i64 {
         let delta = -(self.iter().map(|v| list_item_weight(v.len()) as i64).sum::<i64>());
         self.segs.clear();

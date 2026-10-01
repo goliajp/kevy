@@ -130,20 +130,20 @@ When the embedding code already has a `Store`, skip the URL
 indirection and talk to the bus directly:
 
 ```rust
-use kevy_embedded::{Config, PubsubFrame, Store};
+use kevy_embedded::{Config, PubsubEvent, Store};
 
 let store = Store::open(Config::default().with_ttl_reaper_manual())?;
 
 // Subscriber owns the receive queue.
 let sub = store.subscribe(&[b"jobs"]);
-let _ack = sub.recv()?; // PubsubFrame::Subscribe
+let _ack = sub.recv()?; // PubsubEvent::Subscribe
 
 // Any clone of `store` reaches the same bus.
 let writer = store.clone();
 assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
 
 match sub.recv()? {
-    PubsubFrame::Message { channel, payload } => {
+    PubsubEvent::Message { channel, payload } => {
         assert_eq!(channel, b"jobs");
         assert_eq!(payload, b"compute-pi");
     }
@@ -259,10 +259,10 @@ can reach the same backing `Store`, so `Subscriber::connect_channels` rejects
 it with `KevyError::Unsupported`. Use `mem://<some-name>` whenever
 you intend to publish.
 
-`rediss://`, `kevys://`, and `redis://user:pass@…` are rejected for
-the same reason: kevy ships without TLS or `AUTH`. Front the socket
-with stunnel + IP allowlist at the network boundary if you need
-either.
+`rediss://` and `redis://user:pass@…` are rejected too: kevy ships
+without TLS or `AUTH`. Front the socket with stunnel + IP allowlist at
+the network boundary if you need either. `kevys://` subscribes over the
+server's encrypted client port ([encrypted-links.md](encrypted-links.md)).
 
 The `mem://<name>` and `file:///` registries are **per-process**:
 two unrelated OS processes that open the same name see two

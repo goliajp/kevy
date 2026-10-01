@@ -12,6 +12,17 @@
 /// ```
 pub const BM25_K1: f64 = 1.2;
 /// Length normalization strength.
+///
+/// At 0.75 a match in a short document outranks the same match diluted
+/// by a long one:
+///
+/// ```
+/// assert_eq!(kevy_text::BM25_B, 0.75);
+/// let mut seg = kevy_text::TextSegment::new();
+/// seg.apply(b"short", Some(b"rust engine"));
+/// seg.apply(b"long", Some(b"rust engine with many more words in it"));
+/// assert_eq!(seg.matches(b"rust", 2)[0].key, b"short");
+/// ```
 pub const BM25_B: f64 = 0.75;
 
 /// One term's contribution for one document.

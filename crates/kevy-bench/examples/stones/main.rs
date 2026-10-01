@@ -3,8 +3,7 @@
 //! Exercises the public API of the high-blast-radius stone crates
 //! (kevy-map / kevy-ring / kevy-config / kevy-text / kevy-store /
 //! kevy-vector, plus kevy-alloc from the v5 experiment) with fixed-seed
-//! data and reports median ± stdev per operation. Numbers feed
-//! `bench/STONE-BENCH.md`.
+//! data and reports median ± stdev per operation.
 //!
 //! ```text
 //! cargo run -p kevy-bench --release --example stones            # all six
@@ -15,6 +14,8 @@
 //! N ≥ 5 samples after an untimed warm-up pass; stdev is the sample
 //! standard deviation over the same samples. Absolute ns drift with host
 //! load — treat cross-machine numbers as separate baselines.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 mod rng;
 mod s_alloc;

@@ -12,16 +12,153 @@ use crate::aof::Aof;
 /// sluggish for long-lived instances: a 2.2 GB log must reach 4.4 GB before
 /// 100% growth fires, and a real deployment rode that to 12-second replays
 /// and an OOM loop — the absolute and time rules exist to cap exactly that.
-#[derive(Debug, Clone, Copy)]
+///
+/// The default has every rule off: the log is never compacted on its own.
+///
+/// ```
+/// use kevy_persist::RewritePolicy;
+///
+/// let p = RewritePolicy::default().with_pct(100).with_min_size(64 << 20);
+/// // a 1 MiB log reaches 64 MiB only by growing past any baseline
+/// assert!(!p.baseline_matters(1 << 20));
+/// assert!(p.baseline_matters(48 << 20));
+/// assert!(p.with_interval_secs(3600).baseline_matters(0));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct RewritePolicy {
     /// Growth percentage past the last-rewrite baseline (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "pct", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let doubled = RewritePolicy::default().with_pct(100);
+    /// assert!(!aof.rewrite_due(doubled), "a fresh log has not grown");
+    /// while aof.size_bytes() < 2 * aof.size_at_last_rewrite() {
+    ///     aof.append(&set)?;
+    /// }
+    /// assert!(aof.rewrite_due(doubled));
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub pct: u32,
     /// Minimum size before the growth rule may fire.
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "min", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// for _ in 0..10 {
+    ///     aof.append(&set)?;
+    /// }
+    /// let growth = RewritePolicy::default().with_pct(100);
+    /// assert!(aof.rewrite_due(growth));
+    /// assert!(!aof.rewrite_due(growth.with_min_size(1 << 20)), "still too small to bother");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub min_size: u64,
     /// Absolute size cap (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "bytes", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let cap = RewritePolicy::default().with_bytes(1024);
+    /// assert!(!aof.rewrite_due(cap));
+    /// for _ in 0..10 {
+    ///     aof.append(&set)?;
+    /// }
+    /// assert!(aof.rewrite_due(cap), "past 1 KiB, whatever the growth");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub bytes: u64,
     /// Rewrite at least this often while the log grows (0 = rule off).
+    ///
+    /// ```
+    /// use kevy_persist::{Aof, Argv, Fsync, RewritePolicy};
+    ///
+    /// let path = std::env::temp_dir().join(format!("policy-{}-doc-{}.aof", "interval", std::process::id()));
+    /// let mut aof = Aof::open(&path, Fsync::No)?;
+    /// let set = Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 100]]);
+    /// let hourly = RewritePolicy::default().with_interval_secs(3600);
+    /// aof.append(&set)?;
+    /// assert!(!aof.rewrite_due(hourly), "grown, but not yet an hour old");
+    /// # drop(aof);
+    /// # std::fs::remove_file(&path)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub interval_secs: u64,
+}
+
+impl RewritePolicy {
+    /// Set [`RewritePolicy::pct`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_pct(50).pct, 50);
+    /// ```
+    #[must_use]
+    pub fn with_pct(mut self, pct: u32) -> Self {
+        self.pct = pct;
+        self
+    }
+
+    /// Set [`RewritePolicy::min_size`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_min_size(1 << 20).min_size, 1 << 20);
+    /// ```
+    #[must_use]
+    pub fn with_min_size(mut self, bytes: u64) -> Self {
+        self.min_size = bytes;
+        self
+    }
+
+    /// Set [`RewritePolicy::bytes`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_bytes(1 << 30).bytes, 1 << 30);
+    /// ```
+    #[must_use]
+    pub fn with_bytes(mut self, bytes: u64) -> Self {
+        self.bytes = bytes;
+        self
+    }
+
+    /// Set [`RewritePolicy::interval_secs`].
+    ///
+    /// ```
+    /// assert_eq!(kevy_persist::RewritePolicy::default().with_interval_secs(60).interval_secs, 60);
+    /// ```
+    #[must_use]
+    pub fn with_interval_secs(mut self, secs: u64) -> Self {
+        self.interval_secs = secs;
+        self
+    }
+
+    /// Whether the growth-rule baseline can change any decision for a log
+    /// that is `len` bytes long at open. It cannot when the staleness rule
+    /// is off and `len` is so far under `min_size` that growth past the
+    /// baseline is already implied by reaching `min_size`: the rule then
+    /// fires at `min_size` whatever the baseline, provided the baseline is
+    /// at most `len`. Open paths skip the O(keys) baseline estimate then.
+    pub fn baseline_matters(&self, len: u64) -> bool {
+        self.interval_secs > 0
+            || (self.pct > 0
+                && len.saturating_mul(100u64.saturating_add(u64::from(self.pct)))
+                    > self.min_size.saturating_mul(100))
+    }
 }
 
 impl Aof {

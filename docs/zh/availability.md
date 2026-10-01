@@ -38,7 +38,7 @@ peers           = "n1@10.0.0.1:6204:6004,n2@10.0.0.2:6204:6004,n3@10.0.0.3:6204:
 
 成员关系是**静态的**（运维方声明的 `peers` 表）；角色是**动态的**（选举在这张表内部挪动主节点）。多数派规模是 `N/2 + 1`——两节点扛不住任何故障（任意一台宕机都会把幸存者锁成只读），所以需要切主的部署至少三节点。
 
-peer 请写成扩展语法 `id@host:elect_port:client_port`：选举流量走 elect 端口，切换上游和 `-MISDIRECTED` 回复用客户端端口。旧式的两字段写法会假定客户端端口等于 elect 端口，这基本不会是你要的效果。
+peer 请写成扩展语法 `id@host:elect_port:client_port`：选举流量走 elect 端口，切换上游和 `-MISDIRECTED` 回复用客户端端口。旧式的两字段写法会假定客户端端口等于 elect 端口，这基本不会是你要的效果。如果某个节点的 `[replication].listen_port_base` 不是默认值（客户端端口 + 10000），就把它写成第四段：`id@host:elect_port:client_port:repl_port_base`，选举后跟随它的节点才会连到正确的端口。
 
 **写权限只来自选举。**在 elect 多数派里，`[replication] role = "primary"` 只是一个初始“偏好”。每个配置为 primary 的多数派成员都以**只读**状态启动，扣住写入直到赢得选举——冷启动也不例外，集群要先付一轮选举（几秒钟）才接受第一笔写入。正是这道无条件钳制，挡住了经典的“重启后的空主节点抹掉整个集群”事故：一个崩溃且丢了盘的节点，永远不可能只凭配置就带着写权限回来。
 
@@ -116,7 +116,7 @@ FAILOVER ABORT
 
 `FAILOVER ABORT` 在提升发生之前的任何时刻都能清除静默；后台线程发现后就收手。如果目标在 `TIMEOUT`（默认 10000 ms）内一直追不平，静默回滚，节点恢复主节点职责——一次失败的尝试只损失一小段写可用性，别无代价。
 
-还有一条寻址约束：交接会把上游切到“客户端端口 + 10000”，所以目标必须用默认的 `listen_port_base` 运行（见下文端口约定）。
+交接时从目标的 `INFO replication` 读出 `repl_port_base`，所以目标的 `listen_port_base` 可以是任意值。
 
 ### 崩溃：多数派选举
 
@@ -159,7 +159,7 @@ FAILOVER ABORT
 | 复制 | `listen_port_base + shard_i`；默认 base = 客户端端口 + 10000 | `nshards` 个连续端口；自 v3.15 起**副本也绑定这个监听**（提升对称性） |
 | 选举 | `elect_port_base`；默认 = 客户端端口 + 200 | 每节点一个控制面监听 |
 
-自动切换上游（选举）和 `FAILOVER` 都假定“客户端端口 + 10000”的复制约定——凡是启用切主的部署，`listen_port_base` 一律留默认值。同一台主机跑多个实例时，客户端端口至少间隔 `nshards`，否则实例之间的复制端口段会冲突。
+`FAILOVER` 直接向目标要它的复制端口基址；选举后的自动切换从 peer 的第四段读取，没写第四段时按“客户端端口 + 10000”推算。同一台主机跑多个实例时，客户端端口至少间隔 `nshards`，否则实例之间的复制端口段会冲突。
 
 ### 配置键
 
@@ -192,6 +192,7 @@ FAILOVER ABORT
 | `slave_read_only` | `-READONLY` 闸门状态 |
 | `slave_repl_offset` | 已应用的流位置 |
 | `slave_lag_frames` | 主节点宣告的尾部减去已应用位置——**0 表示已追平** |
+| `repl_port_base` | 本节点接受 replica 连接的端口基址（`[replication].listen_port_base`，默认是客户端端口 + 10000）；主节点和 replica 都会报告 |
 
 **主节点**上的 `INFO replication`：
 

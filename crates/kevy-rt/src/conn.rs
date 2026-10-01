@@ -82,6 +82,9 @@ pub(crate) struct Conn {
     /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for
     /// wrong-shard single-key commands instead of transparent forwarding.
     pub(crate) cluster: bool,
+    /// Relayed by the encrypted front end (named by `CLIENT SETPEER`):
+    /// cluster replies advertise encrypted ports to it.
+    pub(crate) relayed: bool,
     /// Dedup flag for `Shard::dirty`. PUBLISH fan-out at
     /// N subscribers × M pipelined publishes used to push `N×M` ids onto
     /// the dirty list, then `flush_dirty` paid `N×M` `HashMap::get_mut`
@@ -164,7 +167,62 @@ impl Conn {
             proto: RespVersion::default(),
             blocked: false,
             cluster: false,
+            relayed: false,
             pending_write: false,
         }
+    }
+}
+
+/// The conn `conn_id`, reached through `hint` (the slot the last lookup
+/// found) when that slot still holds it, else by one probe that refreshes
+/// `hint`. A pipelined batch touches the same conn several times per
+/// command, so after its first command every lookup is a slot read and a
+/// key compare instead of a hash probe. The key compare keeps a stale hint
+/// (the conn closed, the table grew) from ever answering for another conn.
+/// Takes the two fields rather than the shard so a caller keeps its other
+/// fields borrowable.
+#[inline]
+pub(crate) fn conn_at<'a, T>(
+    conns: &'a mut kevy_map::KevyMap<u64, T>,
+    hint: &mut usize,
+    conn_id: u64,
+) -> Option<&'a mut T> {
+    let slot = if conns.slot(*hint).is_some_and(|(k, _)| *k == conn_id) {
+        *hint
+    } else {
+        let s = conns.find_slot(&conn_id)?;
+        *hint = s;
+        s
+    };
+    conns.slot_mut(slot).map(|(_, c)| c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conn_at;
+
+    #[test]
+    fn a_stale_hint_never_answers_for_another_conn() {
+        let mut conns = kevy_map::KevyMap::new();
+        for id in 0..64u64 {
+            conns.insert(id, id * 10);
+        }
+        let mut hint = 0;
+        assert_eq!(conn_at(&mut conns, &mut hint, 7).copied(), Some(70));
+        let seven = hint;
+        assert_eq!(conn_at(&mut conns, &mut hint, 7).copied(), Some(70), "hint hit");
+        assert_eq!(conn_at(&mut conns, &mut hint, 9).copied(), Some(90), "other conn probes");
+        assert_ne!(hint, seven);
+        conns.remove(&9);
+        assert_eq!(conn_at(&mut conns, &mut hint, 9), None, "a closed conn is gone");
+        hint = seven;
+        conns.remove(&7);
+        conns.insert(1000, 1);
+        assert_eq!(conn_at(&mut conns, &mut hint, 7), None, "its slot may hold another conn");
+        for id in 2000..2600u64 {
+            conns.insert(id, id);
+        }
+        assert_eq!(conn_at(&mut conns, &mut hint, 1000).copied(), Some(1), "after a grow");
+        assert_eq!(conn_at(&mut conns, &mut hint, u64::MAX), None);
     }
 }

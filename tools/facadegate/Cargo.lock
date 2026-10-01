@@ -19,14 +19,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
 name = "kevy-client"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-embedded",
  "kevy-hash",
@@ -36,24 +36,41 @@ dependencies = [
 
 [[package]]
 name = "kevy-client-async"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-hash",
+ "kevy-noise",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-sys",
  "tokio",
 ]
 
 [[package]]
 name = "kevy-compress"
-version = "6.4.0"
+version = "7.0.0"
+
+[[package]]
+name = "kevy-config"
+version = "7.0.0"
+dependencies = [
+ "kevy-persist",
+ "kevy-store",
+]
+
+[[package]]
+name = "kevy-crypto"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-embedded"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
+ "kevy-config",
+ "kevy-crypto",
  "kevy-hash",
  "kevy-index",
+ "kevy-noise",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
@@ -61,36 +78,51 @@ dependencies = [
  "kevy-sys",
  "kevy-text",
  "kevy-vector",
+ "kevy-verbs",
  "kevy-window",
 ]
 
 [[package]]
+name = "kevy-geo"
+version = "7.0.0"
+
+[[package]]
 name = "kevy-hash"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-index"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
+ "kevy-hash",
+ "kevy-text",
  "kevy-time",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-map"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
 ]
 
 [[package]]
-name = "kevy-persist"
-version = "6.4.0"
+name = "kevy-noise"
+version = "7.0.0"
 dependencies = [
+ "kevy-crypto",
+]
+
+[[package]]
+name = "kevy-persist"
+version = "7.0.0"
+dependencies = [
+ "kevy-replicate",
  "kevy-resp",
  "kevy-store",
  "kevy-sys",
@@ -98,39 +130,43 @@ dependencies = [
 
 [[package]]
 name = "kevy-ranktree"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-replicate"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-bytes",
 ]
 
 [[package]]
 name = "kevy-resp-client"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
+ "kevy-noise",
  "kevy-resp",
+ "kevy-sys",
 ]
 
 [[package]]
 name = "kevy-seg"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-sys",
 ]
 
 [[package]]
 name = "kevy-store"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",
@@ -142,23 +178,32 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-text"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-time"
-version = "6.4.0"
+version = "7.0.0"
 
 [[package]]
 name = "kevy-vector"
-version = "6.4.0"
+version = "7.0.0"
+
+[[package]]
+name = "kevy-verbs"
+version = "7.0.0"
+dependencies = [
+ "kevy-geo",
+ "kevy-resp",
+ "kevy-store",
+]
 
 [[package]]
 name = "kevy-vlog"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-compress",
  "kevy-sys",
@@ -166,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-window"
-version = "6.4.0"
+version = "7.0.0"
 dependencies = [
  "kevy-index",
  "kevy-seg",

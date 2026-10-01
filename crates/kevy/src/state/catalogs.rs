@@ -54,7 +54,58 @@ pub(crate) struct CatalogState {
     /// unrelated catalog changes. The served-query path pays one
     /// uncontended read-lock and two relaxed stores.
     usage: RwLock<HashMap<Vec<u8>, Arc<UsageCell>>>,
+    /// Per global index, which incarnation of it the catalog holds: a new
+    /// number whenever its spec or partitioning changes, or it is dropped
+    /// and created again. Every message between shards carries it, so one
+    /// sent for an earlier incarnation is never applied to a later one.
+    incarnations: Mutex<(u64, HashMap<Vec<u8>, u64>)>,
+    /// Where the catalog stands as recorded state.
+    pub(crate) record: crate::catalog_record::RecordState,
+    /// Held while the catalogs are installed or read as one: a change
+    /// commits only onto the catalogs it was computed from. Taken by
+    /// catalog changes and by the recording of them, never on a command's
+    /// data path, which reads the generations and the installed `Arc`s.
+    /// After `record.at` when both are held.
+    writer: Mutex<()>,
 }
+
+/// The catalogs at one moment, and the generation they carry: what a
+/// catalog change is computed from.
+pub(crate) struct CatalogBase {
+    pub(crate) index: Option<Arc<Catalog>>,
+    pub(crate) view: Option<Arc<ViewCatalog>>,
+    pub(crate) table: Option<Arc<TableCatalog>>,
+    generation: u64,
+}
+
+impl CatalogBase {
+    /// A copy of the index catalog to change.
+    pub(crate) fn index_owned(&self) -> Catalog {
+        self.index.as_deref().cloned().unwrap_or_default()
+    }
+
+    /// A copy of the view catalog to change.
+    pub(crate) fn view_owned(&self) -> ViewCatalog {
+        self.view.as_deref().cloned().unwrap_or_default()
+    }
+
+    /// A copy of the table catalog to change.
+    pub(crate) fn table_owned(&self) -> TableCatalog {
+        self.table.as_deref().cloned().unwrap_or_default()
+    }
+}
+
+/// The catalogs a change installs; `None` leaves that one as it is.
+#[derive(Default)]
+pub(crate) struct CatalogChange {
+    pub(crate) index: Option<Catalog>,
+    pub(crate) view: Option<ViewCatalog>,
+    pub(crate) table: Option<TableCatalog>,
+}
+
+/// One declared path's `(name, hits, last_hit_s, declared_s, min_margin)`;
+/// `min_margin` is `None` until a windowed query has probed the path.
+pub(crate) type UsageRow = (Vec<u8>, u64, i64, i64, Option<i64>);
 
 impl CatalogState {
     pub(crate) fn new() -> Self {
@@ -68,7 +119,55 @@ impl CatalogState {
             table_gen: AtomicU64::new(0),
             advise: Mutex::new(AdviseLog::new()),
             usage: RwLock::new(HashMap::new()),
+            incarnations: Mutex::new((0, HashMap::new())),
+            record: crate::catalog_record::RecordState::default(),
+            writer: Mutex::new(()),
         }
+    }
+
+    /// How many installs the catalogs have seen: moves on any change and
+    /// never goes back.
+    pub(crate) fn generation(&self) -> u64 {
+        self.index_gen().wrapping_add(self.view_gen()).wrapping_add(self.table_gen())
+    }
+
+    /// Hold the catalogs still: no change commits while the guard lives.
+    pub(crate) fn hold(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.writer.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The incarnation of global index `name` in the installed catalog
+    /// (0 for a local or unknown one).
+    pub(crate) fn incarnation(&self, name: &[u8]) -> u64 {
+        let incs = self.incarnations.lock().unwrap_or_else(PoisonError::into_inner);
+        incs.1.get(name).copied().unwrap_or(0)
+    }
+
+    /// Number the global indexes of catalog `new`: one unchanged since `old`
+    /// keeps its incarnation, any other gets a fresh one.
+    fn number_incarnations(&self, old: Option<&Catalog>, new: &Catalog) {
+        let mut incs = self.incarnations.lock().unwrap_or_else(PoisonError::into_inner);
+        let (next, prev) = &mut *incs;
+        let mut map = HashMap::new();
+        for (spec, _) in new.iter() {
+            let part = new.partitioning(spec.name());
+            if !part.is_global() {
+                continue;
+            }
+            let same = old.is_some_and(|o| {
+                o.get(spec.name()).is_some_and(|(s, _)| s == spec)
+                    && o.partitioning(spec.name()) == part
+            });
+            let inc = match (same, prev.get(spec.name())) {
+                (true, Some(&inc)) => inc,
+                _ => {
+                    *next += 1;
+                    *next
+                }
+            };
+            map.insert(spec.name().to_vec(), inc);
+        }
+        *prev = map;
     }
 
     /// The usage cell for a declared path (None = not declared).
@@ -76,17 +175,15 @@ impl CatalogState {
         self.usage.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
 
-    /// Every declared path's `(name, hits, last_hit_s, declared_s,
-    /// min_margin)`.
-    pub(crate) fn usage_snapshot(&self) -> Vec<(Vec<u8>, u64, i64, i64, i64)> {
+    /// Every declared path's usage row.
+    pub(crate) fn usage_snapshot(&self) -> Vec<UsageRow> {
         self.usage
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|(n, c)| {
                 let (hits, last, declared) = c.read();
-                let margin = c.min_margin.load(std::sync::atomic::Ordering::Relaxed);
-                (n.clone(), hits, last, declared, margin)
+                (n.clone(), hits, last, declared, c.min_margin())
             })
             .collect()
     }
@@ -196,13 +293,51 @@ impl CatalogState {
 }
 
 impl RuntimeState {
+    /// The catalogs as one consistent base to compute a change from.
+    pub(crate) fn catalog_base(&self) -> CatalogBase {
+        let c = &self.catalogs;
+        let _held = c.hold();
+        CatalogBase {
+            index: c.index(),
+            view: c.view(),
+            table: c.table(),
+            generation: c.generation(),
+        }
+    }
+
+    /// Install `change` if the catalogs are still the ones `base` saw, and
+    /// record it; `false` when another change landed first, and the caller
+    /// computes its change again from a new base. Two changes computed
+    /// from the same catalogs can then never both install, the later
+    /// dropping the earlier.
+    pub(crate) fn commit_catalogs(&self, base: &CatalogBase, change: CatalogChange) -> bool {
+        crate::catalog_record::commit(self, base.generation, change)
+    }
+
+    /// Install what `change` holds: the index catalog first, so a table
+    /// or view never names an index the shards cannot see yet.
+    pub(crate) fn install_catalogs(&self, change: CatalogChange) {
+        if let Some(c) = change.index {
+            self.install_index_catalog(c);
+        }
+        if let Some(c) = change.table {
+            self.install_table_catalog(c);
+        }
+        if let Some(c) = change.view {
+            self.install_view_catalog(c);
+        }
+    }
+
     /// Swap in a new index catalog (IDX.CREATE / IDX.DROP / sidecar
     /// boot). Bumps the generation (shards refresh their segment
     /// lists lazily), then the control epoch (writer protocol step ②
     /// — every shard's gate bits re-derive `IDX_NONEMPTY` on their
     /// next command).
     pub(crate) fn install_index_catalog(&self, c: Catalog) {
-        let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name.clone()).collect();
+        let names: Vec<Vec<u8>> = c.iter().map(|(s, _)| s.name().to_vec()).collect();
+        // numbered before the generation moves, so a shard that sees the
+        // new catalog reads the incarnations that go with it
+        self.catalogs.number_incarnations(self.catalogs.index().as_deref(), &c);
         *self.catalogs.index.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.index_gen.fetch_add(1, Ordering::Release);
         self.bump_control_epoch();
@@ -220,9 +355,62 @@ impl RuntimeState {
 
     /// Swap in a new table catalog, and tell the shards a declaration
     /// changed so the packing backfill picks up the rows that preceded it.
+    /// Moves the control epoch like the other installs: `TABLE_NONEMPTY`
+    /// derives from this catalog, and a shard that re-read its gate after
+    /// the index catalog's install would otherwise keep a gate without it.
     pub(crate) fn install_table_catalog(&self, c: TableCatalog) {
         *self.catalogs.table.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(c));
         self.catalogs.table_gen.fetch_add(1, Ordering::Release);
+        self.bump_control_epoch();
         self.catalogs.advise_clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use kevy_index::{IndexKind, IndexSpec, Partitioning, ValType, order_key};
+
+    use super::*;
+
+    fn with(global: &[&[u8]], split: &[u8]) -> Catalog {
+        let mut c = Catalog::new();
+        for name in global {
+            let spec =
+                IndexSpec::builder(name.to_vec(), b"u:".to_vec(), IndexKind::Range, ValType::I64)
+                    .with_field(b"age".to_vec())
+                    .build()
+                    .unwrap();
+            let splits = vec![order_key(ValType::I64, split).unwrap()];
+            c.create_with(spec, Partitioning::Global { splits }).unwrap();
+        }
+        c
+    }
+
+    #[test]
+    fn an_index_keeps_its_incarnation_only_while_it_stays_the_same() {
+        let cats = CatalogState::new();
+        let number = |old: Option<&Catalog>, new: &Catalog| cats.number_incarnations(old, new);
+        let first = with(&[b"a", b"b"], b"10");
+        number(None, &first);
+        let (a, b) = (cats.incarnation(b"a"), cats.incarnation(b"b"));
+        assert!(a > 0 && b > 0 && a != b);
+        // another index created: these two unchanged
+        let more = with(&[b"a", b"b", b"c"], b"10");
+        number(Some(&first), &more);
+        assert_eq!((cats.incarnation(b"a"), cats.incarnation(b"b")), (a, b));
+        // split points moved (a rebuild): every one of them is new
+        let moved = with(&[b"a", b"b", b"c"], b"20");
+        number(Some(&more), &moved);
+        assert!(cats.incarnation(b"a") > a && cats.incarnation(b"b") > b);
+        // dropped, then created the same again: new
+        let (a2, dropped) = (cats.incarnation(b"a"), with(&[b"b", b"c"], b"20"));
+        number(Some(&moved), &dropped);
+        assert_eq!(cats.incarnation(b"a"), 0);
+        number(Some(&dropped), &moved);
+        assert!(cats.incarnation(b"a") > a2);
+    }
+}
+
+#[cfg(test)]
+#[path = "catalogs_tests.rs"]
+mod recording_tests;

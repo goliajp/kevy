@@ -86,7 +86,7 @@ pub(crate) fn drain_start(
     data_gen: &mut u64,
 ) -> DrainStart {
     let from_offset = client.expected_offset();
-    let ack_gen = client.primary_gen_at_handshake();
+    let ack_gen = client.primary_at_handshake().generation;
     if from_offset == 0 {
         *data_gen = ack_gen;
     }
@@ -121,11 +121,11 @@ pub(crate) fn drain_client(
         drain_start(client, progress, data_gen);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                progress.record_ping(runner_slot, generation, primary_offset, from_offset);
+            Some(Ok(ReplicaEvent::Ping(tail))) => {
+                progress.record_ping(runner_slot, tail.generation, tail.offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
-                if !gen_still_matches(generation, ack_gen) {
+                if !gen_still_matches(tail.generation, ack_gen) {
                     return from_offset;
                 }
             }
@@ -166,7 +166,9 @@ fn forward_event(
     sender: &ReplicaInboxSender,
 ) -> Result<(), ()> {
     let gate = loading.observe(&event);
-    let mut apply = event_to_apply(event, from_offset);
+    let Some(mut apply) = event_to_apply(event, from_offset) else {
+        return Ok(());
+    };
     if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
         *g = gate;
     }
@@ -204,24 +206,24 @@ pub(crate) fn gen_still_matches(heartbeat_gen: u64, ack_gen: u64) -> bool {
     false
 }
 
-fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
+/// The shard-side apply for one wire event; `None` for an event that
+/// changes no shard state (a heartbeat, which the drain loops consume
+/// before this, or an event this runner cannot name).
+fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> Option<ReplicaApply> {
     match event {
-        // Pings are consumed by the drain loops before reaching here;
-        // BY ARGUMENT unreachable, so fall back to a harmless no-op
-        // apply (SnapshotBegin resets nothing on its own).
-        ReplicaEvent::Ping { .. } => ReplicaApply::SnapshotBegin,
-        ReplicaEvent::SnapshotBegin => ReplicaApply::SnapshotBegin,
-        ReplicaEvent::SnapshotChunk(bytes) => ReplicaApply::SnapshotChunk(bytes),
+        ReplicaEvent::SnapshotBegin => Some(ReplicaApply::SnapshotBegin),
+        ReplicaEvent::SnapshotChunk(bytes) => Some(ReplicaApply::SnapshotChunk(bytes)),
         ReplicaEvent::SnapshotEnd { ack_offset } => {
             *from_offset = ack_offset;
             // The caller attaches the loading gate — this fn is a
             // pure wire→apply shape map.
-            ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
+            Some(ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None })
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
-            ReplicaApply::Frame { offset: frame.offset, argv: frame.argv }
+            Some(ReplicaApply::Frame { offset: frame.offset, argv: frame.argv })
         }
+        _ => None,
     }
 }
 
@@ -263,7 +265,7 @@ mod tests {
     fn event_to_apply_snapshot_begin_passthrough() {
         let mut off = 7;
         let out = event_to_apply(ReplicaEvent::SnapshotBegin, &mut off);
-        assert!(matches!(out, ReplicaApply::SnapshotBegin));
+        assert!(matches!(out, Some(ReplicaApply::SnapshotBegin)));
         assert_eq!(off, 7, "SnapshotBegin must not touch the offset");
     }
 
@@ -272,7 +274,7 @@ mod tests {
         let mut off = 0;
         let out = event_to_apply(ReplicaEvent::SnapshotEnd { ack_offset: 42 }, &mut off);
         match out {
-            ReplicaApply::SnapshotEnd { ack_offset, .. } => assert_eq!(ack_offset, 42),
+            Some(ReplicaApply::SnapshotEnd { ack_offset, .. }) => assert_eq!(ack_offset, 42),
             other => panic!("unexpected: {other:?}"),
         }
         assert_eq!(off, 42, "SnapshotEnd must jump from_offset to ack_offset");
@@ -281,10 +283,30 @@ mod tests {
     #[test]
     fn event_to_apply_frame_advances_offset_by_one() {
         let mut off = 3;
-        let frame =
-            kevy_replicate::replica::DecodedFrame { offset: 9, argv: kevy_rt::Argv::default() };
+        let frame = kevy_replicate::replica::DecodedFrame::new(9, kevy_rt::Argv::default());
         let out = event_to_apply(ReplicaEvent::Frame(frame), &mut off);
-        assert!(matches!(out, ReplicaApply::Frame { offset: 9, .. }));
+        assert!(matches!(out, Some(ReplicaApply::Frame { offset: 9, .. })));
         assert_eq!(off, 10, "Frame must advance to offset + 1");
+    }
+
+    #[test]
+    fn event_to_apply_ping_applies_nothing() {
+        let mut off = 5;
+        let ping = ReplicaEvent::Ping(kevy_replicate::feed::FeedPosition::new(1, 9));
+        assert!(event_to_apply(ping, &mut off).is_none());
+        assert_eq!(off, 5, "a heartbeat must not move the offset");
+    }
+
+    #[test]
+    fn an_event_with_nothing_to_apply_sends_nothing() {
+        let (tx, rx) = kevy_rt::replica_inbox_pair();
+        drop(rx);
+        let mut loading = LoadingGuard::new(Arc::new(ReplicaProgress::default()));
+        let mut off = 5;
+        let ping = ReplicaEvent::Ping(kevy_replicate::feed::FeedPosition::new(1, 9));
+        assert_eq!(forward_event(ping, &mut off, &mut loading, &tx), Ok(()), "no send tried");
+        let begin = ReplicaEvent::SnapshotBegin;
+        assert_eq!(forward_event(begin, &mut off, &mut loading, &tx), Err(()), "a send is tried");
+        assert_eq!(off, 5);
     }
 }

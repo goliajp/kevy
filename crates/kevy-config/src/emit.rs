@@ -21,15 +21,15 @@ use crate::schema::{Config, LogOutput};
 /// The sections emitted from [`canonical_pairs`] rather than the
 /// hand-aligned template below — single source of truth for both the
 /// template and the preserving splice path.
-const SERVICE_SECTIONS: [&str; 7] =
-    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering"];
+const SERVICE_SECTIONS: [&str; 8] =
+    ["cluster", "replication", "lua", "metrics", "audit", "feed", "tiering", "secure"];
 
 impl Config {
     /// Render the current config as a standard-template TOML file —
     /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE` when the comment-preserving splice in
-    /// [`crate::preserve`] has no original file to work from; only
-    /// then are the user's inline comments lost.
+    /// by `CONFIG REWRITE` when the comment-preserving splice has no
+    /// original file to work from; only then are the user's inline
+    /// comments lost.
     ///
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).
@@ -116,7 +116,7 @@ impl Config {
         let _ = writeln!(
             out,
             "output   = \"{}\"",
-            escape_toml_basic_string(&self.log.output.as_str()),
+            escape_toml_basic_string(&self.log.output.to_config_str()),
         );
         let _ = writeln!(out);
         let _ = writeln!(out, "[notification]");
@@ -131,6 +131,7 @@ impl Config {
         let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
         let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
         let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
+        let _ = writeln!(out, "recv_buffers     = {}", self.advanced.recv_buffers);
         let _ = writeln!(out);
         let _ = writeln!(out, "[slowlog]");
         let _ = writeln!(out, "slower_than_micros = {}", self.slowlog.slower_than_micros,);
@@ -200,6 +201,7 @@ pub(crate) fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
     push_audit(&mut v, cfg);
     push_feed(&mut v, cfg);
     push_tiering(&mut v, cfg);
+    push_secure(&mut v, cfg);
     v
 }
 
@@ -269,6 +271,7 @@ fn push_advanced(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "advanced", "park_timeout_ms", a.park_timeout_ms.to_string());
     push(v, "advanced", "tick_check_every", a.tick_check_every.to_string());
     push(v, "advanced", "ring_capacity", a.ring_capacity.to_string());
+    push(v, "advanced", "recv_buffers", a.recv_buffers.to_string());
 }
 
 fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -282,6 +285,14 @@ fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "cluster", "port_base", cl.port_base.to_string());
     push(v, "cluster", "node_id", toml_string(&cl.node_id));
     push(v, "cluster", "elect_port_base", cl.elect_port_base.to_string());
+    if let Some([a, b, c, d]) = cl.announce_ip {
+        push(v, "cluster", "announce_ip", format!("\"{a}.{b}.{c}.{d}\""));
+    }
+    push(v, "cluster", "announce_port_base", cl.announce_port_base.to_string());
+    push(v, "cluster", "secure", cl.secure.to_string());
+    let keys: Vec<String> =
+        cl.peer_keys.iter().map(|(id, k)| format!("{id}={}", crate::key_to_hex(k))).collect();
+    push(v, "cluster", "peer_keys", toml_array(&keys));
     let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
     push(v, "cluster", "peers", toml_array(&peers));
     let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
@@ -302,6 +313,12 @@ fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "replication", "replica_max_staleness_ms", r.replica_max_staleness_ms.to_string());
     push(v, "replication", "replica_read_only", r.replica_read_only.to_string());
     push(v, "replication", "single_source", r.single_source.to_string());
+    push(v, "replication", "secure", r.secure.to_string());
+    if let Some(k) = &r.upstream_key {
+        push(v, "replication", "upstream_key", toml_string(&crate::key_to_hex(k)));
+    }
+    let keys: Vec<String> = r.replica_keys.iter().map(crate::key_to_hex).collect();
+    push(v, "replication", "replica_keys", toml_array(&keys));
 }
 
 fn push_lua(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -326,11 +343,23 @@ fn push_feed(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 /// absence must round-trip to the off default.
 fn push_tiering(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     if let Some(budget) = cfg.tiering.budget {
-        push(v, "tiering", "budget", toml_string(&budget.as_config_string()));
+        push(v, "tiering", "budget", toml_string(&budget.to_config_string()));
     }
     if let Some(dir) = &cfg.tiering.spill_dir {
         push(v, "tiering", "spill_dir", toml_string(&dir.display().to_string()));
     }
+}
+
+fn push_secure(v: &mut Vec<CanonicalPair>, cfg: &Config) {
+    if let Some(p) = &cfg.secure.private_key_file {
+        push(v, "secure", "private_key_file", toml_string(&p.display().to_string()));
+    }
+    push(v, "secure", "listen_port", cfg.secure.listen_port.to_string());
+    let keys: Vec<String> = cfg.secure.client_keys.iter().map(crate::key_to_hex).collect();
+    push(v, "secure", "client_keys", toml_array(&keys));
+    push(v, "secure", "cluster_port_base", cfg.secure.cluster_port_base.to_string());
+    let announce = cfg.secure.announce_cluster_port_base.to_string();
+    push(v, "secure", "announce_cluster_port_base", announce);
 }
 
 fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {
@@ -338,7 +367,7 @@ fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, va
 }
 
 fn log_output_str(o: &LogOutput) -> String {
-    o.as_str().into_owned()
+    o.to_config_str().into_owned()
 }
 
 /// `["a", "b"]` — the canonical TOML form for a list.

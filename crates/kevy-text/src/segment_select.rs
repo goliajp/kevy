@@ -52,7 +52,7 @@ pub(super) struct Cand<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct Order {
     pub(super) sorted: bool,
-    pub(super) desc: bool,
+    pub(super) dir: crate::SortOrder,
 }
 
 /// The order a page sorted by a stored value is in: a document WITH a
@@ -64,17 +64,26 @@ pub(super) struct Order {
 /// pages and must do it exactly as each shard ordered its own. Two copies
 /// of this rule would be two chances to disagree about where the
 /// unknowns went.
+///
+/// ```
+/// use std::cmp::Ordering;
+/// use kevy_text::{SortOrder, sorted_order};
+/// let (a, b) = ((Some(&b"1"[..]), &b"k1"[..]), (Some(&b"2"[..]), &b"k2"[..]));
+/// assert_eq!(sorted_order(a, b, SortOrder::Asc), Ordering::Less);
+/// assert_eq!(sorted_order(a, b, SortOrder::Desc), Ordering::Greater);
+/// // no value sorts last in both directions
+/// let none = (None, &b"k0"[..]);
+/// assert_eq!(sorted_order(none, a, SortOrder::Asc), Ordering::Greater);
+/// assert_eq!(sorted_order(none, a, SortOrder::Desc), Ordering::Greater);
+/// ```
 pub fn sorted_order(
     a: (Option<&[u8]>, &[u8]),
     b: (Option<&[u8]>, &[u8]),
-    desc: bool,
+    order: crate::SortOrder,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a.0, b.0) {
-        (Some(x), Some(y)) => {
-            let ord = if desc { y.cmp(x) } else { x.cmp(y) };
-            ord.then_with(|| a.1.cmp(b.1))
-        }
+        (Some(x), Some(y)) => order.apply(x.cmp(y)).then_with(|| a.1.cmp(b.1)),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => a.1.cmp(b.1),
@@ -95,7 +104,7 @@ impl Order {
         if !self.sorted {
             return a.score > b.score || (a.score == b.score && a.key < b.key);
         }
-        sorted_order((a.okey.as_deref(), a.key), (b.okey.as_deref(), b.key), self.desc)
+        sorted_order((a.okey.as_deref(), a.key), (b.okey.as_deref(), b.key), self.dir)
             == std::cmp::Ordering::Less
     }
 

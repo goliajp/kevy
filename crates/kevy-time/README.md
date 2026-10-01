@@ -11,10 +11,11 @@ Zone conversion is deliberately absent: it belongs to the application, and is
 refused by name at the surface rather than silently guessed here.
 
 ```rust
-use kevy_time::{Civil, civil_from_epoch, epoch_from_civil, add_months};
+use kevy_time::Civil;
 
-let c = civil_from_epoch(1_700_000_000);
-assert_eq!(epoch_from_civil(c), 1_700_000_000);
+let c = Civil::from_epoch(1_700_000_000);
+assert_eq!((c.year(), c.month(), c.day()), (2023, 11, 14));
+assert_eq!(c.to_epoch(), 1_700_000_000);
 ```
 
 The civil conversion is the standard integer-arithmetic algorithm

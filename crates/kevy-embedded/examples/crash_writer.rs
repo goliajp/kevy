@@ -4,10 +4,22 @@
 //! the last SYNCED line survives the kill".
 //!
 //!   crash_writer <dir> [--shards N] [--always] [--feed] [--rewrite] [--snapshot]
+//!                      [--acked] [--ring | --mapped | --no-stage] [--no-sync]
+//!                      [--no-auto-rewrite]
 //!
 //! Modes stack: --rewrite / --snapshot fold a background compaction /
 //! snapshot into the write loop so the kill can land mid-rewrite or
 //! mid-snapshot; --feed opens the CDC ring so the kill can land mid-emit.
+//! --acked prints `ACKED <n>` once each write has returned: through the
+//! staging ring (--ring) or a mapped log (--mapped) a process kill loses
+//! none of those; --no-stage turns both off, for a control run. Without
+//! any of the three the platform default applies. --no-sync drops the
+//! explicit fsync barriers, which otherwise take most of the loop's time and
+//! so catch most kills — a kill inside one tests the file, not the ring.
+//! --no-auto-rewrite lets the log grow past the automatic compaction
+//! threshold, for a gate that needs a log much larger than its live data.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::io::Write as _;
 
 use kevy_embedded::{AppendFsync, Config, Store};
@@ -21,6 +33,8 @@ fn main() {
     let mut shards = 1usize;
     let mut fsync = AppendFsync::EverySec;
     let (mut feed, mut rewrite, mut snapshot) = (false, false, false);
+    let (mut acked, mut sync, mut auto_rewrite) = (false, true, true);
+    let mut path: Option<(u64, bool)> = None; // (ring bytes, mapped)
     while let Some(a) = args.next() {
         match a.as_str() {
             "--shards" => shards = args.next().unwrap().parse().unwrap(),
@@ -28,12 +42,24 @@ fn main() {
             "--feed" => feed = true,
             "--rewrite" => rewrite = true,
             "--snapshot" => snapshot = true,
+            "--acked" => acked = true,
+            "--ring" => path = Some((4 << 20, false)),
+            "--mapped" => path = Some((4 << 20, true)),
+            "--no-stage" => path = Some((0, false)),
+            "--no-sync" => sync = false,
+            "--no-auto-rewrite" => auto_rewrite = false,
             other => panic!("unknown flag {other}"),
         }
     }
     let mut cfg = Config::default().with_persist(&dir).with_shards(shards).with_appendfsync(fsync);
     if feed {
         cfg = cfg.with_feed(16 << 20);
+    }
+    if !auto_rewrite {
+        cfg = cfg.with_auto_aof_rewrite_disabled();
+    }
+    if let Some((ring, mapped)) = path {
+        cfg = cfg.with_stage_ring(ring).with_mapped_aof(mapped);
     }
     let store = Store::open(cfg).expect("open");
 
@@ -48,7 +74,11 @@ fn main() {
         n += 1;
         store.set(format!("k{}", n % 1000).as_bytes(), &val).expect("set");
         store.set(b"seq", n.to_string().as_bytes()).expect("seq");
-        if n.is_multiple_of(SYNC_EVERY) {
+        if acked {
+            writeln!(out, "ACKED {n}").unwrap();
+            out.flush().unwrap();
+        }
+        if sync && n.is_multiple_of(SYNC_EVERY) {
             store.fsync_aof().expect("fsync");
             writeln!(out, "SYNCED {n}").unwrap();
             out.flush().unwrap();

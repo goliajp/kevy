@@ -3,17 +3,17 @@
 //! UUIDs, JSON and booleans all land on `str` (app-encoded); the notes
 //! the compiler emits say so per column, honestly.
 
-use crate::KevyType;
+use crate::ValType;
 
 /// Map one (lower-cased) SQL type name. `None` = not in the subset.
 /// `double precision` is handled by the parser (two words) and arrives
 /// here as `"double precision"`.
-pub(crate) fn map_type(name: &str) -> Option<KevyType> {
+pub(crate) fn map_type(name: &str) -> Option<ValType> {
     Some(match name {
-        "int" | "integer" | "bigint" | "serial" | "bigserial" => KevyType::I64,
-        "real" | "float" | "double precision" | "numeric" | "decimal" => KevyType::F64,
+        "int" | "integer" | "bigint" | "serial" | "bigserial" => ValType::I64,
+        "real" | "float" | "double precision" | "numeric" | "decimal" => ValType::F64,
         "text" | "varchar" | "char" | "uuid" | "timestamp" | "timestamptz" | "date" | "bool"
-        | "boolean" | "json" | "jsonb" => KevyType::Str,
+        | "boolean" | "json" | "jsonb" => ValType::Str,
         _ => return None,
     })
 }

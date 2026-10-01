@@ -14,7 +14,17 @@
 //! pages, which is the property the whole experiment rests on. Widening
 //! a crate whose name is its contract costs more than three extern
 //! declarations, so the boundary lives here — which is also why
-//! `kevy-alloc` is in the recorded unsafe set (allocgate M8).
+//! `kevy-alloc` carries its own `unsafe` extern block.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_alloc::os::{PAGE, map_aligned, unmap};
+//! if let Some(p) = map_aligned(PAGE, PAGE) {
+//!     // SAFETY: `p`/PAGE is the mapping just made, and nothing refers into it.
+//!     unsafe { unmap(p, PAGE) };
+//! }
+//! ```
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use core::ffi::c_void;
@@ -76,6 +86,15 @@ const MADV_DISCARD: i32 = 5;
 /// `SPAN_BYTES / PAGE`, and `SpanMeta::discarded` is exactly a `u16` for
 /// the sixteen pages that gives. What is NOT safe is assuming the
 /// system agrees — see [`page_size_matches`].
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::class::SPAN_BYTES;
+/// use kevy_alloc::os::PAGE;
+/// // sixteen pages per span, one bit each in a `u16`
+/// assert_eq!(SPAN_BYTES / PAGE, 16);
+/// ```
 pub const PAGE: usize = 4096;
 
 /// Whether the running system's page size is the one the geometry above
@@ -160,6 +179,15 @@ pub fn page_size_matches() -> bool {
 }
 
 /// Round `n` up to a multiple of `align`, which must be a power of two.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::os::{PAGE, round_up};
+/// assert_eq!(round_up(1, PAGE), PAGE);
+/// assert_eq!(round_up(PAGE, PAGE), PAGE);
+/// assert_eq!(round_up(PAGE + 1, PAGE), 2 * PAGE);
+/// ```
 #[must_use]
 pub const fn round_up(n: usize, align: usize) -> usize {
     (n + align - 1) & !(align - 1)
@@ -173,6 +201,24 @@ pub const fn round_up(n: usize, align: usize) -> usize {
 /// unit and trims both sides, because `mmap` only promises page
 /// alignment. Returns `None` on failure — never panics, because an
 /// allocator that panics on OOM is worse than one that reports it.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::os::{available, map_aligned, unmap};
+/// const LEN: usize = 64 * 1024;
+/// if let Some(p) = map_aligned(LEN, LEN) {
+///     assert_eq!(p.as_ptr() as usize % LEN, 0);
+///     // SAFETY: the mapping is fresh and read/write; `LEN` bytes are ours.
+///     unsafe { p.as_ptr().write(7) };
+///     // SAFETY: `p`/`LEN` is exactly the mapping made above, now unused.
+///     unsafe { unmap(p, LEN) };
+/// } else {
+///     assert!(!available());
+/// }
+/// // a length that is not a multiple of the alignment is refused
+/// assert!(map_aligned(4096 * 3, 8192).is_none());
+/// ```
 pub fn map_aligned(len: usize, align: usize) -> Option<NonNull<u8>> {
     if len == 0 || !align.is_power_of_two() || !len.is_multiple_of(align) {
         return None;
@@ -230,6 +276,17 @@ fn trim(raw: usize, total: usize, len: usize, align: usize) -> usize {
 /// # Safety
 /// `ptr`/`len` must describe a live mapping produced by [`map_aligned`]
 /// (or a whole sub-range of one that is no longer referenced).
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::os::{map_aligned, unmap};
+/// if let Some(p) = map_aligned(8192, 4096) {
+///     // SAFETY: `p`/8192 is the whole mapping from `map_aligned`, and
+///     // nothing refers into it any more.
+///     unsafe { unmap(p, 8192) };
+/// }
+/// ```
 pub unsafe fn unmap(ptr: NonNull<u8>, len: usize) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -255,6 +312,24 @@ pub unsafe fn unmap(ptr: NonNull<u8>, len: usize) {
 /// # Safety
 /// `ptr`/`len` must lie inside a live mapping from [`map_aligned`], and
 /// no live data may remain in the range.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::os::{PAGE, discard, map_aligned, unmap};
+/// if let Some(p) = map_aligned(4 * PAGE, PAGE) {
+///     // SAFETY: fresh read/write mapping of 4 pages.
+///     unsafe { p.as_ptr().write(42) };
+///     // SAFETY: the range is inside the mapping and holds no live data.
+///     let _returned: bool = unsafe { discard(p, 4 * PAGE) };
+///     // the range stays mapped: writing again is fine (contents were
+///     // dropped on Linux, and may or may not be on macOS)
+///     // SAFETY: still inside the live read/write mapping.
+///     unsafe { p.as_ptr().write(1) };
+///     // SAFETY: the whole mapping, no longer referenced.
+///     unsafe { unmap(p, 4 * PAGE) };
+/// }
+/// ```
 pub unsafe fn discard(ptr: NonNull<u8>, len: usize) -> bool {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -274,6 +349,15 @@ pub unsafe fn discard(ptr: NonNull<u8>, len: usize) -> bool {
 
 /// Whether this target can map memory at all. Used by tests and by the
 /// heap's construction path to fail fast rather than mysteriously.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::os::{available, map_aligned};
+/// if !available() {
+///     assert!(map_aligned(4096, 4096).is_none());
+/// }
+/// ```
 #[must_use]
 pub const fn available() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos")) && !cfg!(miri)

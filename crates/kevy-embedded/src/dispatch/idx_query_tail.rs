@@ -24,7 +24,7 @@ pub(super) struct Tail {
     pub(super) filters: Vec<FilterClause>,
     /// `SORT <field> ASC|DESC`: select by a stored value rather than by
     /// score.
-    pub(super) sort: Option<(Vec<u8>, bool)>,
+    pub(super) sort: Option<(Vec<u8>, kevy_index::SortOrder)>,
     /// `DISTINCT <field>`: at most one hit per value of a stored field.
     pub(super) distinct: Option<Vec<u8>>,
     /// `FACET <field…>`: count each field's values over the match set.
@@ -101,14 +101,14 @@ fn apply_match_clause(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize>
 fn apply_sort(argv: &[Vec<u8>], i: usize, t: &mut Tail) -> Option<usize> {
     let field = argv.get(i + 1)?.clone();
     let dir = argv.get(i + 2)?;
-    let desc = if dir.eq_ignore_ascii_case(b"DESC") {
-        true
+    let order = if dir.eq_ignore_ascii_case(b"DESC") {
+        kevy_index::SortOrder::Desc
     } else if dir.eq_ignore_ascii_case(b"ASC") {
-        false
+        kevy_index::SortOrder::Asc
     } else {
         return None;
     };
-    t.sort = Some((field, desc));
+    t.sort = Some((field, order));
     Some(i + 3)
 }
 

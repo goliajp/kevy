@@ -114,8 +114,8 @@ class EmbeddedStore {
   EmbeddedStore(const EmbeddedStore&) = delete;
   EmbeddedStore& operator=(const EmbeddedStore&) = delete;
 
-  // Run one command; argv[0] is the verb. The universal path — every one of
-  // kevy's ~184 verbs is reachable here. Arguments are borrowed views (the C
+  // Run one command; argv[0] is the verb. The universal path — every verb the
+  // engine answers is reachable here. Arguments are borrowed views (the C
   // ABI takes (ptr, len)); a -ERR is a Reply with is_error().
   Reply cmd(const std::vector<std::string_view>& argv);
 

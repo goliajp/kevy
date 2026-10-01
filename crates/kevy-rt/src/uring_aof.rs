@@ -26,7 +26,7 @@
 // become "never" with nothing saying so. Open question §2.
 #![expect(
     clippy::let_underscore_must_use,
-    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+    reason = "a persistent fsync failure is invisible; an open question"
 )]
 #![cfg(target_os = "linux")]
 
@@ -34,6 +34,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::Commands;
+use crate::aof_writer::queue_settled;
 use crate::shard::Shard;
 use crate::uring_ops::{OP_AOF, OP_SHIFT};
 use kevy_uring::IoUring;
@@ -120,8 +121,10 @@ impl<C: Commands> Shard<C> {
             }
             return;
         }
-        // New queue contents become an in-flight chunk.
+        // New queue contents become an in-flight chunk — except in a swap
+        // hold, when the fd still names the log being renamed away.
         if let Some(aof) = &mut self.aof
+            && !aof.swap_holding()
             && let Some((offset, bytes)) = aof.take_pending()
         {
             let seq = self.aof_offload.next_seq;
@@ -181,13 +184,13 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let due = match aof.fsync_policy() {
-            kevy_persist::Fsync::Always => {
-                aof.queued_is_empty() && aof.queued_watermark() > o.durable_watermark
-            }
             kevy_persist::Fsync::EverySec => {
                 o.dirty_since_sync && o.last_sync.elapsed().as_secs() >= 1
             }
             kevy_persist::Fsync::No => false,
+            // always, and any policy this writer cannot name: prove every
+            // record, the choice that never loses an acknowledged write
+            _ => aof.queued_is_empty() && aof.queued_watermark() > o.durable_watermark,
         };
         if !due {
             return;
@@ -269,7 +272,9 @@ impl<C: Commands> Shard<C> {
     /// queue and ring drained. Advance the reply-gate watermark so any
     /// held conns release without waiting for a redundant fsync.
     pub(crate) fn uring_aof_mark_all_durable(&mut self) {
-        if let Some(aof) = &self.aof {
+        // records queued in a swap hold are not in the image; the next
+        // fsync covers them
+        if let Some(aof) = self.aof.as_ref().filter(|a| a.queued_is_empty()) {
             let w = aof.queued_watermark();
             let o = &mut self.aof_offload;
             o.durable_watermark = o.durable_watermark.max(w);
@@ -308,10 +313,11 @@ impl<C: Commands> Shard<C> {
     /// May a structural file operation (rewrite begin/finish, truncate)
     /// run right now? False while any chunk is in flight — the caller
     /// sets `want_restructure` and the tick retries after the drain.
+    /// During a swap hold the queue is not drained, so a write that
+    /// arrives in the hold must not keep the swap from finishing.
     pub(crate) fn uring_aof_restructure_ready(&self) -> bool {
         !self.aof_offload.enabled
-            || (self.aof_offload.inflight.is_empty()
-                && self.aof.as_ref().is_none_or(kevy_persist::Aof::queued_is_empty))
+            || (self.aof_offload.inflight.is_empty() && self.aof.as_ref().is_none_or(queue_settled))
     }
 
     /// Tick wrapper for the persistence trio under offload: structural

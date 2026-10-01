@@ -13,12 +13,51 @@ use std::fmt::Write as _;
 
 /// The view registry (mirrors [`crate::Catalog`]): named specs +
 /// sidecar text round-trip. Cap 64.
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, IndexValue, Leaf, Tree, ViewCatalog, ViewSpec};
+///
+/// let adults = || Tree::Leaf(Leaf::new("age", IndexValue::I64(18), IndexValue::I64(200)));
+/// let mut views = ViewCatalog::new();
+/// assert!(views.is_empty());
+/// views.create(ViewSpec::new("adults", adults(), "age"))?;
+/// assert_eq!(
+///     views.create(ViewSpec::new("adults", adults(), "age")),
+///     Err(CatalogError::Exists(Declared::View))
+/// );
+/// assert_eq!(views.len(), 1);
+/// assert_eq!(views.iter().next().map(|v| v.order_by.clone()), Some(b"age".to_vec()));
+///
+/// // the sidecar text restores the same declarations
+/// let text = views.to_sidecar();
+/// let back = ViewCatalog::from_sidecar(&text).ok_or("sidecar did not parse")?;
+/// assert_eq!(back.get(b"adults"), views.get(b"adults"));
+/// assert!(ViewCatalog::from_sidecar("not a sidecar").is_none());
+///
+/// assert!(views.drop_view(b"adults"));
+/// assert!(!views.drop_view(b"adults"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ViewCatalog {
     specs: Vec<ViewSpec>,
 }
 
 /// Hard cap on declared views.
+///
+/// ```
+/// use kevy_index::{CatalogError, Declared, IndexValue, Leaf, MAX_VIEWS, Tree, ViewCatalog, ViewSpec};
+/// let mut views = ViewCatalog::new();
+/// let spec = |i: usize| {
+///     let t = Tree::Leaf(Leaf::new("age", IndexValue::I64(0), IndexValue::I64(9)));
+///     ViewSpec::new(format!("v{i}"), t, "age")
+/// };
+/// for i in 0..MAX_VIEWS {
+///     views.create(spec(i))?;
+/// }
+/// assert_eq!(views.create(spec(MAX_VIEWS)), Err(CatalogError::Full(Declared::View)));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const MAX_VIEWS: usize = 64;
 
 impl ViewCatalog {
@@ -28,13 +67,13 @@ impl ViewCatalog {
     }
 
     /// Register; errors on duplicate/cap/structure.
-    pub fn create(&mut self, spec: ViewSpec) -> Result<(), &'static str> {
+    pub fn create(&mut self, spec: ViewSpec) -> Result<(), crate::CatalogError> {
         spec.validate()?;
         if self.specs.len() >= MAX_VIEWS {
-            return Err("ERR view limit reached (64)");
+            return Err(crate::CatalogError::Full(crate::Declared::View));
         }
         if self.specs.iter().any(|s| s.name == spec.name) {
-            return Err("ERR view already exists");
+            return Err(crate::CatalogError::Exists(crate::Declared::View));
         }
         self.specs.push(spec);
         Ok(())
@@ -209,7 +248,7 @@ impl ViewSpec {
             "{} {} {} {} {} {} {}",
             esc(&self.name),
             esc(&self.order_by),
-            u8::from(self.desc),
+            u8::from(self.order == kevy_text::SortOrder::Desc),
             mode,
             k,
             via,
@@ -233,14 +272,11 @@ impl ViewSpec {
         // Re-tokenize the tree tail with ')' handling: split keeps
         // parens attached; tree_de trims them.
         let tree = tree_de_root(&toks, &mut pos)?;
-        Some(ViewSpec {
-            name: unesc(toks[0])?,
-            order_by: unesc(toks[1])?,
-            desc: toks[2] == "1",
-            mode,
-            via,
-            tree,
-        })
+        let order =
+            if toks[2] == "1" { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
+        let v =
+            ViewSpec::new(unesc(toks[0])?, tree, unesc(toks[1])?).with_order(order).with_mode(mode);
+        Some(ViewSpec { via, ..v })
     }
 }
 

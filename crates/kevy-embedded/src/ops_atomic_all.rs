@@ -11,7 +11,7 @@
 //! closure returns. Use it only when the closure genuinely needs
 //! more than one shard and atomicity across them is required.
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
 use std::sync::RwLockWriteGuard;
 
 use crate::shard::shard_idx;
@@ -25,6 +25,19 @@ type ShardUndoEntry = (usize, Vec<u8>, Option<(kevy_store::Value, Option<u64>)>)
 
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.
+///
+/// ```
+/// use kevy_embedded::{Config, Store};
+/// let s = Store::open(Config::default().with_shards(4))?;
+/// s.set(b"alice", b"10")?;
+/// // a transfer between keys that may live on different shards
+/// s.atomic_all_shards(|tx| {
+///     tx.incr_by(b"alice", -3)?;
+///     tx.incr_by(b"bob", 3)
+/// })?;
+/// assert_eq!((s.get(b"alice")?, s.get(b"bob")?), (Some(b"7".to_vec()), Some(b"3".to_vec())));
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug)]
 pub struct AtomicAllShards<'a> {
     pub(crate) guards: Vec<RwLockWriteGuard<'a, Inner>>,
@@ -71,7 +84,8 @@ impl<'a> AtomicAllShards<'a> {
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
         let i = self.idx(key);
-        let ok = self.guards[i].store.set(key, value.to_vec(), None, false, false);
+        let ok =
+            self.guards[i].store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         self.log_arg(i, &[b"SET", key, value]);
         ok
     }
@@ -338,9 +352,6 @@ impl<'a> AtomicAllShards<'a> {
         pairs: &[(f64, &[u8])],
         flags: kevy_store::ZaddFlags,
     ) -> KevyResult<kevy_store::ZaddReport> {
-        if !flags.valid() {
-            return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
-        }
         let i = self.idx(key);
         let rep = self.guards[i].store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
@@ -475,7 +486,7 @@ fn commit_group_all(
     #[cfg(feature = "persist")]
     for g in guards.iter_mut() {
         if let Some(aof) = g.aof.as_mut() {
-            let synced = aof.end_group().map_err(KevyError::from);
+            let synced = aof.end_group().map_err(crate::KevyError::from);
             if commit.is_ok() {
                 commit = synced;
             }

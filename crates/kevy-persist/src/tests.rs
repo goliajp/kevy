@@ -3,12 +3,20 @@ use crate::snapshot_fmt::VERSION;
 use std::borrow::Cow;
 use std::time::Duration;
 
+/// An `apply` for a staging ring whose records a test does not need.
+pub(crate) fn ignore_owed(_: &mut Argv) {}
+
 pub(crate) fn temp_file(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-{name}-{uniq}.rdb"));
-    p
+    unique_file(name, "rdb")
+}
+
+// named after a directory unique by construction across threads and
+// processes; the directory goes at once, so the caller's remove_file
+// still leaves nothing behind
+pub(crate) fn unique_file(name: &str, ext: &str) -> std::path::PathBuf {
+    let dir = kevy_tmpdir::unique_dir(name);
+    std::fs::remove_dir(&dir).unwrap();
+    std::path::PathBuf::from(format!("{}.{ext}", dir.display()))
 }
 
 #[test]
@@ -16,10 +24,15 @@ fn snapshot_round_trip() {
     let path = temp_file("rt");
 
     let mut src = Store::new();
-    src.set(b"plain", b"value".to_vec(), None, false, false);
-    src.set(b"empty", Vec::new(), None, false, false);
-    src.set(b"binary", vec![0u8, 1, 2, 255, 254], None, false, false);
-    src.set(b"withttl", b"soon".to_vec(), Some(Duration::from_secs(100)), false, false);
+    src.set(b"plain", b"value".to_vec(), None, kevy_store::SetCondition::Always);
+    src.set(b"empty", Vec::new(), None, kevy_store::SetCondition::Always);
+    src.set(b"binary", vec![0u8, 1, 2, 255, 254], None, kevy_store::SetCondition::Always);
+    src.set(
+        b"withttl",
+        b"soon".to_vec(),
+        Some(Duration::from_secs(100)),
+        kevy_store::SetCondition::Always,
+    );
 
     save_snapshot(&src, &path).unwrap();
 
@@ -45,7 +58,7 @@ fn snapshot_round_trip() {
 fn snapshot_ttl_is_absolute_across_delay() {
     let path = temp_file("ttl-abs");
     let mut src = Store::new();
-    src.set(b"k", b"v".to_vec(), Some(Duration::from_secs(100)), false, false);
+    src.set(b"k", b"v".to_vec(), Some(Duration::from_secs(100)), kevy_store::SetCondition::Always);
     save_snapshot(&src, &path).unwrap();
 
     std::thread::sleep(Duration::from_millis(1500));
@@ -75,8 +88,13 @@ fn bad_magic_is_rejected() {
 fn expired_keys_are_not_saved() {
     let path = temp_file("exp");
     let mut src = Store::new();
-    src.set(b"live", b"1".to_vec(), None, false, false);
-    src.set(b"dead", b"2".to_vec(), Some(Duration::from_millis(1)), false, false);
+    src.set(b"live", b"1".to_vec(), None, kevy_store::SetCondition::Always);
+    src.set(
+        b"dead",
+        b"2".to_vec(),
+        Some(Duration::from_millis(1)),
+        kevy_store::SetCondition::Always,
+    );
     std::thread::sleep(Duration::from_millis(8));
 
     save_snapshot(&src, &path).unwrap();
@@ -95,7 +113,7 @@ fn hash_snapshot_round_trip() {
     let mut src = Store::new();
     src.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"two".as_slice())])
         .unwrap();
-    src.set(b"s", b"str".to_vec(), None, false, false);
+    src.set(b"s", b"str".to_vec(), None, kevy_store::SetCondition::Always);
     save_snapshot(&src, &path).unwrap();
 
     let mut dst = Store::new();
@@ -162,7 +180,7 @@ fn zset_snapshot_round_trip() {
 fn all_types_snapshot_round_trip() {
     let path = temp_file("allrt");
     let mut src = Store::new();
-    src.set(b"str", b"hello".to_vec(), None, false, false);
+    src.set(b"str", b"hello".to_vec(), None, kevy_store::SetCondition::Always);
     src.hset(b"hash", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
     src.rpush(b"list", &[b"i".as_slice()]).unwrap();
     src.sadd(b"set", &[b"m".as_slice()]).unwrap();
@@ -191,17 +209,33 @@ fn grouped_stream_store() -> Store {
     for ms in [1u64, 2, 3] {
         src.xadd(
             b"st",
-            XAddIdSpec::Explicit(StreamId { ms, seq: 1 }),
+            XAddIdSpec::Explicit(StreamId::new(ms, 1)),
             vec![(b"f".to_vec(), b"v".to_vec())],
-            false,
+            kevy_store::MissingStream::Create,
             0,
         )
         .unwrap();
     }
-    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
-    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000).unwrap();
-    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000).unwrap();
-    src.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
+    src.xgroup_create(
+        b"st",
+        b"g",
+        GroupCreateMode::AtId(StreamId::MIN),
+        kevy_store::MissingStream::Refuse,
+    )
+    .unwrap();
+    src.xreadgroup(
+        b"st",
+        b"g",
+        b"c1",
+        ReadGroupId::New,
+        Some(2),
+        kevy_store::AckMode::Pending,
+        1000,
+    )
+    .unwrap();
+    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, kevy_store::AckMode::Pending, 2000)
+        .unwrap();
+    src.xdel(b"st", &[StreamId::new(2, 1)]).unwrap();
     src
 }
 
@@ -216,22 +250,20 @@ fn stream_groups_snapshot_round_trip() {
 
     let view = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(view.length(), 2);
-    assert_eq!(view.last_id(), StreamId { ms: 3, seq: 1 });
+    assert_eq!(view.last_id(), StreamId::new(3, 1));
     assert_eq!(view.entries_added(), 3);
-    assert_eq!(view.max_deleted_id(), StreamId { ms: 2, seq: 1 });
+    assert_eq!(view.max_deleted_id(), StreamId::new(2, 1));
     let g = view.group(b"g").expect("group must survive the snapshot");
-    assert_eq!(g.last_delivered_id(), StreamId { ms: 3, seq: 1 });
+    assert_eq!(g.last_delivered_id(), StreamId::new(3, 1));
     // Snapshot is the full-fidelity path: the 2-1 tombstone survives.
     assert_eq!(g.pending_count(), 3);
-    let p2 = g.pel.get(&StreamId { ms: 2, seq: 1 }).unwrap();
+    let p2 = g.pending_entry(StreamId::new(2, 1)).unwrap();
     assert_eq!(
         (p2.consumer.as_slice(), p2.delivery_time_ms, p2.delivery_count),
         (&b"c1"[..], 1000, 1)
     );
-    let mut consumers: Vec<(Vec<u8>, u64, usize)> = g
-        .consumers_iter()
-        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
-        .collect();
+    let mut consumers: Vec<(Vec<u8>, u64, usize)> =
+        g.consumers().map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count())).collect();
     consumers.sort();
     assert_eq!(consumers, vec![(b"c1".to_vec(), 1000, 2), (b"c2".to_vec(), 2000, 1)]);
     let _ = std::fs::remove_file(&path);
@@ -268,7 +300,7 @@ fn v3_snapshot_without_groups_still_loads() {
     load_snapshot(&mut dst, &path).unwrap();
     let view = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(view.length(), 1);
-    assert_eq!(view.last_id(), StreamId { ms: 1, seq: 1 });
+    assert_eq!(view.last_id(), StreamId::new(1, 1));
     assert_eq!(view.group_count(), 0);
     let _ = std::fs::remove_file(&path);
 }
@@ -312,8 +344,8 @@ fn forged_count_fails_cleanly_not_alloc_abort() {
 
 fn populated_store() -> Store {
     let mut s = Store::new();
-    s.set(b"s1", b"plain".to_vec(), None, false, false);
-    s.set(b"s2", vec![b'x'; 100], None, false, false); // heap str
+    s.set(b"s1", b"plain".to_vec(), None, kevy_store::SetCondition::Always);
+    s.set(b"s2", vec![b'x'; 100], None, kevy_store::SetCondition::Always); // heap str
     s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
     s.rpush(b"l", &[b"a".as_slice(), b"b".as_slice()]).unwrap();
     s.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()]).unwrap();
@@ -333,7 +365,13 @@ fn view_snapshot_bytes_match_store_snapshot() {
     let p_view = dir.join(format!("kevy-e3-view-{}.rdb", std::process::id()));
     save_snapshot(&s, &p_store).unwrap();
     save_snapshot(&view, &p_view).unwrap();
-    assert_eq!(std::fs::read(&p_store).unwrap(), std::fs::read(&p_view).unwrap());
+    // each file ends with its own id; the entries before it are the same
+    let body = |p: &std::path::Path| {
+        let mut b = std::fs::read(p).unwrap();
+        b.truncate(b.len() - 16);
+        b
+    };
+    assert_eq!(body(&p_store), body(&p_view));
     let _ = std::fs::remove_file(&p_store);
     let _ = std::fs::remove_file(&p_view);
 }
@@ -345,12 +383,12 @@ fn view_aof_round_trips_at_the_collect_instant() {
     let mut s = populated_store();
     let view = s.collect_snapshot();
     // Post-collect mutations must not appear in the dump.
-    s.set(b"s1", b"mutated".to_vec(), None, false, false);
+    s.set(b"s1", b"mutated".to_vec(), None, kevy_store::SetCondition::Always);
     s.hset(b"h", &[(b"f2".as_slice(), b"late".as_slice())]).unwrap();
 
     // dump_aof writes a FILE at this path — the unique dir is its parent.
     let p = kevy_tmpdir::unique_dir("persist").join("view.aof");
-    let (keys, bytes) = dump_aof(&p, &view).unwrap();
+    let crate::RewriteStats { keys, bytes } = dump_aof(&p, &view).unwrap();
     assert_eq!(keys, 6);
     assert!(bytes > 0);
 
@@ -363,4 +401,45 @@ fn view_aof_round_trips_at_the_collect_instant() {
     assert_eq!(restored.hget(b"h", b"f2").unwrap(), None);
     assert_eq!(restored.hget(b"h", b"f").unwrap(), Some(b"v".as_slice()));
     let _ = std::fs::remove_file(&p);
+}
+
+/// A row sealed into a segment is not a value the rewrite re-emits as
+/// commands: the estimate leaves it out, where the rewrite writes a frame
+/// naming its segment.
+#[test]
+fn a_row_sealed_to_a_segment_is_left_out_of_the_estimate() {
+    let d = kevy_tmpdir::TmpDir::new("persist-estimate-seg");
+    let mut s = Store::new();
+    s.enable_seg_rows(d.path()).unwrap();
+    s.hset(b"user:1", &[(b"name".as_slice(), b"ada".as_slice())]).unwrap();
+    let sealed = s.seal_rows_to_seg(b"user", &[b"user:1".to_vec()]).unwrap().expect("sealed");
+    assert_eq!(s.commit_row_eviction(&sealed), 1);
+    let empty = crate::estimate_rewrite_size(&Store::new());
+    assert_eq!(crate::estimate_rewrite_size(&s), empty);
+    let written = dump_aof(&d.path().join("seg.aof"), &s).unwrap();
+    assert!(written.bytes > empty, "the segment frame is written");
+}
+
+/// A shard's snapshot that carries a frame hands it to the merge like a
+/// logged command, after the keys; a snapshot that cannot be read fails it.
+#[test]
+fn a_merge_replays_a_snapshot_frame_and_fails_on_an_unreadable_one() {
+    use crate::reshard::{StdLayout, merge_sources};
+    let dir = kevy_tmpdir::TmpDir::new("persist-merge-aux");
+    let mut shard = Store::new();
+    shard.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+    let frame = Argv::from(vec![b"XINTERNAL.EXAMPLE".to_vec(), b"1".to_vec()]);
+    let src = crate::WithAux::new(&shard, Some(&frame));
+    save_snapshot(&src, &crate::layout::snapshot_path(dir.path(), 0)).unwrap();
+    let mut temp = Store::new();
+    let mut replayed = Vec::new();
+    let mut on_frame = |store: &mut Store, args: Argv| replayed.push((store.dbsize(), args));
+    let sources = merge_sources(dir.path(), 1, &StdLayout, &mut temp, &mut on_frame).unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(temp.dbsize(), 1);
+    // a second shard whose snapshot path is a directory
+    std::fs::create_dir(crate::layout::snapshot_path(dir.path(), 1)).unwrap();
+    let mut again = Store::new();
+    assert!(merge_sources(dir.path(), 2, &StdLayout, &mut again, &mut on_frame).is_err());
+    assert_eq!(replayed, [(1, frame.clone()), (1, frame)], "the frame arrives after the keys");
 }

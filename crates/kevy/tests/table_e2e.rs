@@ -7,6 +7,8 @@
 //! explicitly-named IDX access paths; nothing here parses SQL, plans a
 //! query, or enforces a schema at query time.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -67,12 +69,8 @@ impl Server {
     /// `tier_budget = None` → an untiered server.
     fn start(tier_budget: Option<u64>) -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-tablee2e-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let port = kevy_testnet::free_port();
+        let dir = kevy_tmpdir::unique_dir("tablee2e");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
@@ -802,6 +800,20 @@ fn c6_index_only_queries_touch_zero_cold_rows() {
     assert!(preads <= returned, "one read per ROW at most: {preads} for {returned} rows");
     assert!(preads > 0, "a mostly-cold page must have paid some reads");
     assert_eq!(post[1], 0, "hydration is not an access signal");
+
+    // The declaration also started packing the rows that were already
+    // there. It must have left the cold ones alone: a client's first read
+    // of a cold row is still a first touch, served without promoting.
+    for i in 0..60u32 {
+        let key = format!("row:{i:02}");
+        let fields = bulks(&cmd(&mut c, &[b"HGETALL", key.as_bytes()]));
+        assert_eq!(fields.len(), 8, "HGETALL {key}");
+    }
+    assert_eq!(
+        common::at_rest("promotions_total", || info_gauge(&mut c, "promotions_total")),
+        0,
+        "one read of each row promoted some: the declaration had already touched them"
+    );
 }
 
 /// D2 proper (tablegate L7): a FULLY-cold table — budget crushed to 1 byte

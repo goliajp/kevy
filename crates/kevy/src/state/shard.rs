@@ -342,11 +342,32 @@ mod tests {
         assert_eq!(shard.gate_bits(state) & WRITE_GATED, 0);
     }
 
+    /// TABLE.DECLARE installs the index catalog, then the table catalog. A
+    /// shard reading its gate between the two must still learn of the
+    /// table: the second install has to move the epoch too, or the shard
+    /// keeps a gate with no table bit under the current tag, and its packing
+    /// backfill never runs.
+    #[test]
+    fn a_table_installed_after_the_index_catalog_reaches_a_shard_gate() {
+        let c = crate::KevyCommands::new();
+        let state = c.state();
+        let shard = ShardCtx::default();
+        state.install_index_catalog(kevy_index::Catalog::new());
+        assert_eq!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
+        let mut tables = kevy_index::TableCatalog::new();
+        let mut t = kevy_index::TableSpec::default();
+        (t.name, t.prefix, t.pk) = (b"t".to_vec(), b"t:".to_vec(), b"id".to_vec());
+        t.columns = vec![(b"id".to_vec(), kevy_index::ValType::Str)];
+        tables.create(t).unwrap();
+        state.install_table_catalog(tables);
+        assert_ne!(shard.gate_bits(state) & TABLE_NONEMPTY, 0);
+    }
+
     #[test]
     fn healthy_replica_count_requires_an_ack() {
         let shard = ShardCtx::default();
         let ip = std::net::Ipv4Addr::LOCALHOST;
-        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+        let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
         shard.set_replication_view(ReplicationView {
             replicas: vec![
                 ("r1".into(), ip, 1, 5, ack(5)),
@@ -361,7 +382,7 @@ mod tests {
     fn healthy_replica_count_excludes_acks_past_the_lag_window() {
         let shard = ShardCtx::default();
         let ip = std::net::Ipv4Addr::LOCALHOST;
-        let ack = |age_ms| Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: age_ms });
+        let ack = |age_ms| Some(kevy_rt::ReplicaAck::new(5, age_ms));
         shard.set_replication_view(ReplicationView {
             // One fresh ACK, one exactly at the window edge (counts),
             // one past it (a stalled replica must not satisfy the gate).

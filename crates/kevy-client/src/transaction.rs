@@ -15,10 +15,13 @@
 //! so the locking guarantee transactions add doesn't exist as a
 //! separate concept. Call methods directly instead.
 //!
-//! ```no_run
+//! ```
 //! use kevy_client::Connection;
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
 //!
-//! let mut conn = Connection::connect("kevy://localhost:6379")?;
+//! let mut conn = Connection::connect(&format!("kevy://localhost:{port}"))?;
 //! conn.watch(&[b"counter"])?;
 //! let mut txn = conn.multi()?;
 //! txn.incr(b"counter")?
@@ -54,6 +57,8 @@ use crate::{Connection, string, unexpected, vec2, vec3};
 /// Drop without calling [`Self::exec`] / [`Self::exec_watched`] /
 /// [`Self::discard`] sends an implicit `DISCARD` so the underlying
 /// socket isn't left in MULTI mode.
+///
+#[doc = include_str!("transaction_docs/transaction.md")]
 pub struct Transaction<'a> {
     client: &'a mut RespClient,
     /// `false` after `exec`/`exec_watched`/`discard` consumed the txn —
@@ -69,7 +74,7 @@ impl std::fmt::Debug for Transaction<'_> {
 
 impl Connection {
     /// Start a `MULTI` block. Embedded backend returns
-    /// [`io::ErrorKind::Unsupported`].
+    /// [`KevyError::Unsupported`].
     pub fn multi(&mut self) -> KevyResult<Transaction<'_>> {
         match self {
             Self::Embedded(_) => Err(KevyError::Unsupported(
@@ -353,6 +358,8 @@ impl Drop for Transaction<'_> {
 /// reply; if the variant doesn't match the extractor, an
 /// `io::ErrorKind::InvalidData` is returned and the cursor advances
 /// regardless (so a downstream `expect_empty` still works correctly).
+///
+#[doc = include_str!("transaction_docs/transaction_replies.md")]
 #[derive(Debug)]
 pub struct TransactionReplies {
     iter: std::vec::IntoIter<Reply>,

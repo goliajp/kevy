@@ -6,6 +6,7 @@
 use kevy_index::{IndexKind, IndexSpec, ValType};
 
 use super::sync_segs;
+use crate::TokenPositions;
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
 
@@ -15,8 +16,9 @@ impl Store {
     /// scopes to. A weight scales that field's term frequencies; 1.0 is
     /// neutral.
     ///
-    /// `positions` records token offsets so phrase queries can verify
-    /// adjacency, at the cost of the positional side-channel's memory.
+    /// `positions` decides whether token offsets are recorded, so phrase
+    /// queries can verify adjacency, at the cost of the positional
+    /// side-channel's memory.
     /// `values` names hash fields stored per document with the type their
     /// bytes compare as — what `FILTER` reads. An index that never
     /// filters declares none.
@@ -25,7 +27,7 @@ impl Store {
         name: &[u8],
         prefix: &[u8],
         fields: &[(&[u8], f32)],
-        positions: bool,
+        positions: TokenPositions,
         values: &[(&[u8], ValType)],
     ) -> KevyResult<()> {
         if prefix.is_empty() {
@@ -34,26 +36,16 @@ impl Store {
         if fields.is_empty() {
             return Err(KevyError::InvalidInput("a text index needs at least one field".into()));
         }
-        let spec = IndexSpec {
-            name: name.to_vec(),
-            prefix: prefix.to_vec(),
-            fields: fields
-                .iter()
-                .map(|(f, w)| kevy_index::FieldSpec { name: f.to_vec(), weight: *w })
-                .collect(),
-            ty: ValType::Str,
-            kind: IndexKind::Text,
-            max_bytes: 0,
-            ann: None,
-            group_by: None,
-            with_positions: positions,
-            values: values
-                .iter()
-                .map(|(n, ty)| kevy_index::ValueSpec { name: n.to_vec(), ty: *ty })
-                .collect(),
-            composite: None,
-        };
-        self.register_spec(spec)
+        let fields =
+            fields.iter().map(|(f, w)| kevy_index::FieldSpec::new(*f).with_weight(*w)).collect();
+        let values =
+            values.iter().map(|(n, ty)| kevy_index::ValueSpec::new(*n).with_type(*ty)).collect();
+        let spec = IndexSpec::builder(name, prefix, IndexKind::Text, ValType::Str)
+            .with_fields(fields)
+            .with_positions(matches!(positions, TokenPositions::Record))
+            .with_values(values);
+        let spec = crate::ops_index::built(spec)?;
+        self.catalog_change(|| self.register_spec(spec))
     }
 
     /// Corpus-wide BM25 statistics for one query, over its field scope.
@@ -81,12 +73,11 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 n_docs += ts.docs() as f64;
                 total_len += ts.total_len_in(scope);
-                let opts =
-                    kevy_text::QueryOpts { typo, fields: scope, ..kevy_text::QueryOpts::default() };
+                let opts = kevy_text::QueryOpts::default().with_typo(typo).with_fields(scope);
                 let tokdf = ts.query_df_in(text, opts);
                 // The shard's frozen buckets are pass-1 contributors
                 // like any other shard — the server seam's mirror.
@@ -107,6 +98,6 @@ impl Store {
             return Err(KevyError::NotFound("no such text index".into()));
         }
         let avgdl = if n_docs > 0.0 { total_len as f64 / n_docs } else { 0.0 };
-        Ok(kevy_text::CorpusStats { n_docs, avgdl, df })
+        Ok(kevy_text::CorpusStats::new(n_docs, avgdl, df))
     }
 }

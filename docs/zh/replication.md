@@ -164,6 +164,9 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 | `min_replicas_to_write` | `0`（关） | 健康副本（有活跃连接且已 ACK）不足 N 个时，主节点以 `-NOREPLICAS` 拒绝写。阶梯第 4 级。 |
 | `min_replicas_max_lag_ms` | `10000` | `min_replicas_to_write` 的新鲜度窗口：副本只有在最近一次 ACK 比这个界限新时才算健康——连接还挂着但已停摆的副本会从计数里老化出去。 |
 | `single_source` | `false` | 上游是单端口上的一条流（embedded writer），不走 per-shard 端口群——见下文“以 embedded 作主节点”。 |
+| `secure` | `false` | 用 Noise 给本节点的复制链路加密并认证，见 [`docs/encrypted-links.md`](encrypted-links.md)。需要 `[secure] private_key_file`。 |
+| `upstream_key` | 未设置 | 主节点的公钥，加密的 replica 必须设置。 |
+| `replica_keys` | 空 | 在加密的主节点上：允许连接的 replica 公钥。留空则任何 replica 都可连接，链路照样加密。 |
 
 因为两种角色都会绑定复制端口段，同一台机器上共同托管多个实例时，客户端端口之间至少要间隔 `nshards`——否则它们默认的复制端口段（客户端端口 + 10000 … + 10000 + nshards − 1）会撞在一起。
 
@@ -173,7 +176,9 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 |---|---|---|
 | `node_id` | 未设置 | 本节点的稳定 id（≤ 32 B ASCII）。选举中作平局裁决。 |
 | `elect_port_base` | `0`（= 客户端端口 + 200） | 控制面 TCP 端口，承载心跳与选票——每节点一个监听。 |
-| `peers` | 空 | `id@host:elect_port:client_port,…`，集群里每个节点都要列出，包括自己。留空则选举器休眠。 |
+| `peers` | 空 | `id@host:elect_port:client_port[:repl_port_base],…`，集群里每个节点都要列出，包括自己。留空则选举器休眠。 |
+| `secure` | `false` | 给选举链路加密并认证；其他每个节点都要在 `peer_keys` 里有一项。 |
+| `peer_keys` | 空 | `["id=<公钥>", …]`：每个节点的公钥，由 `kevy keygen` 生成。 |
 
 peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换上游和 `-MISDIRECTED` 回复用客户端端口。旧式 `id@host:port` 写法假定两者相等，这基本不会是你要的效果。
 
@@ -187,7 +192,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 
 移动主节点角色有两条路径，都建立在上述流机制之上；操作细节（步骤、时序、错误契约）在 [`docs/availability.md`](availability.md)。
 
-**计划内：`FAILOVER host port [TIMEOUT ms] | ABORT`**（v3.15）。在主节点上执行，参数是目标副本的**客户端**地址；它回答 `+OK`，交接在后台线程完成：静默写入（`-QUIESCED`），轮询目标的 `INFO replication` 直到追平（`slave_lag_frames:0`），提升目标（`REPLICAOF NO ONE`），然后自己作为副本跟随过去。交接会把上游切到“客户端端口 + 10000”，所以目标必须用默认的 `listen_port_base` 运行。超时（默认 10000 ms）会回滚静默。
+**计划内：`FAILOVER host port [TIMEOUT ms] | ABORT`**（v3.15）。在主节点上执行，参数是目标副本的**客户端**地址；它回答 `+OK`，交接在后台线程完成：静默写入（`-QUIESCED`），轮询目标的 `INFO replication` 直到追平（`slave_lag_frames:0`），提升目标（`REPLICAOF NO ONE`），然后自己作为副本跟随过去。交接时跟随目标在 `INFO replication` 里报告的 `repl_port_base`。超时（默认 10000 ms）会回滚静默。
 
 **崩溃：多数派选举**（v3.15）。每个节点都配好 `[cluster]` 块之后，各 peer 检测到主节点死亡，选出已应用复制 offset 最高的副本（平局时 `node_id` 最小者胜出）；胜者打开写入并递增自己的 feed generation，败者自动切换上游。重新加入的前主节点如果流位置**领先**于新主（一段从未复制出去的分叉后缀），会得到一次**替换式**快照重同步——加载前先 `FLUSHALL`——而不是被判定损坏后关闭：分叉丢弃，节点收敛到多数派的历史。
 
@@ -198,11 +203,12 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 | 关注点 | 回答 |
 |---|---|
 | 写入耐久性 | 帧落进本地 store 和 backlog 环之后主节点就 ack。副本随后追赶；`WAIT n timeout` 阻塞到至少 n 个副本确认（副本 ack 不是 fsync——见 availability.md）。 |
-| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, consistent = true)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
+| 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, ReadConsistency::Primary)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
 | 副本掉队 | 重连请求的 offset 已从环里老化时，主节点就地内联推送一份该 shard 的快照，再从快照末端 offset 衔接实时帧——没有空洞，无需人工介入。快照替换副本键空间期间，副本上的客户端读回答 `-LOADING`（`PING` / `INFO` / `HELLO` 照常应答，健康检查不受影响）。 |
 | backlog 容量估算 | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。偏大无害；偏小会退化成快照发送。 |
 | 切主后什么会变 | 写入改发新主节点——配了 `kevy-elect` 就自动，否则手工。已有的 `kevy-cluster-rw` 客户端得知新主后自动改道；切换空档内正在进行的写会显式失败。 |
 | 切主后什么不会变 | 跨数据中心流量、gossip 发现的 peer、在线 reshard、AUTH/TLS——kevy 一概不提供。仅限单数据中心。 |
+| 索引、视图、表 | 主节点的 catalog 和键一样复制：副本在全量同步里拿到它，之后每次改动走实时流，重启后仍在。只读副本对 `IDX.CREATE` / `DROP` / `REBUILD`、`VIEW.CREATE` / `DROP` / `REBUILD`、`TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP` 一律回 `-READONLY`，要声明就在主节点上声明。 |
 | 链式复制 | 协议层不支持。副本的 apply 路径不会再向下游发出；这种误配置会被防御性拒绝。 |
 | 分区期间少数派的写入 | 有界，然后丢失。多数派集群中的主节点一旦看不到严格多数，会在一个租约窗口内围栏自己的写入（`-NOREPLICAS primary lost quorum; writes fenced`），所以静默吸收窗口约 5 s，且窗口内每笔写都显式失败。分区里的少数派无法提升；分区愈合时它自降，未复制出去的分叉后缀丢弃，通过快照重同步到多数派的历史。 |
 
@@ -236,7 +242,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 
 ## 以 embedded 作主节点（v3.2）
 
-嵌入式应用也可以反过来当 PRIMARY，让一台 kevy 服务器作它的副本——给进程内 store 换来读扩展和完整的查询面（副本可以在复制过来的数据上声明自己的索引/视图/聚合）：
+嵌入式应用也可以反过来当 PRIMARY，让一台 kevy 服务器作它的副本——给进程内 store 换来读扩展和完整的查询面（应用声明的索引、视图和表会复制到副本，并在副本上基于复制过来的数据应答）：
 
 ```rust
 // the application (primary)
@@ -259,4 +265,4 @@ single_source = true          # ONE upstream stream, hash-routed locally
 
 与 CDC feed（[docs/cdc.md](cdc.md)）的关系：两者按设计共存。复制源服务的是副本一致性（基础设施平面，per-source offset）；feed 服务的是应用级 CDC（`(generation, offset)` 游标、前缀过滤、at-least-once）。硬把两者统一，会把面向应用的 CDC 语义绑死在副本协议上。
 
-Gate：`bench/repligate.sh`——真双进程验证：对全新副本的快照发送、静默后 digest 稳定性、重启后重同步，以及副本本地在复制数据之上的 `IDX.CREATE`/`IDX.QUERY`。
+Gate：`bench/repligate.sh`——真双进程验证：对全新副本的快照发送、静默后 digest 稳定性、重启后重同步，主节点的索引在副本上应答 `IDX.QUERY`，以及副本拒绝自己的 `IDX.CREATE`。

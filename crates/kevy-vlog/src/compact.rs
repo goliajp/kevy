@@ -26,6 +26,17 @@ impl Vlog {
     /// mid-file, or some sealed file is below the live ratio. Lets the
     /// caller drive [`Self::compact_step`] on the tick only when there is
     /// something to do (the scan is O(files), no IO).
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-compaction-pending");
+    /// let mut v = kevy_vlog::Vlog::open(dir.path(), 1)?;
+    /// let r = v.append(b"a", b"1")?;
+    /// v.append(b"b", b"2")?;
+    /// assert!(!v.compaction_pending(50), "the sealed file is fully live");
+    /// v.note_dead(r);
+    /// assert!(v.compaction_pending(50));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn compaction_pending(&self, live_pct: u32) -> bool {
         if self.compaction.is_some() {
             return true;
@@ -40,12 +51,38 @@ impl Vlog {
     /// percent (the active file is never compacted), doing at most
     /// `budget` records of work before returning — so a single call
     /// never blocks the caller for a whole-file rewrite. A victim is
-    /// drained across successive calls via [`Vlog::compaction`]; it stays
+    /// drained across successive calls (the log keeps the cursor); it stays
     /// in `files` (readable, pin-safe) until fully drained, then
     /// unlink-on-last-pin + one epoch bump (unchanged retirement
     /// semantics — a ref only becomes invalid when its file is deleted,
     /// which is still atomic per file). Returns records processed this
     /// call (0 = nothing to compact). Call in a loop to drain fully.
+    ///
+    /// ```
+    /// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+    /// struct AllLive;
+    /// impl CompactOwner for AllLive {
+    ///     fn is_live(&mut self, _: &[u8], _: VlogRef) -> bool {
+    ///         true
+    ///     }
+    ///     fn moved(&mut self, _: &[u8], _: VlogRef, _: VlogRef) {}
+    /// }
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-compact-step");
+    /// // two records fill a 40-byte file; the third rotates
+    /// let mut v = Vlog::open(dir.path(), 40)?;
+    /// let dead = v.append(b"x", b"0123456789abcdef")?;
+    /// v.append(b"a", b"fedcba9876543210")?;
+    /// v.append(b"b", b"rotated")?;
+    /// v.note_dead(dead);
+    /// // a budget of one record per call: the half-dead file drains over
+    /// // two calls, then retires
+    /// assert_eq!(v.compact_step(90, &mut AllLive, 1)?, 1);
+    /// assert_eq!(v.epoch(), 0, "still draining");
+    /// assert_eq!(v.compact_step(90, &mut AllLive, 1)?, 1);
+    /// assert_eq!(v.epoch(), 1);
+    /// assert_eq!(v.compact_step(90, &mut AllLive, 1)?, 0, "nothing left");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn compact_step(
         &mut self,
         live_pct: u32,
@@ -111,7 +148,7 @@ impl Vlog {
         let mut done = 0usize;
         while cur.offset < cur.bytes && done < budget {
             let (key, payload, body_len) = read_record(&cur.handle, cur.offset)?;
-            let old = VlogRef { file_id: cur.file_id, offset: cur.offset, len: body_len };
+            let old = VlogRef::new(cur.file_id, cur.offset, body_len);
             if owner.is_live(&key, old) {
                 let new = self.append_high(&key, &payload)?;
                 owner.moved(&key, old, new);
@@ -134,6 +171,28 @@ impl Vlog {
 
     /// Drain compaction fully at `live_pct` (test / single-threaded bulk
     /// paths). Returns retired-file count.
+    ///
+    /// ```
+    /// use kevy_vlog::{CompactOwner, Vlog, VlogRef};
+    /// struct NothingLive;
+    /// impl CompactOwner for NothingLive {
+    ///     fn is_live(&mut self, _: &[u8], _: VlogRef) -> bool {
+    ///         false
+    ///     }
+    ///     fn moved(&mut self, _: &[u8], _: VlogRef, _: VlogRef) {}
+    /// }
+    /// let dir = kevy_tmpdir::TmpDir::new("vlog-compact-below");
+    /// // one record per file
+    /// let mut v = Vlog::open(dir.path(), 1)?;
+    /// v.append(b"a", b"1")?;
+    /// v.append(b"b", b"2")?;
+    /// v.append(b"c", b"3")?;
+    /// v.mark_all_dead();
+    /// // both sealed files go; the active one is never compacted
+    /// assert_eq!(v.compact_below(50, &mut NothingLive)?, 2);
+    /// assert_eq!(v.stats().files, 1);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn compact_below(
         &mut self,
         live_pct: u32,

@@ -59,6 +59,28 @@ fn every_dispatch_verb_probes_as_known() {
     }
 }
 
+/// The shared command layer's verbs are this surface's too, except the
+/// ones it names as server-only: the arm table lists every one, and the
+/// router refuses exactly the named ones.
+#[test]
+fn every_shared_layer_verb_is_served_unless_named() {
+    let s = mem_store();
+    let table: BTreeSet<&str> = DISPATCH_VERBS.iter().copied().collect();
+    let server_only: BTreeSet<&[u8]> = super::shared::SERVER_ONLY.iter().copied().collect();
+    for v in kevy_verbs::VERBS {
+        let refused = run(&s, &[v.name.as_bytes()]).starts_with(b"-ERR unknown command");
+        // another crate in the build can turn the family on in the shared
+        // layer; this surface serves it only with its own feature
+        let off = !cfg!(feature = "streams-geo") && kevy_verbs::is_streams_geo(v.name.as_bytes());
+        let named = server_only.contains(v.name.as_bytes()) || off;
+        assert_eq!(refused, named, "{}: served {} but named server-only {named}", v.name, !refused);
+        assert_eq!(table.contains(v.name), !named, "{}: DISPATCH_VERBS disagrees", v.name);
+    }
+    for name in &server_only {
+        assert!(kevy_verbs::verb(name).is_some(), "a server-only name the shared layer lacks");
+    }
+}
+
 #[test]
 fn verb_matching_is_case_insensitive() {
     let s = mem_store();
@@ -215,4 +237,102 @@ fn every_dispatched_verb_is_in_the_registry_or_named_as_outside_it() {
         "{healed:?} are named as outside the registry but have a row now — drop them from \
          NOT_KEYSPACE so the ledger stays exact"
     );
+}
+
+/// A replica refuses a write in the server's words, byte for byte, which
+/// are Redis's: the sentence ends with a period.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn a_replica_refuses_a_write_in_the_servers_words() {
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open_replica("127.0.0.1:1").expect("open replica");
+    let readonly: &[u8] = b"-READONLY You can't write against a read only replica.\r\n";
+    assert_eq!(run(&s, &[b"SET", b"k", b"v"]), readonly);
+    assert_eq!(run(&s, &[b"DEL", b"k"]), readonly);
+}
+
+/// Writes of every family, malformed and well-formed, whichever path
+/// serves them: the shared layer, a facade arm, or one that spans shards.
+const WRITES: &[&[&[u8]]] = &[
+    &[b"DEL"],
+    &[b"DEL", b"k"],
+    &[b"MSET", b"a"],
+    &[b"MSET", b"a", b"1"],
+    &[b"SET"],
+    &[b"SET", b"k"],
+    &[b"SET", b"k", b"v", b"BADOPT"],
+    &[b"EXPIRE", b"k", b"abc"],
+    &[b"HSET", b"h", b"f"],
+    &[b"ZADD", b"z", b"notnum", b"m"],
+    &[b"RENAME", b"a"],
+    &[b"COPY", b"a"],
+    &[b"SUNIONSTORE"],
+];
+
+/// On a replica a write is refused with the server's exact reply before
+/// its arguments are read, as the server does; a read still runs.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn a_replica_refuses_a_write_before_reading_its_arguments() {
+    // an upstream nobody listens on: the store stays a replica
+    let s = Store::open_replica("127.0.0.1:1").expect("open replica");
+    let readonly: &[u8] = b"-READONLY You can't write against a read only replica.\r\n";
+    for cmd in WRITES {
+        assert_eq!(run(&s, cmd), readonly, "{cmd:?}");
+    }
+    assert_eq!(run(&s, &[b"GET"]), b"-ERR wrong number of arguments for 'get' command\r\n");
+    assert_eq!(run(&s, &[b"GET", b"k"]), b"$-1\r\n");
+}
+
+/// A closed store answers a write with its state the same way.
+#[test]
+fn a_closed_store_refuses_a_write_before_reading_its_arguments() {
+    let s = mem_store();
+    s.shutdown().expect("shutdown");
+    for cmd in WRITES {
+        assert_eq!(run(&s, cmd), b"-ERR connection closed\r\n", "{cmd:?}");
+    }
+    assert_eq!(run(&s, &[b"GET", b"k"]), b"$-1\r\n");
+}
+
+/// The shared layer asks for the store's state itself, so a shutdown that
+/// lands after the dispatcher's own check still refuses the write.
+#[test]
+fn the_shared_layer_refuses_a_write_on_a_closed_store_by_itself() {
+    let s = mem_store();
+    s.shutdown().expect("shutdown");
+    let mut out = Vec::new();
+    let argv = [b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()];
+    assert!(super::shared::dispatch(&s, b"SET", &argv, &mut out));
+    assert_eq!(out, b"-ERR connection closed\r\n");
+    assert_eq!(s.get(b"k").unwrap(), None);
+}
+
+/// `FEED.READ gen offset limit [PREFIX p…]`: the frames written since the
+/// cursor, filtered by prefix, and the refusals the listener answers.
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
+#[test]
+fn feed_read_answers_the_frames_since_a_cursor() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).expect("open");
+    let tail = s.changes_tail().unwrap();
+    assert_eq!(run(&s, &[b"SET", b"a", b"1"]), b"+OK\r\n");
+    assert_eq!(run(&s, &[b"SET", b"b:1", b"2"]), b"+OK\r\n");
+    let (g, o) = (tail.generation.to_string(), tail.offset.to_string());
+    let (g, o) = (g.as_bytes(), o.as_bytes());
+    let next = s.changes_tail().unwrap();
+    let head = format!("*3\r\n:{}\r\n:{}\r\n", next.generation, next.offset);
+    let frame =
+        |k: &str, v: &str| format!("*3\r\n$3\r\nSET\r\n${}\r\n{k}\r\n$1\r\n{v}\r\n", k.len());
+    let both = run(&s, &[b"FEED.READ", g, o, b"10"]);
+    let want = format!("{head}*2\r\n{}{}", frame("a", "1"), frame("b:1", "2"));
+    assert_eq!(String::from_utf8_lossy(&both), want);
+    let only_b = run(&s, &[b"FEED.READ", g, o, b"10", b"PREFIX", b"b:"]);
+    assert_eq!(String::from_utf8_lossy(&only_b), format!("{head}*1\r\n{}", frame("b:1", "2")));
+
+    let usage = "-ERR FEED.READ gen offset limit [PREFIX p…]\r\n".as_bytes();
+    assert_eq!(run(&s, &[b"FEED.READ", b"x", o, b"10"]), usage);
+    assert_eq!(run(&s, &[b"FEED.READ", g, o, b"10", b"PREFIX"]), usage);
+    assert_eq!(run(&s, &[b"FEED.READ", g, o, b"10", b"WHERE", b"b:"]), usage);
+    let ahead = (next.offset + 100).to_string();
+    assert_eq!(run(&s, &[b"FEED.READ", g, ahead.as_bytes(), b"10"]), b"-ERR feed: Future\r\n");
 }

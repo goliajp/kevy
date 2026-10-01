@@ -22,7 +22,7 @@ use crate::pubsub::{self, PubsubMsg};
 use crate::reply::JsonReply;
 use crate::state::KevyState;
 
-/// Raw command path: run any of kevy's ~184 verbs by argv and get the decoded
+/// Raw command path: run any verb the engine answers by argv and get the decoded
 /// RESP reply. The escape hatch that keeps every engine capability reachable
 /// from the webview without a per-verb command.
 #[tauri::command]

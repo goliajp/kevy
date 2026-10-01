@@ -6,23 +6,16 @@ use super::*;
 use kevy_index::{IndexKind, ValType};
 
 fn spec() -> IndexSpec {
-    IndexSpec {
-        name: b"byage".to_vec(),
-        prefix: b"u:".to_vec(),
-        fields: vec![kevy_index::FieldSpec::new(b"age".to_vec())],
-        ty: ValType::I64,
-        kind: IndexKind::Range,
-        max_bytes: 0,
-        ann: None,
-        group_by: None,
-        with_positions: false,
-        values: Vec::new(),
-        composite: None,
-    }
+    IndexSpec::builder("byage", "u:", IndexKind::Range, ValType::I64)
+        .with_field("age")
+        .build()
+        .unwrap()
 }
 
 fn stats() -> SegmentStats {
-    SegmentStats { entries: 3, approx_bytes: 0, coerce_failures: 0, duplicates: 0 }
+    let mut s = SegmentStats::default();
+    s.entries = 3;
+    s
 }
 
 /// Read `drift` and `checked` back out of the wire chunk.
@@ -101,11 +94,7 @@ fn a_row_the_index_does_not_owe_is_not_missing() {
 }
 
 fn audit(cold_live: u64) -> Option<kevy_index::WindowAudit> {
-    Some(kevy_index::WindowAudit {
-        boundary: 50,
-        shape: kevy_index::WindowShape::PlainI64,
-        cold_live,
-    })
+    Some(kevy_index::WindowAudit::new(50, kevy_index::WindowShape::PlainI64, cold_live))
 }
 
 /// A windowed path slides old rows into cold segments on purpose, so

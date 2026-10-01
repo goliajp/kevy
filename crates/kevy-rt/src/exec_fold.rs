@@ -6,7 +6,6 @@ use crate::Commands;
 use crate::message::{Agg, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
-use kevy_resp::ArgvView;
 
 impl<C: Commands> Shard<C> {
     /// Fold a sub-result into its slot; emit completed replies in seq order.
@@ -17,7 +16,9 @@ impl<C: Commands> Shard<C> {
     // (Agg, Part) pairing + the finalize dispatch over orchestrator aggs.
     pub(crate) fn fold(&mut self, conn_id: u64, seq: u64, part: Part) {
         let watch_agg: Option<Agg> = {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
                 return;
             };
             if seq < conn.next_emit {
@@ -103,7 +104,11 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard XREAD gather: drop each stream's element into
                 // its request-order slot.
-                (Agg::XReadGather { slots }, Part::XReadElement { index, element }) => {
+                (Agg::XReadGather { slots }, Part::XReadElement { index, element })
+                | (
+                    Agg::XReadGroupCheck { refusals: slots, .. },
+                    Part::XReadElement { index, element },
+                ) => {
                     if let Some(slot) = slots.get_mut(index as usize) {
                         *slot = element;
                     }
@@ -162,6 +167,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
                         | Agg::ScanPage { .. }
+                        | Agg::XReadGroupCheck { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -185,10 +191,17 @@ impl<C: Commands> Shard<C> {
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
+                Agg::XReadGroupCheck { refusals, reads } => {
+                    self.finalize_xread_check(conn_id, seq, refusals, reads);
+                }
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto =
                         self.conns.get(&conn_id).map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    match self.commands.extension_reduce(&argv, chunks, proto) {
+                    let reduced = self.commands.extension_reduce(&argv, chunks, proto);
+                    if crate::propagation::is_armed() {
+                        self.record_armed(&kevy_resp::Argv::from(argv.to_vec()));
+                    }
+                    match reduced {
                         crate::ExtensionReduced::Reply(reply) => {
                             self.fill_extension_slot(conn_id, seq, reply);
                         }
@@ -210,11 +223,11 @@ impl<C: Commands> Shard<C> {
     }
 
     pub(crate) fn protocol_error(&mut self, conn_id: u64) {
+        self.mark_closing(conn_id);
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
                 c.next_seq += 1;
-                c.closing = true;
                 let proto = c.proto;
                 c.pending.push_back(PendingSlot {
                     remaining: 1,
@@ -228,29 +241,6 @@ impl<C: Commands> Shard<C> {
         };
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")));
     }
-}
-
-/// Does `args` set a TTL via a *relative* duration (vs absolute `*AT`)? Such
-/// writes need an absolute `PEXPIREAT` follow-up in the AOF — see
-/// [`Shard::log_write`]. `SET … EXAT|PXAT` aren't parsed by the server's SET,
-/// so only `EX`/`PX` count here.
-pub(crate) fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
-    if args.len() < 3 {
-        return false;
-    }
-    let verb = &args[0];
-    if verb.eq_ignore_ascii_case(b"EXPIRE")
-        || verb.eq_ignore_ascii_case(b"PEXPIRE")
-        || verb.eq_ignore_ascii_case(b"SETEX")
-        || verb.eq_ignore_ascii_case(b"PSETEX")
-    {
-        return true;
-    }
-    if verb.eq_ignore_ascii_case(b"SET") {
-        return (3..args.len())
-            .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
-    }
-    false
 }
 
 /// Uniform in `0..n` from one raw draw (Lemire's multiply-shift, no rejection).

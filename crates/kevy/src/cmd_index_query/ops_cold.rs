@@ -96,10 +96,10 @@ fn cold_page_query<'a>(
     facets: &'a [kevy_text::Facet<'a>],
     fetch: usize,
 ) -> ColdPageQuery<'a> {
-    let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(text);
-    bare.sort();
-    bare.dedup();
-    ColdPageQuery { bare, phrases, stats, filter, sort, distinct, facets, fetch }
+    let mut q = ColdPageQuery::parse(text, stats, fetch).with_filter(filter).with_facets(facets);
+    q.sort = sort;
+    q.distinct = distinct;
+    q
 }
 
 /// One merged candidate: the page-order ingredients of a hot or cold
@@ -147,7 +147,7 @@ fn merge_hits(
         Some(s) => kevy_text::sorted_order(
             (a.okey.as_deref(), &a.key),
             (b.okey.as_deref(), &b.key),
-            s.desc,
+            s.order,
         ),
         None => b
             .score
@@ -163,7 +163,7 @@ fn merge_hits(
         });
     }
     all.truncate(fetch);
-    *hits = all.into_iter().map(|m| kevy_text::TextMatch { key: m.key, score: m.score }).collect();
+    *hits = all.into_iter().map(|m| kevy_text::TextMatch::new(m.key, m.score)).collect();
 }
 
 /// Sum the cold facet counts into the hot ones by value identity —
@@ -194,7 +194,7 @@ pub(super) fn cold_highlight(
     key: &[u8],
     text: &[u8],
 ) -> Vec<(usize, Vec<(usize, usize)>)> {
-    let names: Vec<&[u8]> = spec.fields.iter().map(|f| f.name.as_slice()).collect();
+    let names: Vec<&[u8]> = spec.fields().iter().map(|f| f.name.as_slice()).collect();
     let Ok(Some(vals)) = store.peek_hash_fields(key, &names) else {
         return Vec::new();
     };

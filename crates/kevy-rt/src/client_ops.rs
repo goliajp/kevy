@@ -16,34 +16,92 @@ use kevy_resp::ArgvView;
 
 /// Parsed `CLIENT KILL` selector. `Addr` matches the peer `ip:port`
 /// exactly; `Id` matches the instance-unique conn id.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// use kevy_rt::{ClientKillFilter, KillReply};
+///
+/// let argv = kevy_resp::Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ID".to_vec(), b"7".to_vec()]);
+/// assert_eq!(ClientKillFilter::parse(&argv), Some((ClientKillFilter::Id(7), KillReply::Count)));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ClientKillFilter {
     /// Peer address (`ip:port`) equality.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter};
+    ///
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ADDR".to_vec(), b"10.0.0.1:5".to_vec()]);
+    /// let filter = ClientKillFilter::parse(&argv).map(|(f, _)| f);
+    /// assert_eq!(filter, Some(ClientKillFilter::Addr(b"10.0.0.1:5".to_vec())));
+    /// ```
     Addr(Vec<u8>),
     /// Instance-unique conn id equality.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter};
+    ///
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ID".to_vec(), b"42".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(f, _)| f), Some(ClientKillFilter::Id(42)));
+    /// ```
     Id(u64),
 }
 
+/// Which reply a `CLIENT KILL` form answers with.
+///
+/// ```
+/// use kevy_rt::{ClientKillFilter, KillReply};
+///
+/// let argv = kevy_resp::Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"10.0.0.1:5".to_vec()]);
+/// assert_eq!(ClientKillFilter::parse(&argv).map(|(_, r)| r), Some(KillReply::Status));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum KillReply {
+    /// The legacy positional form (`CLIENT KILL addr:port`): `+OK`, or
+    /// `-ERR` when no connection matched.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter, KillReply};
+    ///
+    /// // `CLIENT KILL 10.0.0.1:5` — the positional form answers `+OK`.
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"10.0.0.1:5".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(_, r)| r), Some(KillReply::Status));
+    /// ```
+    Status,
+    /// The filtered form (`CLIENT KILL ID …` / `ADDR …`): the number of
+    /// connections closed.
+    ///
+    /// ```
+    /// use kevy_rt::{Argv, ClientKillFilter, KillReply};
+    ///
+    /// // `CLIENT KILL ID 7` — the filtered form answers with a count.
+    /// let argv = Argv::from(vec![b"CLIENT".to_vec(), b"KILL".to_vec(), b"ID".to_vec(), b"7".to_vec()]);
+    /// assert_eq!(ClientKillFilter::parse(&argv).map(|(_, r)| r), Some(KillReply::Count));
+    /// ```
+    Count,
+}
+
 impl ClientKillFilter {
-    /// Parse the argv of `CLIENT KILL …`. Returns the selector plus
-    /// `true` for the legacy positional form (`CLIENT KILL addr:port`),
-    /// whose reply is `+OK` / `-ERR` instead of the filtered form's
-    /// killed-count integer. `None` = a shape this server doesn't
+    /// Parse the argv of `CLIENT KILL …`: the selector, and which reply
+    /// its form answers with. `None` = a shape this server doesn't
     /// support (the caller answers with a syntax error).
-    pub fn parse<A: ArgvView + ?Sized>(args: &A) -> Option<(Self, bool)> {
+    pub fn parse<A: ArgvView + ?Sized>(args: &A) -> Option<(Self, KillReply)> {
         match args.len() {
             3 => {
                 let a = args.get(2)?;
-                a.contains(&b':').then(|| (Self::Addr(a.to_vec()), true))
+                a.contains(&b':').then(|| (Self::Addr(a.to_vec()), KillReply::Status))
             }
             4 => {
                 let kind = args.get(2)?.to_ascii_uppercase();
                 let val = args.get(3)?;
                 match kind.as_slice() {
-                    b"ID" => {
-                        std::str::from_utf8(val).ok()?.parse().ok().map(|id| (Self::Id(id), false))
-                    }
-                    b"ADDR" => Some((Self::Addr(val.to_vec()), false)),
+                    b"ID" => std::str::from_utf8(val)
+                        .ok()?
+                        .parse()
+                        .ok()
+                        .map(|id| (Self::Id(id), KillReply::Count)),
+                    b"ADDR" => Some((Self::Addr(val.to_vec()), KillReply::Count)),
                     _ => None,
                 }
             }
@@ -141,7 +199,7 @@ impl<C: Commands> Shard<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::ClientKillFilter;
+    use super::{ClientKillFilter, KillReply};
     use kevy_resp::Argv;
 
     fn argv(parts: &[&[u8]]) -> Argv {
@@ -157,18 +215,18 @@ mod tests {
         let a = argv(&[b"CLIENT", b"KILL", b"127.0.0.1:50123"]);
         assert_eq!(
             ClientKillFilter::parse(&a),
-            Some((ClientKillFilter::Addr(b"127.0.0.1:50123".to_vec()), true))
+            Some((ClientKillFilter::Addr(b"127.0.0.1:50123".to_vec()), KillReply::Status))
         );
     }
 
     #[test]
     fn parse_id_and_addr_filters() {
         let a = argv(&[b"CLIENT", b"KILL", b"ID", b"42"]);
-        assert_eq!(ClientKillFilter::parse(&a), Some((ClientKillFilter::Id(42), false)));
+        assert_eq!(ClientKillFilter::parse(&a), Some((ClientKillFilter::Id(42), KillReply::Count)));
         let a = argv(&[b"CLIENT", b"KILL", b"addr", b"10.0.0.1:1"]);
         assert_eq!(
             ClientKillFilter::parse(&a),
-            Some((ClientKillFilter::Addr(b"10.0.0.1:1".to_vec()), false))
+            Some((ClientKillFilter::Addr(b"10.0.0.1:1".to_vec()), KillReply::Count))
         );
     }
 

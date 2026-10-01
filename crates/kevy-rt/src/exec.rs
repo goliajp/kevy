@@ -6,11 +6,11 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::exec_fold::relative_ttl_write;
 use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{Argv, ArgvView, RespVersion};
+use kevy_resp::{ArgvView, RespVersion};
+use kevy_store::ListEnd;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -28,15 +28,19 @@ impl<C: Commands> Shard<C> {
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
         let resolved = self.commands.resolve(args);
-        // One conns probe serves the whole pre-dispatch phase — the MULTI
+        // One conns lookup serves the whole pre-dispatch phase — the MULTI
         // check, the per-cmd proto capture, and (for the dispatching hot
-        // arms) the seq assignment. These were three separate map probes
-        // per command (in_multi here + next_seq_for + start_single's proto
-        // read).
-        let Some(c) = self.conns.get_mut(&conn_id) else { return };
+        // arms) the seq assignment.
+        let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return;
+        };
         let in_multi = c.multi.is_some();
         let proto = c.proto;
         let cluster_conn = c.cluster;
+        if self.cluster.is_some() {
+            crate::cluster::set_relayed_client(c.relayed);
+        }
         if !in_multi && matches!(resolved.txn_kind, TxnKind::Other | TxnKind::Watch) {
             let seq = c.next_seq;
             c.next_seq += 1;
@@ -93,7 +97,7 @@ impl<C: Commands> Shard<C> {
         // One client command at the dispatch boundary (before fan-out, so a
         // multi-key command counts once) — INFO's total_commands_processed.
         self.commands.on_command();
-        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, block_hint, wake_idx, verb, .. } = resolved;
         // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
@@ -120,7 +124,9 @@ impl<C: Commands> Shard<C> {
             Route::BitOpStore => self.start_bitop(conn_id, seq, args),
             Route::Copy => self.start_copy(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
-            Route::ListMove { from_left, to_left } => {
+            Route::ListMove { from, to } => {
+                let (from_left, to_left) =
+                    (matches!(from, ListEnd::Left), matches!(to, ListEnd::Left));
                 self.start_list_move(conn_id, seq, args, from_left, to_left);
             }
             // FEED.* — parse + shard-index dispatch live in
@@ -139,7 +145,19 @@ impl<C: Commands> Shard<C> {
                 self.start_repl_barrier(conn_id, seq, offsets, timeout_ms, miss);
             }
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                // a blocking pop that finds data pops the key it names first
+                let key_idx = match &block_hint {
+                    crate::BlockHint::Block {
+                        kind:
+                            crate::BlockKind::Blpop
+                            | crate::BlockKind::Brpop
+                            | crate::BlockKind::Bzpopmin
+                            | crate::BlockKind::Brpoplpush,
+                        ..
+                    } => Some(1),
+                    _ => None,
+                };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
@@ -162,7 +180,7 @@ impl<C: Commands> Shard<C> {
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
@@ -214,13 +232,24 @@ impl<C: Commands> Shard<C> {
         agg: Agg,
         is_quit: bool,
     ) {
-        if let Some(c) = self.conns.get_mut(&conn_id) {
+        if let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
             let proto = c.proto;
             c.pending.push_back(PendingSlot { remaining, agg, done: None, proto });
-            if is_quit {
-                c.closing = true;
-            }
         }
+        if is_quit {
+            self.mark_closing(conn_id);
+        }
+    }
+
+    /// Close `conn_id` once its replies are out. The io_uring reactor
+    /// reaps only the conns on its closing set, so the flag alone would
+    /// leave the socket open until the client hung up; the epoll reactor
+    /// clears the set every pass.
+    pub(crate) fn mark_closing(&mut self, conn_id: u64) {
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.closing = true;
+        }
+        self.closing_uring_conns.push(conn_id);
     }
 
     /// Fan a built target list out: locally exec on this shard, or send the
@@ -245,8 +274,7 @@ impl<C: Commands> Shard<C> {
         self.flush_requests();
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.xshard_inflight += 1;
@@ -272,12 +300,12 @@ impl<C: Commands> Shard<C> {
         while mask != 0 {
             let s = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if s == self.id || self.request_batch[s].is_empty() {
+            if s == self.id || self.request_batch[s].reqs.is_empty() {
                 continue;
             }
-            let reqs = std::mem::take(&mut self.request_batch[s]);
+            let (reqs, spare) = self.request_batch[s].take();
             self.xshard_inflight += reqs.len() as u64;
-            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs });
+            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs, spare });
         }
     }
 
@@ -299,69 +327,21 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Like [`Self::log`] but TTL-persistence-safe. After logging `args`, if
-    /// it is a *relative*-TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
-    /// `SET … EX|PX`) it appends an absolute `PEXPIREAT key <unix_ms>` derived
-    /// from the key's post-exec deadline. AOF replay re-anchors a relative TTL
-    /// to restart-time — resetting every key to a fresh full TTL (a
-    /// production incident root cause) — so the absolute follow-up overwrites that with the
-    /// original wall-clock deadline. Already-absolute writes (`EXPIREAT`/
-    /// `PEXPIREAT`) replay correctly and need no follow-up.
+    /// Like [`Self::log`] but TTL-persistence-safe: a write that moved a
+    /// deadline by a relative amount (`EXPIRE`, `SET … EX`, `HEXPIRE`, …)
+    /// is followed by the absolute deadline it set, so a replay lands on
+    /// the original wall-clock instant instead of counting the TTL from
+    /// replay time (a production incident root cause). The rule is the
+    /// one the embedded engine records its writes by.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        // Hash field-TTL relative forms get the same absolute
-        // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
-        // re-anchors the replay-time deadline to the original wall
-        // clock. HPEXPIREAT itself is already absolute.
-        if args.get(0).is_some_and(|v| {
-            v.eq_ignore_ascii_case(b"HEXPIRE") || v.eq_ignore_ascii_case(b"HPEXPIRE")
-        }) {
-            self.log_hash_ttl_followup(args);
-            return;
+        for followup in kevy_verbs::aof::ttl_followup(&self.store, args) {
+            self.log(&followup);
         }
-        if !relative_ttl_write(args) {
-            return;
-        }
-        let Some(key) = args.get(1) else { return };
-        let pttl = self.store.pttl(key);
-        if pttl < 0 {
-            return; // command left no live TTL (key gone / TTL cleared)
-        }
-        let abs = kevy_store::now_unix_ms().saturating_add(pttl as u64);
-        let key = key.to_vec();
-        let mut c = Argv::with_capacity(3, 0);
-        c.push(b"PEXPIREAT");
-        c.push(&key);
-        c.push(abs.to_string().as_bytes());
-        self.log(&c);
-    }
-
-    /// log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
-    /// frame's deadline as absolute unix-ms and append the canonical
-    /// `HPEXPIREAT` follow-up (fields tail copied verbatim).
-    fn log_hash_ttl_followup<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if args.len() < 6 {
-            return;
-        }
-        let Some(raw) = std::str::from_utf8(&args[2]).ok().and_then(|s| s.parse::<i64>().ok())
-        else {
-            return;
-        };
-        let ms =
-            if args[0].eq_ignore_ascii_case(b"HEXPIRE") { raw.saturating_mul(1000) } else { raw };
-        let abs = kevy_store::now_unix_ms().saturating_add_signed(ms);
-        let mut c = Argv::with_capacity(args.len(), 0);
-        c.push(b"HPEXPIREAT");
-        c.push(&args[1]);
-        c.push(abs.to_string().as_bytes());
-        for i in 3..args.len() {
-            c.push(&args[i]);
-        }
-        self.log(&c);
     }
 
     // `fold` (the seq-ordered result reducer) + `protocol_error` and the
-    // `relative_ttl_write` / `decode_continuation` free fns live in
+    // `decode_continuation` free fn live in
     // [`crate::exec_fold`] — same `impl<C: Commands> Shard<C>`, split out
     // so this file stays under the 500-LOC house rule.
 }

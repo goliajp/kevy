@@ -42,7 +42,7 @@ A normal kevy process accepts every command on a single port and internally forw
                   └─────────────────────────────────────────┘
 ```
 
-Shard `i` always binds `port_base + 1 + i` (override `port_base` via TOML). The main port keeps the proxy behaviour for clients that don't speak cluster; per-shard ports answer `-MOVED <slot> <host:port>` when a key arrives at the wrong owner.
+Shard `i` binds `port_base + i`, and `port_base` defaults to `port + 1` (override it in TOML). The main port keeps the proxy behaviour for clients that don't speak cluster; per-shard ports answer `-MOVED <slot> <host:port>` when a key arrives at the wrong owner. Behind a proxy or NAT, `announce_ip` and `announce_port_base` make those replies name the addresses clients actually reach — see [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md#cluster-mode-behind-a-proxy).
 
 Whole-keyspace commands (`KEYS`, `SCAN`, `DBSIZE`, `FLUSHALL`) stay whole-keyspace on every port — kevy fans them out internally so a client doesn't have to.
 
@@ -55,7 +55,7 @@ port = 6004
 
 [cluster]
 enabled   = true
-# port_base = 6004   # defaults to `port`; shards live at port_base + 1 + i
+# port_base = 6005   # first shard port; defaults to `port + 1`, shard i at port_base + i
 ```
 
 Equivalent CLI / env:
@@ -244,8 +244,10 @@ It drives two failover surfaces:
 | Knob | Meaning | Default |
 |------|---------|---------|
 | `node_id` | This node's stable identifier (≤ 32 B ASCII; scope owners and elections reference it) | required |
-| `peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member | required |
+| `peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member | required |
 | `elect_port_base` | TCP port the election control plane binds (one listener per node) | `0` = client port + 200 |
+| `secure` | Encrypt and authenticate the election links ([`docs/encrypted-links.md`](encrypted-links.md)) | `false` |
+| `peer_keys` | Each node's public key, `["id=<key>", …]` | empty |
 
 ### Manual rejoin recovery
 
@@ -307,9 +309,11 @@ The full key list (backlog sizing, `replica_read_only`, `replica_max_staleness_m
 | TOML | Meaning |
 |------|---------|
 | `[cluster] node_id` | This node's stable identifier (≤ 32 B ASCII). |
-| `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member (legacy two-field form: both ports equal). |
+| `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]` list of every cluster member (legacy two-field form: both ports equal). |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` entries, comma-separated. |
 | `[cluster] elect_port_base` | TCP port the election control plane binds; `0` (default) = `port` + 200. |
+| `[cluster] secure` | Encrypt and authenticate the election links; `false` (default) = plaintext. |
+| `[cluster] peer_keys` | `["id=<public key>", …]` for every other node, from `kevy keygen`. |
 
 Election timings (heartbeat 200 ms, DOWN after 5 s, election timeout 3 s) are fixed constants, not config keys.
 

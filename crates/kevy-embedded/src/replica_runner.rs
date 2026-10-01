@@ -33,6 +33,9 @@ use std::time::Duration;
 use kevy_persist::Argv;
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
+use crate::config_secure::LinkKeys;
+use crate::replica_wire::Dialer;
+use crate::shard::shard_idx;
 use crate::store::{Shards, lock_write};
 
 /// Handle to the background thread streaming from the primary. Owned
@@ -84,6 +87,7 @@ impl ReplicaRunner {
         replica_id: String,
         backoff_min: Duration,
         backoff_max: Duration,
+        keys: Option<LinkKeys>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let sock_clone = Arc::new(Mutex::new(None::<TcpStream>));
@@ -94,7 +98,7 @@ impl ReplicaRunner {
 
         let stop_c = Arc::clone(&stop);
         let sock_c = Arc::clone(&sock_clone);
-        let upstream_c = Arc::clone(&upstream_slot);
+        let dialer = Dialer::new(Arc::clone(&upstream_slot), replica_id, keys);
         let force_c = Arc::clone(&force_reconnect);
         let offset_c = Arc::clone(&applied_offset);
         let link_c = Arc::clone(&link_up);
@@ -104,8 +108,7 @@ impl ReplicaRunner {
             .spawn(move || {
                 run_loop(
                     shards,
-                    upstream_c,
-                    replica_id,
+                    dialer,
                     stop_c,
                     sock_c,
                     force_c,
@@ -178,8 +181,7 @@ impl ReplicaRunner {
 #[allow(clippy::too_many_arguments)]
 fn run_loop(
     shards: Shards,
-    upstream: Arc<Mutex<String>>,
-    replica_id: String,
+    mut dialer: Dialer,
     stop: Arc<AtomicBool>,
     sock_clone: Arc<Mutex<Option<TcpStream>>>,
     force_reconnect: Arc<AtomicBool>,
@@ -201,7 +203,7 @@ fn run_loop(
         // an immediate try with the new URL; clear the flag here so a
         // failed connect re-arms the backoff normally.
         force_reconnect.store(false, Ordering::Relaxed);
-        match dial(&upstream, &replica_id, data_gen, &applied_offset) {
+        match dialer.dial(data_gen, applied_offset.load(Ordering::Relaxed)) {
             Ok(mut client) => {
                 backoff = backoff_min;
                 run_session(
@@ -223,19 +225,6 @@ fn run_loop(
             }
         }
     }
-}
-
-/// One reconnect attempt: read the live upstream + resume cursor and
-/// handshake with the data's generation.
-fn dial(
-    upstream: &Arc<Mutex<String>>,
-    replica_id: &str,
-    data_gen: u64,
-    applied_offset: &Arc<AtomicU64>,
-) -> Result<ReplicaClient, kevy_replicate::replica::ReplicaError> {
-    let from_offset = applied_offset.load(Ordering::Relaxed);
-    let target = upstream.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    ReplicaClient::connect_at(&target, replica_id, data_gen, from_offset, Duration::from_secs(5))
 }
 
 /// One connected session: publish the socket clone + link-up flag,
@@ -280,7 +269,7 @@ fn drain_session(
     // primary advertised at handshake. Adopt it when a whole history
     // lands: at SnapshotEnd, or immediately when the session started
     // from offset 0 (nothing local to contradict).
-    let ack_gen = client.primary_gen_at_handshake();
+    let ack_gen = client.primary_at_handshake().generation;
     if client.expected_offset() == 0 {
         *data_gen = ack_gen;
     }
@@ -288,9 +277,9 @@ fn drain_session(
         match client.next_event() {
             // Heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
-            Some(Ok(ReplicaEvent::Ping { generation, .. })) => {
+            Some(Ok(ReplicaEvent::Ping(tail))) => {
                 let _ = client.send_ack(client.expected_offset());
-                if generation != 0 && generation != ack_gen {
+                if tail.generation != 0 && tail.generation != ack_gen {
                     // The primary broke continuity under us (FLUSHALL /
                     // promotion). Re-handshake so its fence re-decides.
                     break;
@@ -344,8 +333,9 @@ fn snapshot_event(
                 *data_gen = ack_gen;
             }
         }
-        // Ping / Frame are handled by the caller's arms.
-        ReplicaEvent::Ping { .. } | ReplicaEvent::Frame(_) => {}
+        // Ping / Frame are handled by the caller's arms; an event this
+        // runner cannot name carries nothing it applies
+        _ => {}
     }
     true
 }
@@ -361,7 +351,8 @@ fn begin_snapshot(shards: &Shards) -> Vec<u8> {
     Vec::new()
 }
 
-/// SnapshotEnd: decode the accumulated image into shard 0 and publish
+/// SnapshotEnd: decode the accumulated image into the shards that own its
+/// keys and publish
 /// the ack offset. `false` = decode error — drop the link; reconnect
 /// either lands in the backlog or triggers another snapshot ship.
 fn finish_snapshot(
@@ -370,7 +361,7 @@ fn finish_snapshot(
     ack_offset: u64,
     applied_offset: &Arc<AtomicU64>,
 ) -> bool {
-    if !load_snapshot_into_shard0(shards, buf) {
+    if !load_snapshot_into_shards(shards, buf) {
         return false;
     }
     applied_offset.store(ack_offset, Ordering::Relaxed);
@@ -378,6 +369,10 @@ fn finish_snapshot(
 }
 
 fn apply_frame(shards: &Shards, argv: &Argv) {
+    if crate::shard_restore::is_catalog(argv) {
+        adopt_catalog(shards, Some(argv), false);
+        return;
+    }
     let n = shards.len();
     let idx = route_shard(argv, n);
     let shard = &shards[idx];
@@ -394,26 +389,48 @@ fn apply_frame(shards: &Shards, argv: &Argv) {
 /// follow-up and will route each upstream shard's snapshot to its
 /// matching local shard. Returns `false` on decode error (caller drops
 /// the link).
-fn load_snapshot_into_shard0(shards: &Shards, payload: &[u8]) -> bool {
-    let shard = &shards[0];
-    let mut g = lock_write(shard);
-    let cursor = std::io::Cursor::new(payload);
-    kevy_persist::load_snapshot_from(&mut g.store, cursor).is_ok()
+fn load_snapshot_into_shards(shards: &Shards, payload: &[u8]) -> bool {
+    let n = shards.len();
+    let mut aux = None;
+    let loaded = shards.iter().enumerate().all(|(i, shard)| {
+        let mut g = lock_write(shard);
+        let cursor = std::io::Cursor::new(payload);
+        let keep = |k: &[u8]| shard_idx(k, n) == i;
+        kevy_persist::load_snapshot_with_aux(&mut g.store, cursor, keep).map(|a| aux = a).is_ok()
+    });
+    if loaded {
+        adopt_catalog(shards, aux.as_ref(), true);
+    }
+    loaded
+}
+
+/// Hand a catalog frame from the primary to the registries every shard
+/// shares; a full sync's `None` empties the catalog.
+fn adopt_catalog(shards: &Shards, frame: Option<&Argv>, full_sync: bool) {
+    #[cfg(feature = "index")]
+    if let Some(regs) = shards.first().and_then(|s| lock_write(s).catalog.clone()) {
+        regs.adopt(frame, full_sync);
+    }
+    #[cfg(not(feature = "index"))]
+    let _ = (shards, frame, full_sync);
 }
 
 /// Route a mutation argv to its destination shard. argv[0] is the
 /// command, argv[1] is the key for almost every mutation kevy supports
 /// (SET k v, DEL k, INCR k, HSET k …, LPUSH k …, ZADD k …). Keyless
 /// commands (FLUSHALL, PUBLISH) fall back to shard 0 — same convention
-/// `crate::store::lock()` uses for the pub/sub bus.
+/// `crate::store::lock()` uses for the pub/sub bus. The stream commands
+/// that name their stream later are routed by it.
 fn route_shard(argv: &Argv, n: usize) -> usize {
     if n <= 1 {
         return 0;
     }
-    let Some(key) = argv.get(1) else {
+    let mut buf = [0u8; 32];
+    let up = kevy_verbs::args::upper_verb(argv.first().unwrap_or_default(), &mut buf);
+    let Some(key) = crate::verb_keys::shard_key(up, argv) else {
         return 0;
     };
-    (kevy_hash::key_hash_slot(key) as usize) % n
+    shard_idx(key, n)
 }
 
 /// Sleep `dur` in slices of `slice`, checking `stop` between slices.
@@ -458,5 +475,23 @@ mod tests {
         let b = argv(&[b"DEL", b"k1"]);
         // Same key → same shard regardless of command name.
         assert_eq!(route_shard(&a, 8), route_shard(&b, 8));
+    }
+
+    #[test]
+    fn a_stream_command_routes_by_its_stream() {
+        // keys chosen so the literal first argument lands elsewhere
+        let key = (0..64)
+            .map(|i| format!("s{i}"))
+            .find(|k| {
+                let at = route_shard(&argv(&[b"XADD", k.as_bytes()]), 8);
+                at != route_shard(&argv(&[b"X", b"GROUP"]), 8)
+                    && at != route_shard(&argv(&[b"X", b"CREATE"]), 8)
+            })
+            .expect("a key apart from the subcommand words");
+        let k = key.as_bytes();
+        let home = route_shard(&argv(&[b"XADD", k, b"*", b"f", b"v"]), 8);
+        let group = argv(&[b"xgroup", b"CREATE", k, b"g", b"0"]);
+        let read = argv(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"STREAMS", k, b">"]);
+        assert_eq!((route_shard(&group, 8), route_shard(&read, 8)), (home, home));
     }
 }

@@ -31,6 +31,7 @@ impl<C: Commands> Shard<C> {
             &mut self.store,
             args,
             proto,
+            meta,
             &mut self.reply_scratch,
         );
         let reply = SmallReply::from_slice(&self.reply_scratch);
@@ -103,7 +104,7 @@ impl<C: Commands> Shard<C> {
             }
             Op::MSet(pairs) => {
                 for (k, v) in &pairs {
-                    self.store.set(k, v.clone(), None, false, false);
+                    self.store.set(k, v.clone(), None, kevy_store::SetCondition::Always);
                     self.note_key_mutated(k);
                 }
                 if !pairs.is_empty() {
@@ -247,7 +248,11 @@ impl<C: Commands> Shard<C> {
                 // orchestrator instead — until that lands, it errors
                 // out at start_rename).
                 use kevy_store::RenameOutcome;
-                let outcome = self.store.rename(&src, &dst, nx);
+                let outcome = if nx {
+                    self.store.rename_nx(&src, &dst)
+                } else {
+                    self.store.rename(&src, &dst)
+                };
                 let renamed = matches!(outcome, RenameOutcome::Renamed);
                 let reply = match outcome {
                     RenameOutcome::Renamed if nx => b":1\r\n".to_vec(),
@@ -271,7 +276,9 @@ impl<C: Commands> Shard<C> {
                     // Keyspace notifications: generic class, two events
                     // (`rename_from` on src, `rename_to` on dst) per
                     // Redis events.c convention.
-                    if !self.notify_flags.is_empty() && self.notify_flags.generic {
+                    if self.notify_flags.is_active()
+                        && self.notify_flags.contains(crate::NotificationFlags::GENERIC)
+                    {
                         self.notify_keyspace_event(b"rename_from", &src);
                         self.notify_keyspace_event(b"rename_to", &dst);
                     }
@@ -285,7 +292,10 @@ impl<C: Commands> Shard<C> {
                 let moved = if !from_left && to_left {
                     self.store.rpoplpush(&src, &dst)
                 } else {
-                    self.store.lmove(&src, &dst, from_left, to_left)
+                    let end = |left: bool| {
+                        if left { kevy_store::ListEnd::Left } else { kevy_store::ListEnd::Right }
+                    };
+                    self.store.lmove(&src, &dst, end(from_left), end(to_left))
                 };
                 // The same-shard arm answers with the finished reply — the
                 // slot is a plain `Agg::First`, exactly like every other
@@ -411,6 +421,10 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::XReadCheck { index, argv } => Part::XReadElement {
+                index,
+                element: self.commands.xreadgroup_refusal(&mut self.store, &argv),
+            },
             Op::XReadOne { index, argv, write } => {
                 // Single-stream non-blocking XREAD/XREADGROUP on the
                 // stream's owning shard (`$` resolves to this shard's
@@ -429,7 +443,12 @@ impl<C: Commands> Shard<C> {
                 // name) and point the WATCH bump / notify at the wrong key.
                 if write {
                     let key_idx = (argv.len() >= 2).then(|| (argv.len() - 2) as u8);
-                    let meta = DispatchMeta { is_write: true, wake_idx: None, key_idx };
+                    let meta = DispatchMeta {
+                        is_write: true,
+                        wake_idx: None,
+                        key_idx,
+                        verb: crate::VerbId::UNKNOWN,
+                    };
                     self.post_write_housekeeping(&argv, meta);
                 }
                 let element = if reply.starts_with(b"*1\r\n") {

@@ -15,9 +15,6 @@ feed-*.meta
 index-catalog.meta
 .premigration/
 
-# Claude Code workspace — kept entirely local, not part of the public repo.
-.claude/
-
 # Development-collaboration documents. This repository's git surface is what
 # a USER needs; how the work is organised is not part of that. They stay on
 # disk — they are just not published.
@@ -28,8 +25,10 @@ index-catalog.meta
 # what was predicted, what the instrument actually said, what got reverted.
 # They are how the work was done, not something a user of kevy needs, and a
 # removal that is not backed by a rule here survives exactly until the next
-# `git add -A`. The published evidence surface stays: the ledgers the READMEs
-# and the site quote, the atlases the gates read, and bench/REPORT.md.
+# `git add -A`. Published numbers live in PERFORMANCE.md; the JSON baselines
+# the gates read stay tracked.
+# The human-readable atlases and reports the tools generate are written under
+# target/reports/, not into the tree.
 bench/FINDING-*.md
 bench/PERF-FINDING-*.md
 bench/PERF-DECOMP-*.md
@@ -96,7 +95,7 @@ bench/iot-consumer/target/
 bench/mcu-probe/target/
 bench/iot-consumer/riscv-out
 
-# perfgate builds the reference binary from the baseline commit and caches it here.
+# perfgate builds the git revs it is given and caches the binaries here.
 bench/.perfgate-ref/
 # capacity-envelope.sh writes its per-run verdicts here (tiergate consumes them).
 bench/.capacity-envelope-results

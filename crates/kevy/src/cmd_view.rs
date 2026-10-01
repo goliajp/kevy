@@ -1,54 +1,20 @@
 //! VIEW.* command surface. CREATE/DROP are Local catalog
-//! mutations (sidecar-persisted, like IDX.*); QUERY/LIST/VERIFY/
+//! mutations (recorded like IDX.*); QUERY/LIST/VERIFY/
 //! REBUILD/EXPLAIN ride the extension fan-out.
 //!
 //! Tree grammar over argv (parens are separate arguments):
 //! `( AND|OR|DIFF <sub> <sub> )` | `<index> RANGE <min> <max>` |
 //! `<index> EQ <v>`.
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
-)]
-
 use kevy_resp::CmdError;
-use std::path::Path;
 
 use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK, encode_value};
-use crate::state::{Ctx, RuntimeState};
+use crate::state::{CatalogBase, CatalogChange, Ctx};
 use crate::view_runtime;
-
-const SIDECAR: &str = "view-catalog.meta";
-
-/// Boot: load the persisted view catalog (runs after
-/// `cmd_index::boot` — view leaves reference index specs).
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = ViewCatalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        state.install_view_catalog(cat);
-    }
-}
-
-fn persist_sidecar(dir: Option<&Path>, cat: &ViewCatalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("view-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-    }
-}
 
 /// One leaf of a view tree: an index name, a shape, and the literals that
 /// shape needs — `RANGE min max` or `EQ value`, both coerced to the index's
@@ -67,7 +33,7 @@ fn parse_leaf<A: ArgvView + ?Sized>(
     // per the index's declared type.
     let index = tok.to_vec();
     let spec_ty = icat
-        .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
+        .and_then(|c| c.get(&index).map(|(s, _)| s.ty()))
         .ok_or("ERR view leaf references unknown index")?;
     let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
     if shape.eq_ignore_ascii_case(b"RANGE") {
@@ -77,12 +43,12 @@ fn parse_leaf<A: ArgvView + ?Sized>(
         let max =
             IndexValue::parse_literal(spec_ty, args.get(i + 3).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf max does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+        Ok((Tree::Leaf(Leaf::new(index, min, max)), i + 4))
     } else if shape.eq_ignore_ascii_case(b"EQ") {
         let v =
             IndexValue::parse_literal(spec_ty, args.get(i + 2).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf value does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+        Ok((Tree::Leaf(Leaf::new(index, v.clone(), v)), i + 3))
     } else {
         Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
     }
@@ -131,58 +97,80 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
             "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]",
         );
     }
-    let icat = ctx.state.catalogs.index();
+    // the view is checked against the index catalog it commits onto
+    loop {
+        let base = ctx.state.catalog_base();
+        let Some(cat) = view_created(&base, args, out) else { return };
+        let change = CatalogChange { view: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            return out.extend_from_slice(b"+OK\r\n");
+        }
+    }
+}
+
+/// The view catalog with the view `args` declares added, checked against
+/// `base`'s indexes; `None` once the reply holds the refusal.
+fn view_created<A: ArgvView + ?Sized>(
+    base: &CatalogBase,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<ViewCatalog> {
+    let icat = base.index.clone();
     let (tree, mut i) = match parse_tree(icat.as_deref(), args, 3, 1) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e.as_wire()),
+        Err(e) => return refused(out, e.as_wire()),
     };
     if !(args.get(i).is_some_and(|t| t.eq_ignore_ascii_case(b"ORDER"))
         && args.get(i + 1).is_some_and(|t| t.eq_ignore_ascii_case(b"BY")))
     {
-        return encode_error(out, "ERR ORDER BY <index> is required");
+        return refused(out, "ERR ORDER BY <index> is required");
     }
     let Some(order_by) = args.get(i + 2).map(|t| t.to_vec()) else {
-        return encode_error(out, "ERR ORDER BY <index> is required");
+        return refused(out, "ERR ORDER BY <index> is required");
     };
     if icat.as_deref().and_then(|c| c.get(&order_by).map(|_| ())).is_none() {
-        return encode_error(out, "ERR ORDER BY references unknown index");
+        return refused(out, "ERR ORDER BY references unknown index");
     }
     i += 3;
-    let (desc, mut mode, top_k, via) = match parse_create_opts(args, i) {
+    let (order, mut mode, top_k, via) = match parse_create_opts(args, i) {
         Ok(opts) => opts,
-        Err(e) => return encode_error(out, e.as_wire()),
+        Err(e) => return refused(out, e.as_wire()),
     };
     if let ViewMode::Materialized { .. } = mode {
         mode = ViewMode::Materialized { top_k };
     } else if top_k != 0 {
-        return encode_error(out, "ERR TOPK requires MODE materialized");
+        return refused(out, "ERR TOPK requires MODE materialized");
     }
-    let spec = ViewSpec { name: args[1].to_vec(), tree, order_by, desc, mode, via };
-    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
+    let mut spec =
+        ViewSpec::new(args[1].to_vec(), tree, order_by).with_order(order).with_mode(mode);
+    spec.via = via;
+    let mut cat = base.view_owned();
     match cat.create(spec) {
-        Ok(()) => {
-            persist_sidecar(ctx.state.sidecar_dir(), &cat);
-            ctx.state.install_view_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
-        }
-        Err(e) => encode_error(out, e),
+        Ok(()) => Some(cat),
+        Err(e) => refused(out, &e.to_wire()),
     }
 }
 
-/// `(desc, mode, top_k, via)` from the optional `VIEW.CREATE` tail.
-type CreateOpts = (bool, ViewMode, u32, Option<Vec<u8>>);
+/// Write the refusal `msg` into the reply; no catalog to install.
+fn refused<T>(out: &mut Vec<u8>, msg: &str) -> Option<T> {
+    encode_error(out, msg);
+    None
+}
+
+/// `(order, mode, top_k, via)` from the optional `VIEW.CREATE` tail.
+type CreateOpts = (kevy_index::SortOrder, ViewMode, u32, Option<Vec<u8>>);
 
 /// Parse the optional `VIEW.CREATE` tail starting at `i`:
 /// `[DESC] [MODE virtual|materialized] [TOPK k] [VIA tpl]`.
 fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, mut i: usize) -> Result<CreateOpts, CmdError> {
-    let mut desc = false;
+    let mut order = kevy_index::SortOrder::Asc;
     let mut mode = ViewMode::Virtual;
     let mut top_k = 0u32;
     let mut via = None;
     while i < args.len() {
         let t = &args[i];
         if t.eq_ignore_ascii_case(b"DESC") {
-            desc = true;
+            order = kevy_index::SortOrder::Desc;
             i += 1;
         } else if t.eq_ignore_ascii_case(b"MODE") {
             let m = match args.get(i + 1) {
@@ -217,7 +205,7 @@ fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, mut i: usize) -> Result<Cre
             return Err(CmdError::Wire("ERR syntax error"));
         }
     }
-    Ok((desc, mode, top_k, via))
+    Ok((order, mode, top_k, via))
 }
 
 /// `VIEW.DROP <name>`.
@@ -225,12 +213,17 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
     if args.len() != 2 {
         return encode_error(out, "ERR usage: VIEW.DROP name");
     }
-    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
-    let hit = cat.drop_view(&args[1]);
-    if hit {
-        persist_sidecar(ctx.state.sidecar_dir(), &cat);
-        ctx.state.install_view_catalog(cat);
-    }
+    let hit = loop {
+        let base = ctx.state.catalog_base();
+        let mut cat = base.view_owned();
+        if !cat.drop_view(&args[1]) {
+            break false;
+        }
+        let change = CatalogChange { view: Some(cat), ..CatalogChange::default() };
+        if ctx.state.commit_catalogs(&base, change) {
+            break true;
+        }
+    };
     encode_integer(out, i64::from(hit));
 }
 
@@ -241,23 +234,23 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
 pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"VIEW.QUERY") {
-        return op_query(ctx, store, argv);
+        return op_query(ctx, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") {
         return vec![ST_OK]; // catalog is shared — the reduce renders it
     }
     if verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
-        return op_stats(ctx, store, argv, verb);
+        return op_stats(ctx, argv, verb);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.REBUILD") {
         if let Some(name) = argv.get(1) {
             view_runtime::schedule_rebuild(ctx.shard, name);
-            view_runtime::on_tick(ctx, store); // run it now on this shard
+            view_runtime::on_tick(ctx); // run it now on this shard
         }
         return vec![ST_OK];
     }
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
-        return op_explain(ctx, store, argv);
+        return op_explain(ctx, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
         return op_hydrate(store, argv);
@@ -317,11 +310,11 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_query(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = QueryArgs::parse(argv) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_page(ctx, store, &q.name, q.after.as_ref(), q.limit) {
+    match view_runtime::shard_page(ctx, &q.name, q.after.as_ref(), q.limit) {
         Ok(rows) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(rows.len() as u32).to_le_bytes());
@@ -338,11 +331,11 @@ fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     }
 }
 
-fn op_stats(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
+fn op_stats(ctx: &Ctx<'_>, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_stats(ctx, store, name) {
+    match view_runtime::shard_stats(ctx, name) {
         Ok((members, bytes, excluded, building)) => {
             let mut chunk = vec![ST_OK];
             chunk.push(u8::from(building));
@@ -355,7 +348,7 @@ fn op_stats(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) ->
     }
 }
 
-fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_explain(ctx: &Ctx<'_>, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
@@ -363,7 +356,7 @@ fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         return vec![ST_NOINDEX];
     };
     // Per-leaf local cardinalities.
-    let counts = crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
+    let counts = crate::index_runtime::with_segment_resolver(ctx, |seg| {
         let mut counts = Vec::new();
         spec.tree.each_leaf(&mut |l| {
             let n = seg(&l.index).map_or(0, |s| s.count(&l.min, &l.max));
@@ -496,3 +489,6 @@ mod hydrate_tests {
         assert_eq!(s.tier_stats().promotions_total, 0);
     }
 }
+
+#[cfg(test)]
+mod create_tests;

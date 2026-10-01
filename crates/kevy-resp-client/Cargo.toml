@@ -12,9 +12,20 @@ documentation = "https://docs.rs/kevy-resp-client"
 readme = "README.md"
 keywords = ["redis", "resp", "client", "valkey", "tcp"]
 categories = ["network-programming", "database"]
+# Not packaged: its mock server reads requests with kevy-testnet, which is
+# never published, so `cargo package` would ship a test that cannot compile.
+exclude = ["tests/roundtrip.rs"]
 
 [lints]
 workspace = true
 
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
+kevy-noise = { path = "../kevy-noise", version = "7.0.0" }
+
+[dev-dependencies]
+kevy-testnet = { path = "../kevy-testnet" }
+
+# entropy for handshake keys; kevy-sys never links on wasm32
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kevy-sys = { path = "../kevy-sys", version = "7.0.0" }

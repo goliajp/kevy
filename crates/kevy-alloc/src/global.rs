@@ -5,6 +5,12 @@
 //! own segments, and a free that arrives on the wrong thread is handed
 //! back through the owning segment's push-only foreign list.
 //!
+//! ```
+//! // a thread reaches its own heap with no setup
+//! assert!(kevy_alloc::global::thread_stats().is_some());
+//! kevy_alloc::global::thread_reclaim();
+//! ```
+//!
 //! # Two hazards this file exists to handle
 //!
 //! **Thread exit must not unmap live memory.** kevy shares values across
@@ -61,9 +67,31 @@ fn with_heap<R>(f: impl FnOnce(&mut Heap) -> R) -> Option<R> {
 
 /// A `#[global_allocator]` backed by one [`Heap`] per thread.
 ///
-/// ```no_run
+/// ```standalone_crate
 /// #[global_allocator]
 /// static ALLOC: kevy_alloc::KevyAlloc = kevy_alloc::KevyAlloc;
+///
+/// fn main() {
+///     let live = || kevy_alloc::thread_stats().expect("the thread is alive").live;
+///     let before = live();
+///     // every allocation in the program now comes from this thread's heap
+///     let v: Vec<u64> = Vec::with_capacity(100);
+///     assert_eq!(live() - before, 800);
+///     drop(v);
+///     assert_eq!(live(), before);
+/// }
+/// ```
+///
+/// It can also be called directly, as any `GlobalAlloc`:
+///
+/// ```
+/// use std::alloc::{GlobalAlloc, Layout};
+/// let layout = Layout::new::<u64>();
+/// // SAFETY: a non-zero layout; freed below with the same layout.
+/// let p = unsafe { kevy_alloc::KevyAlloc.alloc(layout) };
+/// assert!(!p.is_null());
+/// // SAFETY: allocated above with this layout.
+/// unsafe { kevy_alloc::KevyAlloc.dealloc(p, layout) };
 /// ```
 #[derive(Debug)]
 pub struct KevyAlloc;
@@ -110,14 +138,40 @@ fn is_over_aligned(layout: Layout) -> bool {
 //    allocates — which is the premise the reference in `with_heap`
 //    rests on in turn.
 unsafe impl GlobalAlloc for KevyAlloc {
+    /// One class lookup picks the path: a class means neither
+    /// over-aligned nor past the small range, so the common case tests
+    /// size and alignment once and the rest is out of line.
+    #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if is_over_aligned(layout) {
-            return alloc_over_aligned(layout);
-        }
-        match with_heap(|h| h.alloc(layout.size(), layout.align())) {
+        let Some(c) = class::index_of(layout.size(), layout.align()) else {
+            return alloc_unclassed(layout);
+        };
+        match with_heap(|h| h.alloc_small(c, layout.size())) {
             Some(Some(p)) => p.as_ptr(),
             _ => core::ptr::null_mut(),
         }
+    }
+
+    /// Zeroed memory without writing to a fresh mapping.
+    ///
+    /// The default implementation allocates and then zeroes every byte.
+    /// For a block past the size classes that write faults in every page
+    /// of a mapping the kernel had already zeroed, so a large buffer that
+    /// is never filled (a receive ring) becomes resident all the same.
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if !is_over_aligned(layout) && class::index_of(layout.size(), layout.align()).is_none() {
+            return match crate::large::alloc_zeroed(layout.size(), layout.align()) {
+                Some(p) => p.as_ptr(),
+                None => core::ptr::null_mut(),
+            };
+        }
+        // SAFETY: the caller's layout contract passes through unchanged.
+        let p = unsafe { self.alloc(layout) };
+        if !p.is_null() {
+            // SAFETY: `p` is a live block of at least `layout.size()` bytes.
+            unsafe { core::ptr::write_bytes(p, 0, layout.size()) };
+        }
+        p
     }
 
     /// Grow or shrink without moving where the size class allows it.
@@ -154,19 +208,47 @@ unsafe impl GlobalAlloc for KevyAlloc {
         }
     }
 
+    #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let Some(p) = NonNull::new(ptr) else { return };
-        if is_over_aligned(layout) {
-            // SAFETY: produced by `alloc_over_aligned` with this layout.
-            unsafe { dealloc_over_aligned(p, layout) };
+        let Some(c) = class::index_of(layout.size(), layout.align()) else {
+            // SAFETY: delegated to `GlobalAlloc`'s contract.
+            unsafe { dealloc_unclassed(p, layout) };
             return;
-        }
+        };
         with_heap(|h| {
             // SAFETY: delegated to `GlobalAlloc`'s contract — same
-            // layout the allocation was made with.
-            unsafe { h.dealloc(p, layout.size(), layout.align()) };
+            // layout, so the same class the allocation was served from.
+            unsafe { h.dealloc_small(p, c, layout.size()) };
         });
     }
+}
+
+/// A layout with no size class: over-aligned, or a direct mapping.
+#[inline(never)]
+fn alloc_unclassed(layout: Layout) -> *mut u8 {
+    if is_over_aligned(layout) {
+        return alloc_over_aligned(layout);
+    }
+    match with_heap(|h| h.alloc(layout.size(), layout.align())) {
+        Some(Some(p)) => p.as_ptr(),
+        _ => core::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `ptr` must come from [`alloc_unclassed`] with the same layout.
+#[inline(never)]
+unsafe fn dealloc_unclassed(ptr: NonNull<u8>, layout: Layout) {
+    if is_over_aligned(layout) {
+        // SAFETY: produced by `alloc_over_aligned` with this layout.
+        unsafe { dealloc_over_aligned(ptr, layout) };
+        return;
+    }
+    with_heap(|h| {
+        // SAFETY: delegated to the caller's contract.
+        unsafe { h.dealloc(ptr, layout.size(), layout.align()) };
+    });
 }
 
 /// Serve an alignment stricter than a size class can offer by
@@ -210,6 +292,33 @@ unsafe fn dealloc_over_aligned(ptr: NonNull<u8>, layout: Layout) {
         // routes foreign frees home itself.
         unsafe { h.dealloc(base, total, class::MIN_ALIGN) };
     });
+}
+
+/// Whether the allocation at `ptr`, made with `layout`, sits in a span
+/// sparser than where a fresh allocation of the same shape would land on
+/// this thread — so that copying it and freeing the original would help
+/// the heap return memory. `false` for anything this thread's heap does
+/// not own, and for direct mappings; any address may be asked about.
+///
+/// # Examples
+///
+/// ```
+/// use std::alloc::{GlobalAlloc, Layout};
+/// use kevy_alloc::KevyAlloc;
+/// let layout = Layout::from_size_align(900, 8)?;
+/// // SAFETY: a non-zero layout; freed below with the same layout.
+/// let p = unsafe { KevyAlloc.alloc(layout) };
+/// assert!(!p.is_null());
+/// // the only slot of its span, and that span is the one being filled
+/// assert!(!kevy_alloc::global::should_move(p, layout));
+/// // SAFETY: allocated above with this layout.
+/// unsafe { KevyAlloc.dealloc(p, layout) };
+/// # Ok::<(), std::alloc::LayoutError>(())
+/// ```
+#[must_use]
+pub fn should_move(ptr: *const u8, layout: Layout) -> bool {
+    !is_over_aligned(layout)
+        && with_heap(|h| h.should_move(ptr, layout.size(), layout.align())).unwrap_or(false)
 }
 
 /// This thread's heap statistics, or `None` past thread teardown.

@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
 use kevy_config::{Config, PeerEntry, ReplicationRole};
 use kevy_elect::{
     PeerAddr, Transport,
-    elector::{ElectConfig, ElectJitter, Elector},
+    elector::{ElectConfig, Elector},
     message::Role,
 };
 
@@ -57,37 +57,42 @@ impl ElectionState {
     /// startup error — kevy-elect's failure mode is "no automatic
     /// failover available"; the data plane keeps working with the
     /// manual `REPLICAOF` semantics.
-    pub(crate) fn maybe_start(&self, cfg: &Config, replication: &Arc<ReplicationState>) {
+    pub(crate) fn maybe_start(
+        &self,
+        cfg: &Config,
+        replication: &Arc<ReplicationState>,
+        link_key: Option<&kevy_noise::Keypair>,
+    ) {
         if !is_configured(cfg) {
             return;
         }
         let listen_port = resolved_elect_port_base(cfg);
         let elect_cfg = ElectConfig::default();
-        let hb_interval = elect_cfg.hb_interval;
         let (elector, start_role) = build_elector(cfg, elect_cfg, replication);
         // Filter out self when building outbound `PeerAddr` list.
         let self_id = cfg.cluster.node_id.as_str();
         let peers: Vec<PeerAddr> =
             cfg.cluster.peers.iter().filter(|p| p.node_id != self_id).map(peer_to_addr).collect();
-        let listen = (
-            IpAddr::V4(Ipv4Addr::new(
-                cfg.server.bind[0],
-                cfg.server.bind[1],
-                cfg.server.bind[2],
-                cfg.server.bind[3],
-            )),
-            listen_port,
-        );
+        let [a, b, c, d] = cfg.server.bind;
+        let listen = (IpAddr::V4(Ipv4Addr::new(a, b, c, d)), listen_port);
         let on_change = make_topology_callback(cfg, Arc::clone(replication));
-        match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
+        let secure = link_key.filter(|_| cfg.cluster.secure).map(|local| {
+            kevy_elect::SecureLinks::new(local.clone(), cfg.cluster.peer_keys.iter().cloned())
+        });
+        let spawned = match secure {
+            Some(secure) => Transport::spawn_secure(elector, listen, peers, on_change, secure),
+            None => Transport::spawn_with_callback(elector, listen, peers, on_change),
+        };
+        match spawned {
             Ok(t) => {
                 *self.transport.write().expect("elect transport poisoned") = Some(t);
                 eprintln!(
-                    "kevy: kevy-elect transport up on {}:{} ({} peers, role={})",
+                    "kevy: kevy-elect transport up on {}:{} ({} peers, role={}{})",
                     cfg.server.bind[0],
                     listen_port,
                     cfg.cluster.peers.len().saturating_sub(1),
                     if matches!(start_role, Role::Primary) { "primary" } else { "replica" },
+                    if cfg.cluster.secure { ", links encrypted" } else { "" },
                 );
             }
             Err(e) => {
@@ -175,7 +180,7 @@ fn make_topology_callback(
         .cluster
         .peers
         .iter()
-        .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
+        .map(|p| (p.node_id.clone(), p.host.clone(), peer_repl_port_base(p)))
         .collect();
     let my_id = cfg.cluster.node_id.clone();
     Box::new(move |role, primary, quorum| {
@@ -214,20 +219,25 @@ fn make_topology_callback(
     })
 }
 
+/// Where a peer accepts replicas: its declared base, else the default
+/// client port + 10000.
+fn peer_repl_port_base(p: &PeerEntry) -> u16 {
+    p.repl_port_base.unwrap_or_else(|| p.client_port.unwrap_or(p.port).saturating_add(10_000))
+}
+
 /// Retarget this node's replica runners at a newly announced
 /// primary, resolving its replication address from the static
-/// member table (client port + 10000, the replication-base
-/// convention).
+/// member table.
 fn follow_new_primary(
     replication: &ReplicationState,
     member_table: &[(String, String, u16)],
     pid: &str,
 ) {
-    let Some((_, host, cport)) = member_table.iter().find(|(id, _, _)| id == pid) else {
+    let Some((_, host, repl_base)) = member_table.iter().find(|(id, _, _)| id == pid) else {
         eprintln!("kevy: elect — primary '{pid}' not in the member table; not retargeting");
         return;
     };
-    let upstream = format!("{host}:{}", cport + 10_000);
+    let upstream = format!("{host}:{repl_base}");
     match crate::replication::retarget_upstream(replication, &upstream) {
         Ok(()) => {
             eprintln!("kevy: elect — following new primary '{pid}' at {upstream}");
@@ -276,15 +286,9 @@ fn build_elector(
     }
     let peer_ids: Vec<String> = cfg.cluster.peers.iter().map(|p| p.node_id.clone()).collect();
     let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
-    let elector = Elector::new(
-        cfg.cluster.node_id.clone(),
-        peer_ids,
-        advertised_addr,
-        start_role,
-        elect_cfg,
-        ElectJitter::System,
-    )
-    .with_persist(Box::new(persist));
+    let elector = Elector::new(cfg.cluster.node_id.clone(), peer_ids, advertised_addr, start_role)
+        .with_config(elect_cfg)
+        .with_persist(Box::new(persist));
     (elector, start_role)
 }
 
@@ -299,24 +303,43 @@ fn resolved_elect_port_base(cfg: &Config) -> u16 {
 }
 
 fn advertised_host(cfg: &Config) -> String {
-    // Use the bind address as the advertised host. Operators behind
-    // NAT will want to set an external IP via a future config knob —
-    // if the bind is 0.0.0.0 (all interfaces), the advertised string
-    // is still 0.0.0.0 (caller-resolved by the peer's hostname
-    // mapping).
-    format!(
-        "{}.{}.{}.{}",
-        cfg.server.bind[0], cfg.server.bind[1], cfg.server.bind[2], cfg.server.bind[3]
-    )
+    // `[cluster].announce_ip` for a node behind NAT or a proxy, else the
+    // bind address. A 0.0.0.0 bind stays 0.0.0.0 here; peers resolve the
+    // new primary from their own member table, not from this string.
+    let [a, b, c, d] = cfg.cluster.announce_ip.unwrap_or(cfg.server.bind);
+    format!("{a}.{b}.{c}.{d}")
 }
 
 fn peer_to_addr(p: &PeerEntry) -> PeerAddr {
-    PeerAddr { node_id: p.node_id.clone(), host: p.host.clone(), port: p.port }
+    PeerAddr::new(p.node_id.as_str(), p.host.as_str(), p.port)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advertised_host_prefers_the_announce_address() {
+        let mut cfg = Config::default();
+        cfg.server.bind = [10, 0, 0, 5];
+        assert_eq!(advertised_host(&cfg), "10.0.0.5");
+        cfg.cluster.announce_ip = Some([203, 0, 113, 7]);
+        assert_eq!(advertised_host(&cfg), "203.0.113.7");
+    }
+
+    #[test]
+    fn peer_repl_port_base_uses_the_declared_base_else_the_default() {
+        let peers = PeerEntry::parse_list("a@h:6204:6004:7100,b@h:6204:6004,c@h:6204").unwrap();
+        let bases: Vec<u16> = peers.iter().map(peer_repl_port_base).collect();
+        assert_eq!(bases, [7100, 16004, 16204]);
+    }
+
+    #[test]
+    fn a_peer_is_dialed_at_its_election_address() {
+        let peers = PeerEntry::parse_list("a@10.0.0.7:6204:6004").unwrap();
+        let addr = peer_to_addr(&peers[0]);
+        assert_eq!((addr.node_id.as_str(), addr.host.as_str(), addr.port), ("a", "10.0.0.7", 6204));
+    }
 
     fn cfg_with(node_id: &str, peers: &str) -> Config {
         let mut c = Config::default();

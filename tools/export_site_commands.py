@@ -19,11 +19,19 @@ import pathlib
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "web" / "src" / "commands.json"
-PORT = 7436
+
+
+def free_port() -> int:
+    """A port nothing listens on now. A fixed one let a stray listener
+    answer in the engine's place, and the check read that as a hang."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def read(f):
@@ -53,22 +61,42 @@ def ask(sock, f, argv):
     return read(f)
 
 
+def engine_tail(log) -> str:
+    log.seek(0)
+    lines = log.read().decode(errors="replace").strip().splitlines()[-5:]
+    return "".join(f"\n  engine: {line}" for line in lines)
+
+
 def harvest() -> list:
     binary = ROOT / "target" / "debug" / "kevy"
     if not binary.exists():
         sys.exit(f"export_site_commands: no engine at {binary} — cargo build -p kevy")
-    proc = subprocess.Popen([str(binary), "--port", str(PORT), "--no-aof"],
+    # The engine's stderr goes to a file, not a pipe (a pipe nobody reads
+    # fills and stalls the server) and not DEVNULL: when it never answers,
+    # why it stopped is the only useful thing to print.
+    log = tempfile.TemporaryFile()
+    port = free_port()
+    # Its own directory: an engine started in the repo root opens its store
+    # there, and one that misreads its flags writes it (rootgate).
+    home = tempfile.TemporaryDirectory(prefix="kevy-site-commands-")
+    proc = subprocess.Popen([str(binary), "--port", str(port), "--no-aof"], cwd=home.name,
                             env={**dict(__import__("os").environ), "KEVY_BIND": "127.0.0.1"},
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=log)
     try:
         for _ in range(60):
             try:
-                sock = socket.create_connection(("127.0.0.1", PORT), 1)
+                sock = socket.create_connection(("127.0.0.1", port), 1)
                 break
             except OSError:
+                if proc.poll() is not None:
+                    break
                 time.sleep(0.25)
         else:
-            sys.exit("export_site_commands: the engine never accepted a connection")
+            sys.exit("export_site_commands: the engine never accepted a connection "
+                     f"(still running after 15s on port {port}){engine_tail(log)}")
+        if proc.poll() is not None:
+            sys.exit(f"export_site_commands: the engine exited with {proc.returncode} "
+                     f"before accepting a connection on port {port}{engine_tail(log)}")
         f = sock.makefile("rb")
         # COMMAND LIST answers in VERB_META's declaration order — grouped by
         # family, which is how the reference page reads. Sorting would have
@@ -89,6 +117,7 @@ def harvest() -> list:
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+        home.cleanup()
 
 
 def main() -> int:

@@ -21,7 +21,7 @@ fn sadd_n(st: &mut Store, key: &[u8], n: usize) {
     }
 }
 
-fn is_seghash(st: &Store, key: &[u8]) -> bool {
+pub(crate) fn is_seghash(st: &Store, key: &[u8]) -> bool {
     matches!(st.map.get(key).map(|e| &e.value), Some(Value::SegHash(_)))
 }
 
@@ -169,6 +169,9 @@ fn sharded_set_ops_match_semantics() {
 #[test]
 fn accounting_round_trips_through_sharded_ops() {
     let mut st = Store::new();
+    // the keyspace table is charged as a whole: allocate it first, so what
+    // comes and goes below is the key alone
+    st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
     let baseline = st.used_memory();
     hset_n(&mut st, b"h", HS_PROMOTE + 300);
     st.hdel(b"h", &[b"field-00000004".as_slice()]).unwrap();

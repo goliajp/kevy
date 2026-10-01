@@ -10,7 +10,7 @@ use crate::nostd_prelude::*;
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use crate::value::{HashData, SetData, Value, ZSetData};
+use crate::value::{HashData, Value};
 use crate::{
     Entry, RenameOutcome, SmallBytes, Store, deadline_at, glob_match, now_ns, pack_deadline,
     remaining_ms,
@@ -152,14 +152,26 @@ impl Store {
         self.reap(key, now) && self.map.contains_key(key)
     }
 
-    /// `RENAME` (or `RENAMENX` if `nx`). Atomic on this shard. Returns
-    /// the outcome so the dispatch layer can emit the right RESP frame
-    /// (RENAME: `+OK` or `-ERR no such key`; RENAMENX: `:1`/`:0`/error).
+    /// `RENAME`: move `src`'s value and TTL to `dst`, replacing whatever
+    /// `dst` held. Atomic on this shard. Returns the outcome so the
+    /// dispatch layer can emit the right RESP frame (`+OK` or `-ERR no
+    /// such key`).
     ///
     /// Cross-shard rename is the runtime's job — by the time this is
     /// called, both `src` and `dst` are guaranteed to live on the same
     /// shard. See `kevy-rt::start_rename` for the cross-shard split.
-    pub fn rename(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
+    pub fn rename(&mut self, src: &[u8], dst: &[u8]) -> RenameOutcome {
+        self.rename_if(src, dst, false)
+    }
+
+    /// `RENAMENX`: [`Self::rename`], except that a live `dst` refuses the
+    /// move with [`RenameOutcome::DstExists`] (`:0`), as does renaming a
+    /// key onto itself.
+    pub fn rename_nx(&mut self, src: &[u8], dst: &[u8]) -> RenameOutcome {
+        self.rename_if(src, dst, true)
+    }
+
+    fn rename_if(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
         let now = now_ns();
         if !self.reap(src, now) {
             return RenameOutcome::NoSuchSrc;
@@ -226,6 +238,32 @@ impl Store {
         cleared
     }
 
+    /// The deadline `key` holds, as Unix ms, or `None` when there is no key
+    /// or no deadline. Unlike [`pttl`](Self::pttl) this reaps nothing: a key
+    /// already past its deadline reports a deadline in the past. That is what
+    /// recording a write needs — a record must not change the data it records.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use kevy_store::{SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// std::thread::sleep(Duration::from_millis(5));
+    /// let at = s.deadline_unix_ms(b"k").expect("still in the map");
+    /// assert!(at <= std::time::SystemTime::now()
+    ///     .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64);
+    /// assert_eq!(s.dbsize(), 1, "nothing was reaped");
+    /// assert_eq!(s.deadline_unix_ms(b"missing"), None);
+    /// ```
+    pub fn deadline_unix_ms(&self, key: &[u8]) -> Option<u64> {
+        let at = self.map.get(key)?.expire_at_ns?.get();
+        let (now, unix) = (now_ns(), crate::now_unix_ms());
+        Some(match at.checked_sub(now) {
+            Some(ahead) => unix.saturating_add(ahead / 1_000_000),
+            None => unix.saturating_sub((now - at) / 1_000_000),
+        })
+    }
+
     /// Remaining TTL in ms: `-2` no key, `-1` no expiry, else `>= 0`.
     pub fn pttl(&mut self, key: &[u8]) -> i64 {
         let now = now_ns();
@@ -285,7 +323,8 @@ impl Store {
     }
 
     /// Wipe every key in this shard's keyspace (the `FLUSHALL`/`FLUSHDB`
-    /// primitive). Resets `used_memory`; `used_memory_peak` is
+    /// primitive). Resets `used_memory` to the emptied table, which keeps
+    /// its allocation; `used_memory_peak` is
     /// lifetime-cumulative and intentionally not reset.
     ///
     /// Named `flushall` — **not** `flush` — to avoid colliding with
@@ -293,7 +332,8 @@ impl Store {
     /// DESTROYS data; it does not persist it.
     pub fn flushall(&mut self) {
         self.map.clear();
-        self.used_memory = 0;
+        // the table keeps its allocation, so it keeps its charge
+        self.used_memory = self.keyspace_bytes;
         self.expires = 0;
         // Every cold stub died with the map — the whole vlog is dead,
         // and every row segment is garbage.
@@ -317,7 +357,7 @@ impl Store {
     /// Visit every live entry as `(key, &value, ttl_ms)` for snapshotting.
     pub fn snapshot_each<F: FnMut(&[u8], &Value, Option<u64>)>(&self, mut f: F) {
         let now = now_ns();
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }
@@ -393,30 +433,13 @@ impl Store {
         self.insert_loaded(key, value, ttl_ms);
     }
 
-    /// Install a set from a snapshot or AOF replay. Duplicate members in
-    /// the input collapse, as they would on SADD.
-    pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        // Same encoding switch a live SADD applies: a giant set loads
-        // straight into buckets, COW-ready.
-        if members.len() > crate::seg_map::HS_PROMOTE {
-            let mut seg = crate::seg_map::SegMap::default();
-            for m in members {
-                seg.insert(SmallBytes::from_vec(m), ());
-            }
-            self.insert_loaded(key, Value::SegSet(Arc::new(seg)), ttl_ms);
-            return;
-        }
-        let set_data: SetData = members.into_iter().map(SmallBytes::from_vec).collect();
-        self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
-    }
-
     /// Count live keys under a byte prefix and how many of them carry
     /// a TTL. O(keyspace) — a stats/ops call, not a hot-path primitive.
     pub fn prefix_stats(&self, prefix: &[u8]) -> (u64, u64) {
         let now = now_ns();
         let mut keys = 0u64;
         let mut expires = 0u64;
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) || !k.as_slice().starts_with(prefix) {
                 continue;
             }
@@ -433,7 +456,7 @@ impl Store {
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
         let now = now_ns();
         let mut out = Vec::new();
-        for (k, e) in &self.map {
+        for (k, e) in self.map.iter() {
             if e.is_expired_at(now) {
                 continue;
             }
@@ -448,23 +471,5 @@ impl Store {
             }
         }
         out
-    }
-
-    /// Install a sorted set from a snapshot or AOF replay as
-    /// `(member, score)` pairs. Order in the input does not matter — the
-    /// set orders itself, as it would on ZADD.
-    pub fn load_zset(&mut self, key: Vec<u8>, pairs: Vec<(Vec<u8>, f64)>, ttl_ms: Option<u64>) {
-        let mut z = ZSetData::default();
-        for (m, score) in pairs {
-            z.insert(&m, score);
-        }
-        // Same encoding switch a live ZADD applies: giant zsets load
-        // straight into the segmented representation, COW-ready.
-        let value = if z.len() > crate::zset_seg::Z_PROMOTE {
-            Value::SegZSet(Arc::new(crate::zset_seg::SegZSetData::from_flat(&z)))
-        } else {
-            Value::ZSet(Arc::new(z))
-        };
-        self.insert_loaded(key, value, ttl_ms);
     }
 }

@@ -16,7 +16,7 @@
 use crate::Commands;
 use crate::reduce::shard_of;
 use kevy_persist::reshard::{StdLayout, commit_reshard, merge_sources, recover_journal};
-use kevy_persist::{Routing, ShardsMeta, layout, read_shards_meta, write_shards_meta};
+use kevy_persist::{Routing, ShardsMeta, layout};
 use kevy_store::Store;
 use std::io;
 use std::path::Path;
@@ -35,17 +35,17 @@ pub(crate) fn ensure_layout<C: Commands>(
 ) -> io::Result<()> {
     let meta_path = layout::shards_meta_path(dir);
     recover_journal(dir, &StdLayout)?;
-    let target = ShardsMeta { n, routing };
-    let prev = match read_shards_meta(&meta_path) {
+    let target = ShardsMeta::new(n, routing);
+    let prev = match ShardsMeta::read(&meta_path) {
         Some(m) => m,
         // Legacy dir (server never wrote meta): the shard count is however
         // many per-shard files exist, the routing is the only scheme that
         // existed. An empty dir trivially "matches" — just record target.
-        None => ShardsMeta { n: layout::infer_files_n(dir), routing: Routing::KevyHash },
+        None => ShardsMeta::new(layout::infer_files_n(dir), Routing::KevyHash),
     };
     if prev.n == 0 || prev == target {
         std::fs::create_dir_all(dir)?;
-        return write_shards_meta(&meta_path, target);
+        return target.write(&meta_path);
     }
     reshard(dir, prev, target, commands, tier_budget, tier_root)
 }
@@ -94,16 +94,13 @@ fn reshard<C: Commands>(
         }
     })?;
 
-    let mut stores: Vec<Store> = (0..target.n).map(|_| Store::new()).collect();
-    if let Some(budget) = tier_budget {
-        let per = crate::Runtime::<C>::per_shard_tier_budget(budget, target.n);
-        for (i, s) in stores.iter_mut().enumerate() {
-            s.enable_tiering(&scratch(format!(".reshard-{i}")), per)?;
-        }
-    }
+    let mut stores = target_stores::<C>(target.n, tier_budget, tier_root)?;
     redistribute(&temp, target, &mut stores);
 
-    let stamp = commit_reshard(dir, prev.n, target, &stores, &StdLayout)?;
+    // the merge replayed the catalog frames into the command set; every
+    // new snapshot carries the newest beside its keys
+    let aux = commands.snapshot_aux();
+    let stamp = commit_reshard(dir, prev.n, target, &stores, aux.as_ref(), &StdLayout)?;
     if tier_budget.is_some() {
         drop(temp);
         drop(stores);
@@ -123,13 +120,27 @@ fn reshard<C: Commands>(
     Ok(())
 }
 
+fn target_stores<C: Commands>(
+    n: usize,
+    tier_budget: Option<u64>,
+    tier_root: &Path,
+) -> io::Result<Vec<Store>> {
+    let mut stores: Vec<Store> = (0..n).map(|_| Store::new()).collect();
+    if let Some(budget) = tier_budget {
+        let per = crate::Runtime::<C>::per_shard_tier_budget(budget, n);
+        for (i, s) in stores.iter_mut().enumerate() {
+            s.enable_tiering(&tier_root.join(format!(".reshard-{i}")), per)?;
+        }
+    }
+    Ok(stores)
+}
+
 /// Re-home every merged key under the target routing. A cold stub names
 /// the TEMP store's vlog — a foreign log the target cannot read — so
 /// the source side materializes before shipping (`load_value`'s Cold
 /// arm is unreachable by this contract); the target demotes inline to
 /// stay under its own budget (B11).
 fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
-    let slots = target.routing == Routing::Slots;
     temp.snapshot_each(|key, value, ttl_ms| {
         let hot;
         let value = match temp.materialize_cold(key, value) {
@@ -139,8 +150,46 @@ fn redistribute(temp: &Store, target: ShardsMeta, stores: &mut [Store]) {
             }
             None => value,
         };
-        let t = &mut stores[shard_of(key, target.n, slots)];
+        let t = &mut stores[shard_of(key, target.n, target.routing)];
         t.load_value(key, value, ttl_ms);
         t.try_demote_after_write();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_stores;
+    use crate::commands_trait_tests::Minimal;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap().as_nanos();
+        let p = std::env::temp_dir().join(format!("kevy-rt-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn target_stores_tier_under_their_share_of_the_budget() {
+        let root = scratch("reshard-targets");
+        let stores = target_stores::<Minimal>(2, Some(1 << 20), &root).unwrap();
+        assert_eq!(stores.len(), 2);
+        for (i, s) in stores.iter().enumerate() {
+            assert!(s.tier_enabled(), "target {i}");
+            assert_eq!(s.tier_stats().budget, 1 << 19);
+            assert!(root.join(format!(".reshard-{i}")).is_dir());
+        }
+        let plain = target_stores::<Minimal>(3, None, &root).unwrap();
+        assert!(plain.iter().all(|s| !s.tier_enabled()));
+        drop((stores, plain));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_tier_root_that_is_a_file_fails_the_targets() {
+        let root = scratch("reshard-targets-file");
+        let file = root.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(target_stores::<Minimal>(2, Some(1 << 20), &file).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

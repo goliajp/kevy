@@ -257,27 +257,25 @@ The detailed charter rationale lives in
 
 ```sh
 bash bench/run.sh              # portability smoke (Docker, no pipeline)
-bash bench/loopback_c50.sh     # headline TCP loopback vs valkey/redis
+bash bench/arena.sh target/release/kevy   # kevy vs Redis, valkey and Dragonfly, TCP loopback
 ```
 
 Full method and the workload-by-workload table are in
-[`bench/REPORT.md`](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md).
+[`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 ## Library entry-point
 
 `kevy` also exposes a Rust library so the server can be started in-
-process:
+process. The configuration is
+[`kevy-config`](https://crates.io/crates/kevy-config)'s, the same one the
+binary reads from `kevy.toml`. `serve` never returns (it exits the process
+on SIGTERM / SIGINT / SHUTDOWN), so this example is compiled but not run:
 
 ```rust,no_run
-use kevy::{Config, serve};
-
-fn main() -> std::io::Result<()> {
-    let cfg = Config::default()
-        .with_bind("127.0.0.1")
-        .with_port(6379)
-        .with_data_dir("/var/lib/kevy");
-    serve(cfg)
-}
+let mut cfg = kevy_config::Config::default();
+cfg.server.port = 6379;
+cfg.server.data_dir = "/var/lib/kevy".into();
+kevy::serve(std::sync::Arc::new(cfg));
 ```
 
 For embedding the engine without the network reactor at all, use

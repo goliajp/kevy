@@ -1,12 +1,15 @@
-//! String `SET` variants (`SETNX`, `APPEND`, `STRLEN`), hash
+//! String `SET` variants (`SETNX`, SET with a TTL, `APPEND`, `STRLEN`), hash
 //! conditional set (`HSETNX`), decrement helpers (`DECR`, `DECRBY`,
 //! `INCRBYFLOAT`), and the seconds-precision TTL accessor
 //! (`ttl_secs`).
+
+use std::time::Duration;
 
 use crate::{KevyError, KevyResult};
 
 use crate::store::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
+use crate::store_glue::commit_deadline;
 
 impl Store {
     // ---- string SET variants ----------------------------------------
@@ -17,10 +20,31 @@ impl Store {
     pub fn setnx(&self, key: &[u8], value: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let ok = g.store.set(key, value.to_vec(), None, /*nx=*/ true, /*xx=*/ false);
+        let ok = g.store.set(key, value.to_vec(), None, kevy_store::SetCondition::IfAbsent);
         if ok {
             commit_write(&mut g, &[b"SET", key, value, b"NX"])?;
         }
+        Ok(ok)
+    }
+
+    /// `SET key value PX ms` — overwrites + sets TTL. The AOF records an
+    /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
+    /// expires at the same wall-clock instant after a restart — a relative
+    /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
+    /// fresh full duration on every restart (seen as a production
+    /// incident: cache keys never expired across restarts).
+    /// The value and its TTL change under one lock, so no other thread sees
+    /// the value without its TTL. The AOF gets the server's shape: `SET key
+    /// value PX ms` carries the TTL in the value's own frame, so a crash
+    /// before the second frame still leaves an expiring key, and
+    /// `PEXPIREAT` then pins the absolute deadline.
+    pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let ok = g.store.set(key, value.to_vec(), Some(ttl), kevy_store::SetCondition::Always);
+        let ms = ttl.as_millis().min(u128::from(u64::MAX)).to_string();
+        commit_write(&mut g, &[b"SET", key, value, b"PX", ms.as_bytes()])?;
+        commit_deadline(&mut g, key)?;
         Ok(ok)
     }
 

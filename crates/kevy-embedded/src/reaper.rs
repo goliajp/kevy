@@ -6,9 +6,12 @@
 // set and the next tick retries — but a persistent one (full disk,
 // read-only remount, EIO) means `appendfsync everysec` has quietly
 // become "never" with nothing saying so. Open question §2.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "a persistent fsync failure is invisible; see .claude/OPEN-QUESTIONS-6.4.md"
+#![cfg_attr(
+    feature = "persist",
+    expect(
+        clippy::let_underscore_must_use,
+        reason = "a persistent fsync failure is invisible; an open question"
+    )
 )]
 
 use std::io;
@@ -35,6 +38,15 @@ pub(crate) fn spawn_reaper(
 ) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
     match config.ttl_reaper {
         TtlReaperMode::Manual => Ok((None, None)),
+        // a browser has no threads: say so at open, and leave the thread
+        // machinery out of the module
+        TtlReaperMode::Background if cfg!(all(target_arch = "wasm32", target_os = "unknown")) => {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "a background reaper needs a thread, and this target has none: \
+                 use with_ttl_reaper_manual and tick",
+            ))
+        }
         TtlReaperMode::Background => {
             let stop = Arc::new(AtomicBool::new(false));
             let handle = spawn_loop(
@@ -99,18 +111,24 @@ fn spawn_loop(
     })
 }
 
+/// Sleep one tick, waking early when `stop` is raised. Closing a store
+/// joins this thread, so a plain sleep made every close wait out the rest
+/// of the interval (up to 100 ms by default); the closer unparks it.
+fn nap(interval: Duration, stop: &AtomicBool) {
+    let deadline = std::time::Instant::now() + interval;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline || stop.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::park_timeout(deadline - now);
+    }
+}
+
 /// The auto-rewrite policy + metric sink, captured from config.
 #[cfg(feature = "persist")]
 fn rewrite_slot(config: &Config) -> (kevy_persist::RewritePolicy, Option<MetricSink>) {
-    (
-        kevy_persist::RewritePolicy {
-            pct: config.auto_aof_rewrite_pct,
-            min_size: config.auto_aof_rewrite_min_size,
-            bytes: config.auto_aof_rewrite_bytes,
-            interval_secs: config.auto_aof_rewrite_interval_secs,
-        },
-        config.metric_sink.clone(),
-    )
+    (config.rewrite_policy(), config.metric_sink.clone())
 }
 
 /// The reaper's tiering-config slot: the budget spec when the tier
@@ -150,14 +168,14 @@ fn reaper_loop(
     #[allow(clippy::let_unit_value)]
     let _ = tier;
     while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(interval);
+        nap(interval, &stop);
         if stop.load(Ordering::Relaxed) {
             break;
         }
         for (shard_i, shard) in shards.iter().enumerate() {
             #[cfg(not(all(feature = "index", feature = "persist", not(target_arch = "wasm32"))))]
             let _ = shard_i;
-            shard_upkeep(
+            run_tick_sync(shard_upkeep(
                 shard,
                 samples,
                 rounds,
@@ -165,7 +183,7 @@ fn reaper_loop(
                 shards.len(),
                 #[cfg(all(feature = "index", feature = "persist", not(target_arch = "wasm32")))]
                 win.as_ref().map(|(t, d)| (t, kevy_persist::layout::segs_dir(d, shard_i))),
-            );
+            ));
             // Non-blocking: holds the lock only for begin/finish, not the spill.
             #[cfg(feature = "persist")]
             concurrent_auto_rewrite(shard, policy, sink.as_ref());
@@ -173,8 +191,26 @@ fn reaper_loop(
     }
 }
 
+/// The everysec fsync [`shard_upkeep`] started, if one was due.
+#[cfg(feature = "persist")]
+type TickSync = Option<kevy_persist::PendingSync>;
+#[cfg(not(feature = "persist"))]
+type TickSync = ();
+
+/// Run the fsync the tick handed back. The shard lock is already
+/// released, so writes keep landing in the buffer while it runs.
+#[cfg(feature = "persist")]
+fn run_tick_sync(sync: TickSync) {
+    if let Some(sync) = sync {
+        let _ = sync.run();
+    }
+}
+#[cfg(not(feature = "persist"))]
+fn run_tick_sync(_: TickSync) {}
+
 /// One shard's locked tick body: TTL sweeps, the window tick, tiering
-/// upkeep, and the everysec AOF window check.
+/// upkeep, and the AOF tick (`no` writes the buffer into the kernel;
+/// a due `everysec` fsync is returned to run after the lock drops).
 fn shard_upkeep(
     shard: &Arc<RwLock<Inner>>,
     samples: usize,
@@ -185,7 +221,7 @@ fn shard_upkeep(
         &Arc<crate::ops_table::TableReg>,
         std::path::PathBuf,
     )>,
-) {
+) -> TickSync {
     #[cfg(not(all(feature = "tier", not(target_arch = "wasm32"))))]
     let _ = (tier, nshards);
     let mut g = lock_inner(shard);
@@ -213,12 +249,17 @@ fn shard_upkeep(
     crate::shard::tier_tick_upkeep(&mut g, tier, nshards);
     let _ = g.store.demote_step();
     let _ = g.store.tier_compact_tick();
-    // EverySec AOF fsync window check — runs from the same tick.
-    #[cfg(feature = "persist")]
-    if let Some(aof) = &mut g.aof {
-        let _ = aof.maybe_sync();
-    }
+    #[cfg(feature = "index")]
+    crate::ops_index_tidy::tick(&mut g.idx_segs);
+    tick_aof(&mut g)
 }
+
+#[cfg(feature = "persist")]
+fn tick_aof(g: &mut Inner) -> TickSync {
+    g.aof.as_mut().and_then(|aof| aof.tick().ok().flatten())
+}
+#[cfg(not(feature = "persist"))]
+fn tick_aof(_: &mut Inner) -> TickSync {}
 
 /// **Non-blocking** auto-`BGREWRITEAOF`. Three phases bracket the lock so the
 /// slow disk write happens with the lock *released* — application writes keep
@@ -243,8 +284,9 @@ pub(crate) fn concurrent_auto_rewrite(
         return;
     };
     // Phase 2 — serialize the frozen view + fsync, lock released.
-    let keys = match kevy_persist::dump_aof(&tmp, &view) {
-        Ok((keys, _)) => keys,
+    let image = kevy_persist::WithAux::new(&view.0, view.1.as_ref());
+    let keys = match kevy_persist::dump_aof(&tmp, &image) {
+        Ok(stats) => stats.keys,
         Err(e) => {
             eprintln!("kevy: embedded auto AOF rewrite (dump) failed: {e}");
             let mut g = lock_inner(inner);
@@ -277,27 +319,31 @@ pub(crate) fn concurrent_auto_rewrite(
     }
 }
 
+/// The frozen view and the catalog frame a rewrite writes beside it.
+#[cfg(feature = "persist")]
+type RewriteView = (kevy_store::SnapshotView, Option<kevy_persist::Argv>);
+
 /// Phase 1 — decide + freeze the COW view + start the tee, under the lock.
 /// O(n)-shallow (refcount bumps + key copies). `start` reads the clock only
 /// past the no-op early-out — never on the common idle tick (and
 /// `wasm32-unknown-unknown` has no `Instant`, so reading it up front traps).
 /// `None` = below threshold or begin failed (already logged).
 #[cfg(feature = "persist")]
-#[allow(clippy::type_complexity)] // inline tuple keeps the phase-1 outputs colocated
 fn begin_rewrite(
     inner: &Arc<RwLock<Inner>>,
     policy: kevy_persist::RewritePolicy,
-) -> Option<(Instant, kevy_store::SnapshotView, std::path::PathBuf, u64)> {
+) -> Option<(Instant, RewriteView, std::path::PathBuf, u64)> {
     let mut g = lock_inner(inner);
     let ready = g.aof.as_ref().is_some_and(|a| a.rewrite_due(policy));
     if !ready {
         return None;
     }
     let start = Instant::now();
+    let aux = crate::shard_restore::catalog_aux(&g);
     let Inner { store, aof, .. } = &mut *g;
     let aof = aof.as_mut().expect("checked above");
     let before = aof.size_bytes();
-    let view = store.collect_snapshot();
+    let view = (store.collect_snapshot(), aux);
     match aof.begin_view_rewrite() {
         Ok(tmp) => Some((start, view, tmp, before)),
         Err(e) => {
@@ -313,3 +359,8 @@ fn begin_rewrite(
 pub(crate) fn lock_inner(inner: &Arc<RwLock<Inner>>) -> RwLockWriteGuard<'_, Inner> {
     inner.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+#[cfg(test)]
+#[cfg(feature = "persist")]
+#[path = "reaper_tests.rs"]
+mod tests;

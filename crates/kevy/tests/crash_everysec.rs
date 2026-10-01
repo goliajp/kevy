@@ -18,6 +18,8 @@
 //! cargo test -p kevy --test crash_everysec --release -- --ignored --nocapture
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +32,7 @@ use kevy_chaos::{Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port}
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
 fn crash_everysec_no_corruption_bounded_loss() {
     let bin_path = resolve_kevy_bin();
-    let port = pick_free_port().expect("free port");
+    let port = pick_free_port();
     let tmp = std::env::temp_dir().join(format!("kevy-chaos-everysec-{port}"));
     let _ = std::fs::remove_dir_all(&tmp);
 

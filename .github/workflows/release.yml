@@ -17,29 +17,48 @@ jobs:
   verify:
     name: Verify tag builds (release profile)
     runs-on: [self-hosted, lx64]
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      # CI already ran the steps below on the release branch; when its run
+      # for this exact tree passed, including the release-profile tests,
+      # they are not run a second time in front of the publish chain
+      - name: Carry CI's verdict for this tree
+        id: carry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci_verified_tree.py | tee -a "$GITHUB_OUTPUT"
       # Self-hosted lx64: the actions runner runs as the `gha-runner`
       # user. rustup is installed under that user's $HOME/.cargo/bin.
       # The runner's systemd unit sets CARGO_HOME=/mnt/ssd980/cargo-cache
       # (root-owned shared build cache) which makes cargo unwritable —
       # override it back to gha-runner's home for the publish chain.
       - name: Expose cargo / rustup to $PATH (lx64 self-hosted)
+        if: steps.carry.outputs.proven != 'true'
         run: |
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
-      - run: |
+      - if: steps.carry.outputs.proven != 'true'
+        run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
       - name: Build --release
+        if: steps.carry.outputs.proven != 'true'
         run: cargo build --workspace --release
       - name: Test --release
-        run: cargo test --workspace --release --lib --tests
+        if: steps.carry.outputs.proven != 'true'
+        run: cargo test --workspace --profile release-tests --lib --tests
       # `--lib --tests` is the pair that EXCLUDES doctests, so the examples
       # this release ships would otherwise be verified by nothing at the one
       # point where it matters: the last gate before an irreversible publish.
       - name: doctestrun (every documented example compiles and runs)
+        if: steps.carry.outputs.proven != 'true'
         run: bash bench/doctestrun.sh
 
   # ───────────── cargo publish to crates.io (idempotent per crate) ─────────────
@@ -88,12 +107,12 @@ jobs:
         run: |
           set -euo pipefail
           chain=$(printf '%s\n' \
-            kevy-bench kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-bench kevy-alloc kevy-compress kevy-crypto kevy-noise kevy-sys kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
-            kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
+            kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy-store kevy-verbs kevy-persist kevy-config kevy-rt kevy-window kevy-embedded \
             kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
@@ -125,21 +144,37 @@ jobs:
           # 429s. The 65s × 3 retry from v1.26.5 wasn't long enough — each
           # cargo retry attempt counts against the burst window too.
           #
-          # New ceiling: 35s sleep after every successful publish, so a
-          # 30-crate chain takes ~18 min wall-clock but stays well under
-          # any per-10-min limit. On 429, sleep 300s × up to 5 retries
-          # (max 25 min wait per crate) — enough to outwait even a fully
-          # depleted window.
+          # So the chain counts its own publishes in a 10-minute sliding
+          # window and waits only when 28 of them already sit in it, instead
+          # of sleeping 35s after every one (24 of a 27-minute job were
+          # those sleeps). On 429, sleep 300s × up to 5 retries (max 25 min
+          # wait per crate) — enough to outwait even a fully depleted window.
+          published_at=()
+          pace_window() {
+            local now; now=$(date +%s)
+            local kept=() t
+            for t in ${published_at[@]+"${published_at[@]}"}; do
+              (( now - t < 600 )) && kept+=("$t")
+            done
+            published_at=(${kept[@]+"${kept[@]}"})
+            if (( ${#published_at[@]} >= 28 )); then
+              local wait=$(( published_at[0] + 600 - now + 1 ))
+              echo "pacing: 28 publishes in the last 10 min — waiting ${wait}s"
+              sleep "$wait"
+              published_at=("${published_at[@]:1}")
+            fi
+          }
           publish_or_skip() {
             local crate=$1
             echo "::group::publish $crate"
             local log; log=$(mktemp)
             local attempt
             for attempt in 1 2 3 4 5; do
+              pace_window
               if cargo publish -p "$crate" 2>&1 | tee "$log"; then
                 echo "::endgroup::"
                 echo "✓ published $crate (attempt $attempt)"
-                sleep 35
+                published_at+=("$(date +%s)")
                 return 0
               fi
               if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
@@ -198,12 +233,12 @@ jobs:
           # suite needs a test network, a chaos harness and the CLI. Stones
           # do make that promise, so theirs are versioned.
           for c in \
-            kevy-bench kevy-alloc kevy-compress kevy-config kevy-geo kevy-hash kevy-bytes \
+            kevy-bench kevy-alloc kevy-compress kevy-crypto kevy-noise kevy-sys kevy-geo kevy-hash kevy-bytes \
             kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
-            kevy-scope kevy-sys kevy-text kevy-time kevy-index kevy-scalar \
+            kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
-            kevy-store kevy-persist kevy-rt kevy-window kevy-embedded \
+            kevy-store kevy-verbs kevy-persist kevy-config kevy-rt kevy-window kevy-embedded \
             kevy kevy-cli kevy-client kevy-cluster-rw kevy-client-async kevy-wasm; do
             publish_or_skip "$c"
           done
@@ -301,6 +336,13 @@ jobs:
               continue
             fi
             considered=$((considered + 1))
+            # A door that vendors a prebuilt engine (a prepare-native.sh
+            # next to its package.json) is published by release-doors.yml,
+            # which builds that engine on a machine with Xcode and the NDK.
+            if [ -f "$dir/scripts/prepare-native.sh" ]; then
+              echo "$name — published by release-doors.yml with its prebuilt engine"
+              continue
+            fi
             if npm view "$name@$V" version >/dev/null 2>&1; then
               echo "$name@$V already published"
               already=$((already + 1))
@@ -398,6 +440,25 @@ jobs:
       tag: ${{ github.ref_name }}
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ───────────── the doors that used to be opened by hand ─────────────
+  # Go module mirror, Flutter package mirror, the two npm packages with the
+  # prebuilt mobile engine, and the site. After release-notes, like
+  # npm-platform: crates.io and the GitHub release exist by then. Final
+  # tags only — none of these has a pre-release channel.
+  doors:
+    needs: release-notes
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    permissions:
+      contents: write   # the site job pushes the `site` branch
+    uses: ./.github/workflows/release-doors.yml
+    with:
+      tag: ${{ github.ref_name }}
+      dry_run: false
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      KEVY_GO_DEPLOY_KEY: ${{ secrets.KEVY_GO_DEPLOY_KEY }}
+      KEVY_FLUTTER_DEPLOY_KEY: ${{ secrets.KEVY_FLUTTER_DEPLOY_KEY }}
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each

@@ -2,7 +2,7 @@
 //! Split from `store_tests.rs` to keep both under the 500-LOC house rule.
 
 use super::tests::tmp_dir;
-use crate::PubsubFrame;
+use crate::PubsubEvent;
 use crate::store::*;
 
 // ───────────────────────── sharding (B2) ─────────────────────────
@@ -105,7 +105,7 @@ fn sharded_pubsub_still_process_wide() {
     assert_eq!(s.publish(b"chan", b"hello"), 1);
     assert_eq!(
         sub.recv().unwrap(),
-        PubsubFrame::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
+        PubsubEvent::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
     );
 }
 
@@ -142,10 +142,10 @@ fn metaless_multishard_dir_is_migrated_not_partially_loaded() {
     std::fs::create_dir_all(&dir).unwrap();
     // Hand-build two shard snapshots, no shards.meta.
     let mut a = kevy_store::Store::new();
-    a.set(b"alpha", b"1".to_vec(), None, false, false);
+    a.set(b"alpha", b"1".to_vec(), None, kevy_store::SetCondition::Always);
     kevy_persist::save_snapshot(&a, &dir.join("dump-0.rdb")).unwrap();
     let mut b = kevy_store::Store::new();
-    b.set(b"beta", b"2".to_vec(), None, false, false);
+    b.set(b"beta", b"2".to_vec(), None, kevy_store::SetCondition::Always);
     kevy_persist::save_snapshot(&b, &dir.join("dump-1.rdb")).unwrap();
 
     let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -181,19 +181,22 @@ fn open_rolls_forward_a_committed_reshard() {
     std::fs::create_dir_all(&dir).unwrap();
     // Old layout: one shard whose snapshot still holds the pre-reshard key.
     let mut stale = kevy_store::Store::new();
-    stale.set(b"stale", b"x".to_vec(), None, false, false);
+    stale.set(b"stale", b"x".to_vec(), None, kevy_store::SetCondition::Always);
     kevy_persist::save_snapshot(&stale, &dir.join("dump-0.rdb")).unwrap();
-    kevy_persist::write_shards_meta(
-        &dir.join("shards.meta"),
-        kevy_persist::ShardsMeta { n: 1, routing: kevy_persist::Routing::KevyHash },
-    )
-    .unwrap();
+    kevy_persist::ShardsMeta::new(1, kevy_persist::Routing::KevyHash)
+        .write(&dir.join("shards.meta"))
+        .unwrap();
     // Committed-but-unfinished migration to 2 shards: temps + journal.
     // Keys are placed on the shard their hash routes to, as a real
     // redistribute would have done.
     let mut shards = [kevy_store::Store::new(), kevy_store::Store::new()];
     for (k, v) in [(b"alpha".as_slice(), b"1".as_slice()), (b"beta", b"2"), (b"gamma", b"3")] {
-        shards[crate::shard::shard_idx(k, 2)].set(k, v.to_vec(), None, false, false);
+        shards[crate::shard::shard_idx(k, 2)].set(
+            k,
+            v.to_vec(),
+            None,
+            kevy_store::SetCondition::Always,
+        );
     }
     kevy_persist::save_snapshot(&shards[0], &dir.join("dump-0.rdb.reshard")).unwrap();
     kevy_persist::save_snapshot(&shards[1], &dir.join("dump-1.rdb.reshard")).unwrap();
@@ -225,7 +228,7 @@ fn open_discards_a_torn_reshard_journal() {
     let dir = tmp_dir("reshard-torn");
     std::fs::create_dir_all(&dir).unwrap();
     let mut old = kevy_store::Store::new();
-    old.set(b"keep", b"v".to_vec(), None, false, false);
+    old.set(b"keep", b"v".to_vec(), None, kevy_store::SetCondition::Always);
     kevy_persist::save_snapshot(&old, &dir.join("dump-0.rdb")).unwrap();
     std::fs::write(dir.join("reshard.journal"), "kevy-reshard-journal v1\nstamp=").unwrap();
 

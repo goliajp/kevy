@@ -242,11 +242,7 @@ fn aof_open_truncates_crash_zero_tail_so_reopen_appends_survive() {
 }
 
 pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-{name}-{uniq}.aof"));
-    p
+    crate::tests::unique_file(name, "aof")
 }
 
 // ---- snapshot feed-cursor header -------------------------------------------
@@ -255,15 +251,23 @@ pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
 fn snapshot_cursor_roundtrip_and_legacy_none() {
     let dir = kevy_tmpdir::unique_dir("aof");
     let mut store = kevy_store::Store::new();
-    store.set(b"k", b"v".to_vec(), None, false, false);
+    store.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
 
     // v5: cursor written + read back; entries load fine.
     let p5 = dir.join("v5.rdb");
     {
         let mut f = std::fs::File::create(&p5).unwrap();
-        crate::write_snapshot_to_with_cursor(&store, &mut f, Some((3, 42))).unwrap();
+        crate::write_snapshot_to_with_cursor(
+            &store,
+            &mut f,
+            Some(kevy_replicate::feed::FeedPosition::new(3, 42)),
+        )
+        .unwrap();
     }
-    assert_eq!(crate::read_snapshot_cursor(&p5).unwrap(), Some((3, 42)));
+    assert_eq!(
+        crate::read_snapshot_cursor(&p5).unwrap(),
+        Some(kevy_replicate::feed::FeedPosition::new(3, 42))
+    );
     let mut loaded = kevy_store::Store::new();
     crate::load_snapshot(&mut loaded, &p5).unwrap();
     assert_eq!(loaded.get(b"k").unwrap().unwrap().as_ref(), b"v");
@@ -383,8 +387,8 @@ fn v1_file_upgrades_on_rewrite_and_v2_detects_bit_rot() {
     {
         let mut aof = Aof::open(&path, Fsync::No).unwrap();
         let mut store = Store::new();
-        store.set(b"k", b"v1-era".to_vec(), None, false, false);
-        store.set(b"k2", b"still-v1".to_vec(), None, false, false);
+        store.set(b"k", b"v1-era".to_vec(), None, kevy_store::SetCondition::Always);
+        store.set(b"k2", b"still-v1".to_vec(), None, kevy_store::SetCondition::Always);
         aof.rewrite_from(&store).unwrap();
         // Post-rewrite appends are v2 records.
         aof.append(&cmd(&[b"SET", b"k3", b"v2-era"])).unwrap();
@@ -795,14 +799,14 @@ fn open_with_repair_under_resync_keeps_the_tail_it_documents_keeping() {
     let resync_path = lying_length_aof("openresync");
     let full = std::fs::metadata(&resync_path).unwrap().len();
 
-    let strict = Aof::open_with_repair(&strict_path, Fsync::No, false).unwrap();
+    let strict = Aof::open_with_repair(&strict_path, Fsync::No, crate::ReplayMode::Strict).unwrap();
     assert!(strict.open_quarantine().is_some(), "strict repair drops the tail");
     assert!(
         std::fs::metadata(&strict_path).unwrap().len() < full,
         "strict repair truncates the file at the lie — that is its contract"
     );
 
-    let kept = Aof::open_with_repair(&resync_path, Fsync::No, true).unwrap();
+    let kept = Aof::open_with_repair(&resync_path, Fsync::No, crate::ReplayMode::Resync).unwrap();
     assert!(
         kept.open_quarantine().is_none(),
         "under resync nothing after the last recoverable record is left to drop"

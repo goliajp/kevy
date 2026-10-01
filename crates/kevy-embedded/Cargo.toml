@@ -18,9 +18,14 @@ categories = ["database-implementations", "caching", "embedded"]
 
 # v6 — not packaged: these reference a dependency the published manifest
 # cannot declare, and `cargo package` would ship source that does not
-# compile. Two of thirty-nine. The other thirty-seven ship and compile — excluding
-# the whole suite to silence two files would throw away working tests.
-exclude = ["examples/embed_vs_server.rs", "tests/server_replica_e2e.rs"]
+# compile. The rest ship and compile — excluding the whole suite to silence
+# a few files would throw away working tests.
+exclude = [
+    "examples/embed_vs_server.rs",
+    "tests/server_replica_e2e.rs",
+    "tests/listener_e2e.rs",
+    "tests/catalog_server_replica.rs",
+]
 [lints]
 workspace = true
 
@@ -29,7 +34,7 @@ workspace = true
 # every other feature adds one subsystem back. `default` keeps the full
 # 3.x surface so existing consumers see no change.
 [features]
-default = ["core", "persist", "index", "text", "vector", "replicate", "listener", "tier"]
+default = ["core", "persist", "index", "text", "vector", "replicate", "listener", "tier", "streams-geo"]
 # Marker for the base surface (KV + TTL + pubsub + atomic/pipeline).
 # Always on in practice — named so the minimal archetype is spellable.
 core = []
@@ -44,42 +49,59 @@ text = ["index", "dep:kevy-text"]
 vector = ["index", "dep:kevy-vector"]
 # Replication (embed-as-replica + embed-as-writer) and the CDC feed.
 # Needs `persist`: replicated frames replay through the AOF verb table.
-replicate = ["persist", "dep:kevy-replicate"]
+replicate = ["persist", "dep:kevy-replicate", "kevy-replicate/secure", "dep:kevy-noise", "dep:kevy-crypto"]
 # Read-only RESP listener (ops tooling against a live embedded store).
 listener = []
 # Transparent tiering (capacity arc): `with_tier_budget` + the cold
 # value log under `<data_dir>/tier/`. Needs `persist` (a disk dir);
 # wasm / mem:// stores reject the config at open. kevy-sys provides
 # the memory-bound probe behind the `auto` / percent budget forms.
-tier = ["persist", "dep:kevy-sys"]
+tier = ["persist", "dep:kevy-sys", "dep:kevy-config"]
+# The stream (X*) and geo (GEO*) commands on `dispatch_argv`, and in the
+# replay of a log or a primary's stream that carries them. On by default:
+# without it a replica drops its primary's stream and geo writes. The
+# code is linked only where a dispatch or a replay reaches it; the
+# browser build turns it on as well, where it adds about an eighth to the
+# module.
+streams-geo = ["kevy-verbs/streams-geo"]
+# `Store::dispatch_argv_recorded`: a command run with the frames its write
+# records handed to the caller, for a host that keeps the log itself (the
+# browser package, which has no file for an AOF). Off by default: it adds
+# a check to every recorded write.
+host-log = []
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "6.4.0" }
-kevy-index = { path = "../kevy-index", version = "6.4.0", optional = true }
-kevy-text = { path = "../kevy-text", version = "6.4.0", optional = true }
-kevy-vector = { path = "../kevy-vector", version = "6.4.0", optional = true }
-kevy-persist = { path = "../kevy-persist", version = "6.4.0", optional = true }
-kevy-hash = { path = "../kevy-hash", version = "6.4.0" }
+kevy-store = { path = "../kevy-store", version = "7.0.0" }
+kevy-verbs = { path = "../kevy-verbs", version = "7.0.0" }
+kevy-index = { path = "../kevy-index", version = "7.0.0", optional = true }
+kevy-text = { path = "../kevy-text", version = "7.0.0", optional = true }
+kevy-vector = { path = "../kevy-vector", version = "7.0.0", optional = true }
+kevy-persist = { path = "../kevy-persist", version = "7.0.0", optional = true }
+kevy-hash = { path = "../kevy-hash", version = "7.0.0" }
 # The tiering budget's auto-detection probe (cgroup / meminfo /
 # hw.memsize) rides the target-gated table below — kevy-sys never
 # links on wasm32 (same pattern as kevy-store's kevy-vlog dep).
 # Phase 2 (v1.20+): embed-as-read-replica reuses the server-side
 # replication wire client (kevy-replicate) so the same protocol drives
-# both server replicas and embed replicas. `default-features = false`
-# keeps the dep lean even though kevy-replicate has no optional features
-# today — explicit intent for when it grows them.
-kevy-replicate = { path = "../kevy-replicate", version = "6.4.0", default-features = false, optional = true }
+# both server replicas and embed replicas. `default-features = false`:
+# persist alone links kevy-replicate for its feed position type, and
+# only the `replicate` feature turns on its encrypted links (`secure`).
+kevy-replicate = { path = "../kevy-replicate", version = "7.0.0", default-features = false, optional = true }
+kevy-noise = { path = "../kevy-noise", version = "7.0.0", optional = true }
+kevy-crypto = { path = "../kevy-crypto", version = "7.0.0", optional = true }
+# the tiering budget spec (`TierBudgetSpec`), one type with the server's config
+kevy-config = { path = "../kevy-config", version = "7.0.0", optional = true }
 # kevy-resp: `verb_arity` (the arity column both surfaces read, so the
 # entry checks below do not restate the server's numbers as literals)
 # and `parse_command` (handshake decoding) inside
 # the Phase 3 / v1.21 embed-as-writer replica source listener.
-kevy-resp = { path = "../kevy-resp", version = "6.4.0" }
+kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
 
 # The tier feature's OS probe: declared only off-wasm so `dep:kevy-sys`
 # is a no-op on wasm32 and kevy-sys never enters the wasm graph.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kevy-window = { path = "../kevy-window", version = "6.4.0", optional = true }
-kevy-sys = { path = "../kevy-sys", version = "6.4.0", optional = true }
+kevy-window = { path = "../kevy-window", version = "7.0.0", optional = true }
+kevy-sys = { path = "../kevy-sys", version = "7.0.0", optional = true }
 
 [dev-dependencies]
 kevy-testnet = { path = "../kevy-testnet" }
@@ -92,11 +114,11 @@ kevy-testnet = { path = "../kevy-testnet" }
 # needs `kevy::KevyCommands`) while keeping the publish path
 # unblocked.
 kevy = { path = "../kevy" }
-kevy-rt = { path = "../kevy-rt", version = "6.4.0" }
+kevy-rt = { path = "../kevy-rt", version = "7.0.0" }
 # tests/dispatch_oracle.rs: throwaway data dir for the oracle server.
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "6.4.0" }
-kevy-seg = { path = "../kevy-seg", version = "6.4.0" }
-kevy-sys = { path = "../kevy-sys", version = "6.4.0" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "7.0.0" }
+kevy-seg = { path = "../kevy-seg", version = "7.0.0" }
+kevy-sys = { path = "../kevy-sys", version = "7.0.0" }
 # Used by examples/embed_vs_server.rs to give the Rust caller a single
 # unified blocking-client surface so the embed-vs-server bench compares
 # the same Rust code against different backends (kevy embed vs kevy

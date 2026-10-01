@@ -8,12 +8,30 @@
 //! wrapping it in async is strictly slower than the blocking client)
 //! — they get a pointed error instead of the generic unknown-scheme
 //! one.
+//!
+//! ```
+//! use kevy_client_async::url::parse_url;
+//!
+//! let u = parse_url("kevy://cache.local:6004/1")?;
+//! assert_eq!((u.host.as_str(), u.port, u.db), ("cache.local", 6004, Some(1)));
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 use std::io;
 
 pub use kevy_resp_client::ParsedUrl;
 
 /// Parse a TCP-style URL. See the module doc for the accepted shapes.
+///
+/// ```
+/// use kevy_client_async::url::parse_url;
+/// use std::io::ErrorKind;
+///
+/// let u = parse_url("redis://127.0.0.1:6379")?;
+/// assert_eq!((u.host.as_str(), u.port, u.db), ("127.0.0.1", 6379, None));
+/// assert_eq!(parse_url("file:///var/kevy").unwrap_err().kind(), ErrorKind::Unsupported);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn parse_url(url: &str) -> io::Result<ParsedUrl> {
     if let Some((scheme @ ("mem" | "file"), _)) = url.split_once("://") {
         return Err(io::Error::new(
@@ -24,7 +42,7 @@ pub fn parse_url(url: &str) -> io::Result<ParsedUrl> {
             ),
         ));
     }
-    kevy_resp_client::parse_url(url)
+    ParsedUrl::parse(url)
 }
 
 #[cfg(test)]

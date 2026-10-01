@@ -22,7 +22,7 @@
 //! 0.045. See `lib.rs`'s note on the decode requirement.
 //!
 //! A frame that walks outside its promised bounds at any point is
-//! rejected with [`Corrupt`]. That is a bound on the walk, and it is
+//! rejected with [`DecodeError`]. That is a bound on the walk, and it is
 //! worth being exact about what it is not.
 //!
 //! **This layer does not detect corruption, and is not where that
@@ -50,7 +50,7 @@
 
 use alloc::vec::Vec;
 
-use crate::Corrupt;
+use crate::DecodeError;
 
 /// How much a frame could possibly expand to, as an upper bound on the
 /// initial reservation — not a limit on the decode, which enforces
@@ -69,16 +69,16 @@ pub(crate) fn reserve_for(orig_len: usize, payload_len: usize) -> usize {
 }
 
 /// Decode an LZ payload whose history is `dict ++ output`.
-pub(crate) fn lz(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>, Corrupt> {
+pub(crate) fn lz(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>, DecodeError> {
     let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let mut p = 0;
     loop {
-        let token = *payload.get(p).ok_or(Corrupt)?;
+        let token = *payload.get(p).ok_or(DecodeError)?;
         p += 1;
         let lit_len = read_len(payload, &mut p, (token >> 4) as usize)?;
-        let lit_end = p.checked_add(lit_len).ok_or(Corrupt)?;
+        let lit_end = p.checked_add(lit_len).ok_or(DecodeError)?;
         if lit_end > payload.len() || out.len() + lit_len > orig_len {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         out.extend_from_slice(&payload[p..lit_end]);
         p = lit_end;
@@ -86,16 +86,16 @@ pub(crate) fn lz(dict: &[u8], payload: &[u8], orig_len: usize) -> Result<Vec<u8>
             break;
         }
         let off_bytes: [u8; 2] =
-            payload.get(p..p + 2).ok_or(Corrupt)?.try_into().map_err(|_| Corrupt)?;
+            payload.get(p..p + 2).ok_or(DecodeError)?.try_into().map_err(|_| DecodeError)?;
         let dist = usize::from(u16::from_le_bytes(off_bytes));
         p += 2;
         let len = read_len(payload, &mut p, (token & 0x0f) as usize)? + 4;
         if dist == 0 || dist > out.len() + dict.len() || out.len() + len > orig_len {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         copy_match(dict, &mut out, dist, len);
     }
-    if out.len() == orig_len { Ok(out) } else { Err(Corrupt) }
+    if out.len() == orig_len { Ok(out) } else { Err(DecodeError) }
 }
 
 /// The literal section by flag: raw slice (0), inline-table Huffman
@@ -108,10 +108,10 @@ fn read_literal_block<'a>(
     lit_total: usize,
     lens: Option<&[u8; 256]>,
     table: Option<&crate::huff::DecodeTable>,
-) -> Result<(alloc::borrow::Cow<'a, [u8]>, usize), Corrupt> {
+) -> Result<(alloc::borrow::Cow<'a, [u8]>, usize), DecodeError> {
     match flag {
         0 => {
-            let l = rest.get(..lit_total).ok_or(Corrupt)?;
+            let l = rest.get(..lit_total).ok_or(DecodeError)?;
             Ok((alloc::borrow::Cow::Borrowed(l), lit_total))
         }
         1 => {
@@ -124,24 +124,24 @@ fn read_literal_block<'a>(
             // when it does not, which is the path `decode` takes.
             let (out, bits) = match table {
                 Some(t) => crate::huff::read_bits_with(rest, t, lit_total)?,
-                None => crate::huff::read_bits(rest, lens.ok_or(Corrupt)?, lit_total)?,
+                None => crate::huff::read_bits(rest, lens.ok_or(DecodeError)?, lit_total)?,
             };
             Ok((alloc::borrow::Cow::Owned(out), bits.div_ceil(8) as usize))
         }
-        _ => Err(Corrupt),
+        _ => Err(DecodeError),
     }
 }
 
 /// Nibble plus 255-continuation extension.
-fn read_len(payload: &[u8], p: &mut usize, nibble: usize) -> Result<usize, Corrupt> {
+fn read_len(payload: &[u8], p: &mut usize, nibble: usize) -> Result<usize, DecodeError> {
     if nibble < 15 {
         return Ok(nibble);
     }
     let mut total = 15usize;
     loop {
-        let b = *payload.get(*p).ok_or(Corrupt)?;
+        let b = *payload.get(*p).ok_or(DecodeError)?;
         *p += 1;
-        total = total.checked_add(usize::from(b)).ok_or(Corrupt)?;
+        total = total.checked_add(usize::from(b)).ok_or(DecodeError)?;
         if b != 255 {
             return Ok(total);
         }
@@ -196,20 +196,20 @@ pub(crate) fn lz_high(
     table: Option<&crate::huff::DecodeTable>,
     payload: &[u8],
     orig_len: usize,
-) -> Result<Vec<u8>, Corrupt> {
+) -> Result<Vec<u8>, DecodeError> {
     let (lit_total, rest) = crate::read_varint(payload)?;
-    let (&flag, rest) = rest.split_first().ok_or(Corrupt)?;
+    let (&flag, rest) = rest.split_first().ok_or(DecodeError)?;
     let (lits, seq_start) = read_literal_block(flag, rest, lit_total, lens, table)?;
-    let seqs = rest.get(seq_start..).ok_or(Corrupt)?;
+    let seqs = rest.get(seq_start..).ok_or(DecodeError)?;
     let mut out = Vec::with_capacity(reserve_for(orig_len, payload.len()));
     let (mut p, mut lp) = (0usize, 0usize);
     loop {
-        let token = *seqs.get(p).ok_or(Corrupt)?;
+        let token = *seqs.get(p).ok_or(DecodeError)?;
         p += 1;
         let lit_len = read_len(seqs, &mut p, (token >> 4) as usize)?;
-        let lit_end = lp.checked_add(lit_len).ok_or(Corrupt)?;
+        let lit_end = lp.checked_add(lit_len).ok_or(DecodeError)?;
         if lit_end > lits.len() || out.len() + lit_len > orig_len {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         out.extend_from_slice(&lits[lp..lit_end]);
         lp = lit_end;
@@ -217,14 +217,14 @@ pub(crate) fn lz_high(
             break;
         }
         let off_bytes: [u8; 2] =
-            seqs.get(p..p + 2).ok_or(Corrupt)?.try_into().map_err(|_| Corrupt)?;
+            seqs.get(p..p + 2).ok_or(DecodeError)?.try_into().map_err(|_| DecodeError)?;
         let dist = usize::from(u16::from_le_bytes(off_bytes));
         p += 2;
         let len = read_len(seqs, &mut p, (token & 0x0f) as usize)? + 4;
         if dist == 0 || dist > out.len() + dict.len() || out.len() + len > orig_len {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         copy_match(dict, &mut out, dist, len);
     }
-    if out.len() == orig_len && lp == lits.len() { Ok(out) } else { Err(Corrupt) }
+    if out.len() == orig_len && lp == lits.len() { Ok(out) } else { Err(DecodeError) }
 }

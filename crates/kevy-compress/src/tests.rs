@@ -126,8 +126,10 @@ fn k3_every_truncation_is_refused_and_bit_flips_are_not_detected() {
         frame.len() * 8
     );
 
-    assert_eq!(decode(&[], &[]), Err(Corrupt));
-    assert_eq!(decode(&[], &[9, 0]), Err(Corrupt), "unknown tag must reject");
+    assert_eq!(decode(&[], &[]), Err(DecodeError));
+    assert_eq!(decode(&[], &[9, 0]), Err(DecodeError), "unknown tag must reject");
+    let e = decode(&[], &[9, 0]).unwrap_err();
+    assert_eq!(e.to_string(), "kevy-compress: corrupt or truncated frame");
 }
 
 /// K4, the structural criterion: N identical values against a shared
@@ -164,7 +166,7 @@ fn dictionary_boundary_crossing_match() {
     assert_eq!(decode(&dict, &frame).unwrap(), input);
     // The dict-dependent frame must refuse to decode without its dict.
     if frame[0] == TAG_LZ_DICT {
-        assert_eq!(decode(&[], &frame), Err(Corrupt));
+        assert_eq!(decode(&[], &frame), Err(DecodeError));
     }
 }
 
@@ -296,7 +298,7 @@ fn legacy_mistagged_shared_table_frame_still_decodes() {
 /// here byte for byte from `fuzz/artifacts/decode_arbitrary/`.
 mod what_the_fuzzer_found {
     /// The fuzz target's own split: first byte picks the dict/frame cut.
-    fn feed(data: &[u8]) -> Result<Vec<u8>, crate::Corrupt> {
+    fn feed(data: &[u8]) -> Result<Vec<u8>, crate::DecodeError> {
         let (&split, rest) = data.split_first().expect("non-empty");
         let cut = (split as usize * rest.len()) / 255;
         let (dict, frame) = rest.split_at(cut);

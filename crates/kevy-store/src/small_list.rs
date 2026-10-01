@@ -30,6 +30,17 @@ use crate::nostd_prelude::*;
 use alloc::collections::VecDeque;
 
 /// Inline packed list storage. 24 bytes total.
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.rpush(b"l", &[b"a".as_slice(), b"b"])?;
+/// s.snapshot_each(|_, v, _| {
+///     let Value::SmallListInline(l) = v else { panic!("a two-item list stays inline") };
+///     assert_eq!(l.len(), 2);
+/// });
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct SmallListData {
     count: u8,
@@ -118,6 +129,21 @@ impl SmallListData {
 }
 
 /// Iterator over [`SmallListData`].
+///
+/// ```
+/// use kevy_store::{Store, Value};
+/// let mut s = Store::new();
+/// s.rpush(b"l", &[b"a".as_slice(), b"b"])?;
+/// s.lpush(b"l", &[b"z".as_slice()])?;
+/// let mut items = Vec::new();
+/// s.snapshot_each(|_, v, _| {
+///     if let Value::SmallListInline(l) = v {
+///         items = l.iter().map(<[u8]>::to_vec).collect();
+///     }
+/// });
+/// assert_eq!(items, [b"z".to_vec(), b"a".to_vec(), b"b".to_vec()], "head to tail");
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug)]
 pub struct SmallListIter<'a> {
     buf: &'a [u8],

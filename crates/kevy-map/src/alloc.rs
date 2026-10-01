@@ -19,6 +19,27 @@ use crate::map::{EMPTY, GROUP_WIDTH, KevyMap, MIN_CAP, table_layout};
 const THP_BACKED_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 
 impl<K, V> KevyMap<K, V> {
+    /// The table's own allocation as the global allocator made it: its
+    /// start and layout. `None` when there is no table, or when a large one
+    /// was mapped directly rather than allocated. What a defrag pass asks
+    /// the allocator about before copying a map.
+    ///
+    /// ```
+    /// use kevy_map::KevyMap;
+    /// let mut m: KevyMap<u32, u32> = KevyMap::new();
+    /// assert!(m.table_allocation().is_none(), "nothing allocated yet");
+    /// m.insert(1, 2);
+    /// let (ptr, layout) = m.table_allocation().ok_or("a table")?;
+    /// assert!(!ptr.is_null() && layout.size() > 0);
+    /// # Ok::<(), &str>(())
+    /// ```
+    #[must_use]
+    pub fn table_allocation(&self) -> Option<(*const u8, Layout)> {
+        (self.cap != 0 && !self.mmap_backed).then(|| {
+            (self.slots_ptr.as_ptr().cast::<u8>().cast_const(), table_layout::<(K, V)>(self.cap).0)
+        })
+    }
+
     /// Allocate a freshly-zeroed table sized for `cap` slots. `cap` must be
     /// a power of two and ≥ `MIN_CAP`. Used by [`crate::KevyMap::with_capacity`]
     /// and by the growth path on rehash.
@@ -78,6 +99,141 @@ impl<K, V> KevyMap<K, V> {
         }
     }
 }
+
+/// Bytes a block of `size` requested bytes occupies in glibc's `malloc`:
+/// a chunk of 16-byte granules that carries an 8-byte size header, 32
+/// bytes at the least. 0 for 0 — nothing is allocated.
+///
+/// The allocator a Linux deployment runs on by default, and the model
+/// memory accounting built on this crate counts with, so a charge and
+/// what the process holds can be compared byte for byte.
+///
+/// ```
+/// use kevy_map::malloc_footprint;
+/// assert_eq!(malloc_footprint(0), 0);
+/// assert_eq!(malloc_footprint(1), 32, "the smallest chunk");
+/// assert_eq!(malloc_footprint(72), 80, "the request plus a header, in 16-byte steps");
+/// assert_eq!(malloc_footprint(900), 912);
+/// ```
+#[inline]
+#[must_use]
+pub fn malloc_footprint(size: usize) -> usize {
+    // header plus request, rounded up to a granule, as masks rather than a
+    // division: this runs on every hash write that is accounted
+    let chunk = ((size + 8 + 15) & !15).max(32);
+    if size == 0 { 0 } else { chunk }
+}
+
+impl<K, V> KevyMap<K, V> {
+    /// Bytes the table occupies where it lives: the whole mapping for a
+    /// table large enough to be mapped directly, otherwise its one block's
+    /// [`malloc_footprint`]. 0 before anything was inserted.
+    ///
+    /// A pure function of the capacity, so a caller can charge a growth
+    /// by reading this before and after an insert.
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, u64> = kevy_map::KevyMap::new();
+    /// assert_eq!(m.footprint(), 0, "no table yet");
+    /// m.insert(1, 1);
+    /// // sixteen 16-byte slots, then one control byte each plus a trailing group
+    /// assert_eq!(m.footprint(), kevy_map::malloc_footprint(16 * 16 + 16 + 16));
+    /// ```
+    #[inline]
+    pub fn footprint(&self) -> usize {
+        if self.cap == 0 {
+            return 0;
+        }
+        // `table_layout`'s size without its overflow checks, which the
+        // table passed when it was allocated: a slot and a control byte
+        // per bucket, the trailing control group, padded to the slot's
+        // alignment (a no-op for every power-of-two capacity >= 16)
+        let kv = core::mem::size_of::<(K, V)>();
+        let size =
+            (self.cap * (kv + 1) + GROUP_WIDTH).next_multiple_of(core::mem::align_of::<(K, V)>());
+        debug_assert_eq!(size, table_layout::<(K, V)>(self.cap).0.size());
+        if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+    }
+
+    /// The bytes [`Self::footprint`] will read once the table has grown to
+    /// twice its capacity (sixteen slots for a map with no table yet): what
+    /// a caller holding memory to a budget sets aside before the growth
+    /// arrives, so the growth does not land on memory it has no room for.
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, u64> = kevy_map::KevyMap::new();
+    /// m.insert(1, 1);
+    /// let promised = m.grown_footprint();
+    /// while m.room() > 0 {
+    ///     m.insert(m.len() as u64 + 1, 0);
+    /// }
+    /// m.insert(u64::MAX, 0); // no room left: this insert grows the table
+    /// assert_eq!(m.footprint(), promised);
+    /// ```
+    pub fn grown_footprint(&self) -> usize {
+        let cap = if self.cap == 0 { MIN_CAP } else { self.cap * 2 };
+        let size = table_layout::<(K, V)>(cap).0.size();
+        // `alloc_table` maps a table this large directly wherever it can
+        let mapped = size >= THP_BACKED_THRESHOLD && cfg!(target_os = "linux") && !cfg!(miri);
+        if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+    }
+
+    /// New keys the table takes before an insert grows it: 0 when the next
+    /// insert rebuilds it (or there is no table yet).
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u64, u64> = kevy_map::KevyMap::new();
+    /// assert_eq!(m.room(), 0, "no table yet");
+    /// m.insert(1, 1);
+    /// // sixteen slots hold fourteen keys at the 7/8 load bound
+    /// assert_eq!(m.room(), 14 - 1);
+    /// ```
+    #[inline]
+    pub fn room(&self) -> usize {
+        if self.cap == 0 {
+            0
+        } else {
+            self.threshold().saturating_sub(self.occupied + self.deleted)
+        }
+    }
+
+    /// Whether the next insert rebuilds the table before it probes — an
+    /// overwrite included, since the check runs before the key is looked up.
+    #[inline]
+    pub(crate) fn grows_on_insert(&self) -> bool {
+        self.cap == 0 || (self.occupied + self.deleted) >= self.threshold()
+    }
+}
+
+impl<K: kevy_hash::KevyHash + Eq, V> KevyMap<K, V> {
+    /// [`KevyMap::insert`], also answering by how many bytes
+    /// [`Self::footprint`] moved — nonzero only when the insert had to
+    /// grow the table first, and then read around the growth alone, so an
+    /// insert that does not grow costs what a plain one does.
+    ///
+    /// ```
+    /// let mut m: kevy_map::KevyMap<u32, u32> = kevy_map::KevyMap::new();
+    /// let (old, grown) = m.insert_sized(1, 10);
+    /// assert_eq!((old, grown), (None, m.footprint() as isize), "the first insert allocates");
+    /// assert_eq!(m.insert_sized(1, 11), (Some(10), 0), "an overwrite with room moves nothing");
+    /// ```
+    // a wrapper: outlined, it adds a call and returns its pair through memory
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub fn insert_sized(&mut self, key: K, value: V) -> (Option<V>, isize) {
+        if self.grows_on_insert() {
+            let before = self.footprint();
+            self.grow();
+            let grown = self.footprint() as isize - before as isize;
+            return (self.insert_with_room(key, value), grown);
+        }
+        (self.insert_with_room(key, value), 0)
+    }
+}
+
+/// A directly mapped table is rounded to whole huge pages and keeps them
+/// all (`kevy_madvise::mmap_anon_aligned_2mb` trims only the alignment slack).
+const HUGE_PAGE: usize = 2 * 1024 * 1024;
 
 /// Global-allocator path that aborts on OOM. Cohesive helper so both
 /// branches of `alloc_table` can call it.

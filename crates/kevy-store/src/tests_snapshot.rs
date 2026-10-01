@@ -22,13 +22,13 @@ fn view_get(view: &crate::SnapshotView, key: &[u8]) -> Option<Value> {
 #[test]
 fn snapshot_view_is_point_in_time_for_strings() {
     let mut s = Store::new();
-    s.set(b"a", b"old".to_vec(), None, false, false);
-    s.set(b"gone", b"x".to_vec(), None, false, false);
+    s.set(b"a", b"old".to_vec(), None, crate::SetCondition::Always);
+    s.set(b"gone", b"x".to_vec(), None, crate::SetCondition::Always);
 
     let view = s.collect_snapshot();
-    s.set(b"a", b"new".to_vec(), None, false, false);
+    s.set(b"a", b"new".to_vec(), None, crate::SetCondition::Always);
     s.del(&[b"gone".as_slice()]);
-    s.set(b"later", b"y".to_vec(), None, false, false);
+    s.set(b"later", b"y".to_vec(), None, crate::SetCondition::Always);
 
     assert_eq!(view.len(), 2);
     match view_get(&view, b"a") {
@@ -95,8 +95,8 @@ fn snapshot_view_outlives_deletion_of_collections() {
 #[test]
 fn snapshot_view_ttl_semantics() {
     let mut s = Store::new();
-    s.set(b"t", b"v".to_vec(), Some(Duration::from_secs(100)), false, false);
-    s.set(b"dead", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
+    s.set(b"t", b"v".to_vec(), Some(Duration::from_secs(100)), crate::SetCondition::Always);
+    s.set(b"dead", b"v".to_vec(), Some(Duration::from_millis(1)), crate::SetCondition::Always);
     std::thread::sleep(Duration::from_millis(5));
 
     let view = s.collect_snapshot();
@@ -116,7 +116,12 @@ fn snapshot_view_ttl_semantics() {
 fn snapshot_view_serializes_on_another_thread() {
     let mut s = Store::new();
     for i in 0..1000u32 {
-        s.set(format!("k{i}").as_bytes(), format!("v{i}").into_bytes(), None, false, false);
+        s.set(
+            format!("k{i}").as_bytes(),
+            format!("v{i}").into_bytes(),
+            None,
+            crate::SetCondition::Always,
+        );
     }
     let view = s.collect_snapshot();
     let handle = std::thread::spawn(move || {
@@ -125,7 +130,7 @@ fn snapshot_view_serializes_on_another_thread() {
         n
     });
     for i in 0..1000u32 {
-        s.set(format!("k{i}").as_bytes(), b"mutated".to_vec(), None, false, false);
+        s.set(format!("k{i}").as_bytes(), b"mutated".to_vec(), None, crate::SetCondition::Always);
     }
     assert_eq!(handle.join().unwrap(), 1000);
 }
@@ -137,7 +142,12 @@ fn snapshot_view_serializes_on_another_thread() {
 fn collect_pause_is_shallow() {
     let mut s = Store::new();
     for i in 0..1_000_000u32 {
-        s.set(format!("key:{i:07}").as_bytes(), b"v0123456789".to_vec(), None, false, false);
+        s.set(
+            format!("key:{i:07}").as_bytes(),
+            b"v0123456789".to_vec(),
+            None,
+            crate::SetCondition::Always,
+        );
     }
     // A few collections to amortize the first-touch page faults.
     let mut best = u128::MAX;

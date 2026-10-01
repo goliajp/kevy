@@ -151,9 +151,18 @@ fn table_constraints_refused() {
 
 #[test]
 fn index_shapes_refused() {
-    refuses(&format!("{T}CREATE UNIQUE INDEX ON t (a, b);"), "multi-column UNIQUE index", 2);
+    refuses(
+        &format!("{T}CREATE UNIQUE INDEX ON t (a, b);"),
+        "multi-column or DESC UNIQUE index",
+        2,
+    );
+    refuses(
+        &format!("{T}CREATE UNIQUE INDEX ON t (a DESC);"),
+        "multi-column or DESC UNIQUE index",
+        2,
+    );
     refuses(&format!("{T}CREATE INDEX ON t (a, b) INCLUDE (b);"), "cannot carry INCLUDE", 2);
-    refuses(&format!("{T}CREATE INDEX ON t (a DESC);"), "DESC on the single-column index", 2);
+    refuses(&format!("{T}CREATE INDEX ON t (a DESC) INCLUDE (b);"), "cannot carry INCLUDE", 2);
     refuses(&format!("{T}CREATE INDEX ON t USING gin (a);"), "USING <method>", 2);
     refuses(&format!("{T}CREATE INDEX ON t (a) WHERE a > 0;"), "partial index", 2);
     refuses(&format!("{T}CREATE INDEX ON t (a NULLS FIRST);"), "NULLS FIRST/LAST", 2);

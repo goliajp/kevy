@@ -8,8 +8,10 @@ use crate::store::Store;
 
 use kevy_index::{IndexValue, Leaf, Tree, ViewMode};
 
-use super::idx::{decode_cursor, encode_cursor, spec_of, value_repr};
-use super::util::{arr, bulk, err, int, kevy_err, verb_name, wrong_args};
+use super::idx::{decode_cursor, encode_cursor, spec_of};
+use super::{kevy_err, verb_name};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_verbs::reply::wrong_args;
 
 /// One VIEW request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -17,9 +19,12 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"VIEW.CREATE" => cmd_view_create(s, argv, out),
         b"VIEW.DROP" => {
             if argv.len() != 2 {
-                err(out, "ERR usage: VIEW.DROP name");
+                encode_error(out, "ERR usage: VIEW.DROP name");
             } else {
-                int(out, i64::from(s.view_drop(&argv[1])));
+                match s.view_drop(&argv[1]) {
+                    Ok(hit) => encode_integer(out, i64::from(hit)),
+                    Err(e) => kevy_err(out, &e),
+                }
             }
         }
         b"VIEW.LIST" => cmd_view_list(s, out),
@@ -39,7 +44,7 @@ fn parse_leaf(s: &Store, argv: &[Vec<u8>], i: usize) -> Result<(Tree, usize), &'
     let tok = argv.get(i).ok_or("ERR truncated view tree")?;
     let index = tok.to_vec();
     let spec_ty =
-        spec_of(s, &index).map(|sp| sp.ty).ok_or("ERR view leaf references unknown index")?;
+        spec_of(s, &index).map(|sp| sp.ty()).ok_or("ERR view leaf references unknown index")?;
     let shape = argv.get(i + 1).ok_or("ERR truncated view leaf")?;
     if shape.eq_ignore_ascii_case(b"RANGE") {
         let min =
@@ -48,12 +53,12 @@ fn parse_leaf(s: &Store, argv: &[Vec<u8>], i: usize) -> Result<(Tree, usize), &'
         let max =
             IndexValue::parse_literal(spec_ty, argv.get(i + 3).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf max does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min, max }), i + 4))
+        Ok((Tree::Leaf(Leaf::new(index, min, max)), i + 4))
     } else if shape.eq_ignore_ascii_case(b"EQ") {
         let v =
             IndexValue::parse_literal(spec_ty, argv.get(i + 2).ok_or("ERR truncated view leaf")?)
                 .ok_or("ERR leaf value does not coerce to the index type")?;
-        Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
+        Ok((Tree::Leaf(Leaf::new(index, v.clone(), v)), i + 3))
     } else {
         Err("ERR view leaf shape must be RANGE|EQ")
     }
@@ -98,39 +103,40 @@ fn parse_tree(
 /// [TOPK k]`.
 fn cmd_view_create(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 8 || !argv[2].eq_ignore_ascii_case(b"QUERY") {
-        return err(
+        return encode_error(
             out,
             "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]",
         );
     }
     let (tree, mut i) = match parse_tree(s, argv, 3, 1) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     if !(argv.get(i).is_some_and(|t| t.eq_ignore_ascii_case(b"ORDER"))
         && argv.get(i + 1).is_some_and(|t| t.eq_ignore_ascii_case(b"BY")))
     {
-        return err(out, "ERR ORDER BY <index> is required");
+        return encode_error(out, "ERR ORDER BY <index> is required");
     }
     let Some(order_by) = argv.get(i + 2).cloned() else {
-        return err(out, "ERR ORDER BY <index> is required");
+        return encode_error(out, "ERR ORDER BY <index> is required");
     };
     if spec_of(s, &order_by).is_none() {
-        return err(out, "ERR ORDER BY references unknown index");
+        return encode_error(out, "ERR ORDER BY references unknown index");
     }
     i += 3;
     let (desc, mode, top_k) = match parse_create_opts(argv, i) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     let mode = match mode {
         ViewMode::Materialized { .. } => ViewMode::Materialized { top_k },
         ViewMode::Virtual if top_k != 0 => {
-            return err(out, "ERR TOPK requires MODE materialized");
+            return encode_error(out, "ERR TOPK requires MODE materialized");
         }
         v => v,
     };
-    match s.view_create(&argv[1], tree, &order_by, desc, mode) {
+    let order = if desc { kevy_index::SortOrder::Desc } else { kevy_index::SortOrder::Asc };
+    match s.view_create(&argv[1], tree, &order_by, order, mode) {
         Ok(()) => out.extend_from_slice(b"+OK\r\n"),
         Err(e) => kevy_err(out, &e),
     }
@@ -183,23 +189,17 @@ fn cmd_view_list(s: &Store, out: &mut Vec<u8>) {
     let g = s.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let specs: Vec<_> = g.1.iter().cloned().collect();
     drop(g);
-    arr(out, specs.len());
+    encode_array_len(out, specs.len() as i64);
     for spec in &specs {
-        arr(out, 8);
-        bulk(out, b"name");
-        bulk(out, &spec.name);
-        bulk(out, b"mode");
-        bulk(
-            out,
-            match spec.mode {
-                ViewMode::Virtual => b"virtual" as &[u8],
-                ViewMode::Materialized { .. } => b"materialized",
-            },
-        );
-        bulk(out, b"order_by");
-        bulk(out, &spec.order_by);
-        bulk(out, b"leaves");
-        bulk(out, spec.tree.leaves().to_string().as_bytes());
+        encode_array_len(out, 8);
+        encode_bulk(out, b"name");
+        encode_bulk(out, &spec.name);
+        encode_bulk(out, b"mode");
+        encode_bulk(out, spec.mode.name().as_bytes());
+        encode_bulk(out, b"order_by");
+        encode_bulk(out, &spec.order_by);
+        encode_bulk(out, b"leaves");
+        encode_bulk(out, spec.tree.leaves().to_string().as_bytes());
     }
 }
 
@@ -215,21 +215,21 @@ fn cmd_view_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     };
     let (limit, after) = match parse_query_opts(argv) {
         Ok(t) => t,
-        Err(e) => return err(out, e),
+        Err(e) => return encode_error(out, e),
     };
     match s.view_query(name, after.as_ref(), limit) {
-        Err(crate::KevyError::NotFound(_)) => err(out, "ERR no such view"),
+        Err(crate::KevyError::NotFound(_)) => encode_error(out, "ERR no such view"),
         Err(e) => kevy_err(out, &e),
         Ok((rows, next)) => {
-            arr(out, 2);
+            encode_array_len(out, 2);
             match next {
-                Some((v, k)) => bulk(out, &encode_cursor(&v, &k)),
-                None => bulk(out, b"0"),
+                Some((v, k)) => encode_bulk(out, &encode_cursor(&v, &k)),
+                None => encode_bulk(out, b"0"),
             }
-            arr(out, rows.len() * 2);
+            encode_array_len(out, (rows.len() * 2) as i64);
             for (k, v) in &rows {
-                bulk(out, k);
-                bulk(out, &value_repr(v));
+                encode_bulk(out, k);
+                encode_bulk(out, &v.render());
             }
         }
     }

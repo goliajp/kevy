@@ -27,6 +27,9 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
         BlockKind::Brpoplpush => brpoplpush_serve(args, key),
         BlockKind::XReadBlock => xread_serve(args, key).unwrap_or_else(|| args.to_argv()),
         BlockKind::XReadGroupBlock => xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv()),
+        // a blocking verb this table predates is single-key until taught
+        // otherwise: replay it as sent, the trait's own default
+        _ => args.to_argv(),
     }
 }
 
@@ -97,6 +100,8 @@ pub(crate) fn block_restore_argv(store: &mut Store, kind: BlockKind, key: &[u8])
         // XREAD is non-destructive and XREADGROUP moves entries into a
         // PEL rather than consuming them. Nothing to put back.
         BlockKind::XReadBlock | BlockKind::XReadGroupBlock => None,
+        // no known undo: the trait's safe default, nothing is put back
+        _ => None,
     }
 }
 
@@ -246,6 +251,9 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
             !tmp.is_empty() && tmp != b"*-1\r\n" && tmp != b"*0\r\n"
         }
         BlockKind::XReadGroupBlock => xreadgroup_ready(store, serve_argv),
+        // readiness this table cannot judge: never wake spuriously, the
+        // trait's default
+        _ => false,
     }
 }
 
@@ -263,7 +271,15 @@ fn xreadgroup_ready<A: ArgvView + ?Sized>(store: &mut Store, serve_argv: &A) -> 
             let Some(key) = serve_argv.get(i + 1) else {
                 return false;
             };
-            return store.xreadgroup_has_new(key, &group).unwrap_or(false);
+            // no such key or group, or the wrong type: serving answers the
+            // error, which is what a read on this shard answers at once;
+            // and a read of history answers at once, whatever it finds
+            if store.stream_group_peek(key, &group).is_none()
+                || serve_argv.get(i + 2).is_some_and(|id| id != b">")
+            {
+                return true;
+            }
+            return store.xreadgroup_has_new(key, &group).unwrap_or(true);
         }
         i += 1;
     }
@@ -328,6 +344,15 @@ mod restore_tests {
         assert!(block_restore_argv(&mut s, BlockKind::Bzpopmin, b"missing").is_none());
     }
 
+    /// A key of another type answers the pop with WRONGTYPE and takes
+    /// nothing, so there is nothing to put back.
+    #[test]
+    fn a_key_of_the_wrong_type_has_nothing_to_restore() {
+        let mut s = Store::default();
+        s.rpush(b"q", &[b"a" as &[u8]]).unwrap();
+        assert!(block_restore_argv(&mut s, BlockKind::Bzpopmin, b"q").is_none());
+    }
+
     /// XREAD is non-destructive and XREADGROUP moves entries to a PEL
     /// rather than consuming them; BRPOPLPUSH is served by the list-move
     /// orchestrator and recovers itself. None of them have an undo, and
@@ -388,10 +413,30 @@ mod ready_tests {
         // XREADGROUP: a call too short to name a group is not ready, and
         // cannot be — that guard is the first thing the arm does.
         assert!(!block_ready(&ctx, &mut s, &argv(&[b"XREADGROUP"]), BlockKind::XReadGroupBlock));
+        // A missing group is ready: serving answers NOGROUP at once, as a
+        // read on the stream's own shard does. A group with nothing new is
+        // not; one with a new entry is.
         let grouped =
             argv(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"st", b">"]);
-        assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
-        kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"]));
         assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+        kevy.dispatch(&mut s, &argv(&[b"XGROUP", b"CREATE", b"st", b"g", b"$"]));
+        assert!(!block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+        kevy.dispatch(&mut s, &argv(&[b"XADD", b"st", b"2-1", b"f", b"v"]));
+        assert!(block_ready(&ctx, &mut s, &grouped, BlockKind::XReadGroupBlock));
+    }
+
+    /// A stream read the replay cannot be rebuilt from is replayed as
+    /// sent, so dispatch answers it with the error the client would get.
+    #[test]
+    fn a_malformed_stream_read_is_replayed_as_sent() {
+        let xread = argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"a", b"b", b"0"]);
+        assert_eq!(block_serve_argv(&xread, BlockKind::XReadBlock, b"a"), xread);
+        let xreadgroup = argv(&[b"XREADGROUP", b"COUNT", b"1", b"STREAMS", b"st", b">"]);
+        assert_eq!(block_serve_argv(&xreadgroup, BlockKind::XReadGroupBlock, b"st"), xreadgroup);
+        let well_formed = argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"a", b"b", b"1", b"2"]);
+        assert_eq!(
+            block_serve_argv(&well_formed, BlockKind::XReadBlock, b"b"),
+            argv(&[b"XREAD", b"BLOCK", b"0", b"STREAMS", b"b", b"2"])
+        );
     }
 }

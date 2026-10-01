@@ -146,12 +146,72 @@ pub const IORING_OP_WRITE: u8 = 23;
 /// `base` slice asynchronously. The caller must keep both alive until
 /// the matching CQE fires (`uring_arm_conns` parks them in the conn's
 /// pending-writes state and drops on completion).
+///
+/// ```
+/// use std::io::Read;
+/// use std::os::fd::AsRawFd;
+/// use kevy_uring::{IoUring, Iovec};
+///
+/// let mut ring = IoUring::new(8)?;
+/// let (mut reader, writer) = std::io::pipe()?;
+/// let (header, value) = (b"$5\r\n", b"hello\r\n");
+/// let iov = [
+///     Iovec { iov_base: header.as_ptr(), iov_len: header.len() },
+///     Iovec { iov_base: value.as_ptr(), iov_len: value.len() },
+/// ];
+/// // SAFETY: `iov` and the static bytes it points at outlive the completion.
+/// assert!(unsafe { ring.prep_writev(writer.as_raw_fd(), iov.as_ptr(), 2, 1) });
+/// ring.submit_and_wait(1)?;
+/// let mut written = 0;
+/// ring.for_each_completion(|c| written = c.res);
+/// assert_eq!(written, 11, "both pieces in one write");
+/// let mut got = [0; 11];
+/// reader.read_exact(&mut got)?;
+/// assert_eq!(&got, b"$5\r\nhello\r\n");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Iovec {
     /// Pointer to bytes.
+    ///
+    /// The write starts where it points, so an iovec can begin mid-buffer.
+    ///
+    /// ```
+    /// use std::io::Read;
+    /// use std::os::fd::AsRawFd;
+    /// let mut ring = kevy_uring::IoUring::new(8)?;
+    /// let (mut reader, writer) = std::io::pipe()?;
+    /// let line = b"GET key";
+    /// let iov = [kevy_uring::Iovec { iov_base: line[4..].as_ptr(), iov_len: 3 }];
+    /// // SAFETY: `iov` and `line` outlive the completion reaped below.
+    /// assert!(unsafe { ring.prep_writev(writer.as_raw_fd(), iov.as_ptr(), 1, 1) });
+    /// ring.submit_and_wait(1)?;
+    /// ring.for_each_completion(|_| {});
+    /// let mut got = [0; 3];
+    /// reader.read_exact(&mut got)?;
+    /// assert_eq!(&got, b"key");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub iov_base: *const u8,
     /// Number of bytes at `iov_base`.
+    ///
+    /// Only that many are written, whatever lies past them.
+    ///
+    /// ```
+    /// use std::os::fd::AsRawFd;
+    /// let mut ring = kevy_uring::IoUring::new(8)?;
+    /// let (_reader, writer) = std::io::pipe()?;
+    /// let bytes = b"hello";
+    /// let iov = [kevy_uring::Iovec { iov_base: bytes.as_ptr(), iov_len: 2 }];
+    /// // SAFETY: `iov` and `bytes` outlive the completion reaped below.
+    /// assert!(unsafe { ring.prep_writev(writer.as_raw_fd(), iov.as_ptr(), 1, 1) });
+    /// ring.submit_and_wait(1)?;
+    /// let mut written = 0;
+    /// ring.for_each_completion(|c| written = c.res);
+    /// assert_eq!(written, 2);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub iov_len: usize,
 }
 pub const IORING_OP_RECV: u8 = 27;

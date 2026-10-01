@@ -10,7 +10,7 @@
 //! shard. For closures that span shards use
 //! [`Store::atomic_all_shards`](crate::Store::atomic_all_shards).
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
 use std::sync::RwLockWriteGuard;
 
 use crate::store::ensure_writable;
@@ -23,6 +23,18 @@ type UndoEntry = (Vec<u8>, Option<(kevy_store::Value, Option<u64>)>);
 /// Handle passed to the `atomic` closure body. Methods mirror the
 /// equivalent `Store` ops but operate on the already-held write
 /// lock, so reads inside the block see the closure's own writes.
+///
+/// ```
+/// let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+/// s.set(b"stock", b"0")?;
+/// let refused = s.atomic(|tx| match tx.incr_by(b"stock", -1)? {
+///     n if n < 0 => Err(kevy_embedded::KevyError::InvalidInput("sold out".into())),
+///     n => Ok(n),
+/// });
+/// assert!(refused.is_err());
+/// assert_eq!(s.get(b"stock")?.as_deref(), Some(&b"0"[..]), "the decrement rolled back");
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 #[derive(Debug)]
 pub struct AtomicCtx<'a> {
     inner: &'a mut Inner,
@@ -44,7 +56,7 @@ impl AtomicCtx<'_> {
     /// `NX`/`XX` veto).
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> bool {
         self.snap(key);
-        let ok = self.inner.store.set(key, value.to_vec(), None, false, false);
+        let ok = self.inner.store.set(key, value.to_vec(), None, kevy_store::SetCondition::Always);
         self.log_arg(&[b"SET", key, value]);
         ok
     }
@@ -282,9 +294,6 @@ impl AtomicCtx<'_> {
         pairs: &[(f64, &[u8])],
         flags: kevy_store::ZaddFlags,
     ) -> KevyResult<kevy_store::ZaddReport> {
-        if !flags.valid() {
-            return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
-        }
         let rep = self.inner.store.zadd_flags(key, pairs, flags).map_err(store_err)?;
         if !rep.applied.is_empty() {
             let score_strs: Vec<Vec<u8>> =
@@ -483,7 +492,7 @@ fn commit_group(g: &mut Inner, log: Vec<Vec<Vec<u8>>>) -> KevyResult<()> {
     }
     #[cfg(feature = "persist")]
     if let Some(aof) = g.aof.as_mut() {
-        let synced = aof.end_group().map_err(KevyError::from);
+        let synced = aof.end_group().map_err(crate::KevyError::from);
         commit = commit.and(synced);
     }
     commit

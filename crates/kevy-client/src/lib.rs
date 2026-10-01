@@ -1,13 +1,21 @@
 //! kevy-client — unified KV facade so downstream code can switch between
 //! in-process embedded and TCP-server backends with one URL string.
 //!
-//! ```no_run
-//! use kevy_client::Connection;
+//! ```
+//! use kevy_client::{Connection, KevyResult};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
 //!
 //! // Same business code regardless of backend:
-//! let mut conn = Connection::connect(std::env::var("MY_KEVY_URL").unwrap().as_str())?;
-//! conn.set(b"hello", b"world")?;
-//! assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
+//! fn business(url: &str) -> KevyResult<()> {
+//!     let mut conn = Connection::connect(url)?;
+//!     conn.set(b"hello", b"world")?;
+//!     assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
+//!     Ok(())
+//! }
+//! business("mem://")?;                             // in-process
+//! business(&format!("kevy://127.0.0.1:{port}"))?; // a kevy server
 //! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 //!
@@ -67,7 +75,6 @@ mod zalgebra;
 
 pub use blocking::ZPopHit;
 pub use cluster::ClusterClient;
-pub use feed::{FeedBatch, FeedFrame};
 pub use index::{IdxInfo, IdxPage, IdxRow, IdxType};
 pub use pipeline::PipelineBuf;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
@@ -75,8 +82,15 @@ pub use transaction::{Transaction, TransactionReplies};
 
 /// Re-exports so downstream code can name the argument/reply/error types
 /// of the wraps without adding kevy-embedded / kevy-resp deps.
-pub use kevy_embedded::{HExpireCode, HExpireCond, KevyError, KevyResult, StoreError, ZAggregate};
+pub use kevy_embedded::{
+    Change, ChangeBatch, FeedPosition, HExpireCode, HExpireCond, KevyError, KevyResult, StoreError,
+    ZAggregate,
+};
 pub use kevy_resp::Reply;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 pub(crate) use reply::{
     array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3,
@@ -85,13 +99,20 @@ pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
+///
+#[doc = include_str!("lib_docs/connection.md")]
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Connection {
     /// In-process [`kevy_embedded::Store`]. Boxed because `Store` is
     /// sizeable (carries its `Config`, including the replica
     /// upstream/backoff fields) and dwarfs the `RespClient` variant.
+    ///
+    #[doc = include_str!("lib_docs/embedded.md")]
     Embedded(Box<Store>),
     /// TCP [`kevy_resp_client::RespClient`].
+    ///
+    #[doc = include_str!("lib_docs/remote.md")]
     Remote(RespClient),
 }
 
@@ -103,6 +124,8 @@ impl Connection {
     /// `file:///path` URL share the same backing `Store` — and the same
     /// pub/sub bus, so `Connection::publish` reaches a
     /// `Subscriber::connect_channels` opened with the same URL.
+    ///
+    #[doc = include_str!("lib_docs/connect.md")]
     pub fn connect(url: &str) -> KevyResult<Self> {
         let parsed = parse_url(url)?;
         match parsed {
@@ -126,6 +149,8 @@ impl Connection {
 
     /// `PING`. Returns `()` on `+PONG`, propagates any IO or RESP error.
     /// The first thing every healthcheck calls.
+    ///
+    #[doc = include_str!("lib_docs/ping.md")]
     pub fn ping(&mut self) -> KevyResult<()> {
         match self {
             Self::Embedded(_) => Ok(()),
@@ -138,6 +163,8 @@ impl Connection {
     }
 
     /// `SET key value`. Unconditional set (no NX/XX). Returns `()` on success.
+    ///
+    #[doc = include_str!("lib_docs/set.md")]
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.set(key, value).map(|_| ()),
@@ -150,6 +177,8 @@ impl Connection {
     }
 
     /// `GET key`. `None` if absent or expired.
+    ///
+    #[doc = include_str!("lib_docs/get.md")]
     pub fn get(&mut self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.get(key),
@@ -164,6 +193,8 @@ impl Connection {
 
     /// `DEL key [key ...]`. Returns the count of keys that were actually
     /// removed (existing + dropped). Missing keys don't contribute.
+    ///
+    #[doc = include_str!("lib_docs/del.md")]
     pub fn del(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.del(keys),
@@ -182,6 +213,8 @@ impl Connection {
 
     /// `EXISTS key [key ...]`. Count of keys present (a single key can
     /// contribute >1 if passed multiple times, matching Redis semantics).
+    ///
+    #[doc = include_str!("lib_docs/exists.md")]
     pub fn exists(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.exists(keys),
@@ -200,6 +233,8 @@ impl Connection {
 
     /// `INCR key`. Returns the post-increment value. Errors on non-integer
     /// stored value.
+    ///
+    #[doc = include_str!("lib_docs/incr.md")]
     pub fn incr(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => s.incr(key),
@@ -212,6 +247,8 @@ impl Connection {
     }
 
     /// `INCRBY key delta`. Negative delta is `DECRBY`. Returns post-value.
+    ///
+    #[doc = include_str!("lib_docs/incr_by.md")]
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => s.incr_by(key, delta),
@@ -227,6 +264,8 @@ impl Connection {
     }
 
     /// `PEXPIRE key ttl_ms`. Returns whether the key existed and got a TTL.
+    ///
+    #[doc = include_str!("lib_docs/expire.md")]
     pub fn expire(&mut self, key: &[u8], ttl: Duration) -> KevyResult<bool> {
         match self {
             Self::Embedded(s) => s.expire(key, ttl),
@@ -244,6 +283,8 @@ impl Connection {
     }
 
     /// `PERSIST key`. Returns whether a TTL was actually removed.
+    ///
+    #[doc = include_str!("lib_docs/persist.md")]
     pub fn persist(&mut self, key: &[u8]) -> KevyResult<bool> {
         match self {
             Self::Embedded(s) => s.persist(key),
@@ -257,6 +298,8 @@ impl Connection {
     }
 
     /// `PTTL key`. Returns ms remaining, -2 if no key, -1 if key has no TTL.
+    ///
+    #[doc = include_str!("lib_docs/ttl_ms.md")]
     pub fn ttl_ms(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => Ok(s.ttl_ms(key)),
@@ -271,6 +314,8 @@ impl Connection {
     /// `TYPE key`. Returns the value's type as a Redis-style string (e.g.
     /// `"string"`, `"hash"`, `"list"`, `"set"`, `"zset"`, or `"none"` if
     /// the key doesn't exist).
+    ///
+    #[doc = include_str!("lib_docs/type_of.md")]
     pub fn type_of(&mut self, key: &[u8]) -> KevyResult<String> {
         match self {
             Self::Embedded(s) => Ok(s.type_of(key).to_string()),
@@ -283,6 +328,8 @@ impl Connection {
     }
 
     /// `DBSIZE`. Total live keys at the time of the call.
+    ///
+    #[doc = include_str!("lib_docs/dbsize.md")]
     pub fn dbsize(&mut self) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => Ok(s.dbsize()),
@@ -300,6 +347,8 @@ impl Connection {
     /// Named `flushall` — **not** `flush` — to avoid colliding with
     /// `Write::flush`'s "sync buffered writes to disk" meaning; this WIPES the
     /// store rather than persisting it.
+    ///
+    #[doc = include_str!("lib_docs/flushall.md")]
     pub fn flushall(&mut self) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.flushall(),
@@ -314,6 +363,8 @@ impl Connection {
     /// `SET key value PX ttl_ms`. Convenience for the common
     /// "cache with expiry" pattern; equivalent to `set` + `expire` but
     /// atomic.
+    ///
+    #[doc = include_str!("lib_docs/set_with_ttl.md")]
     pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.set_with_ttl(key, value, ttl).map(|_| ()),
@@ -331,6 +382,8 @@ impl Connection {
 
     /// `MGET key [key ...]` — one reply per key, `None` for missing /
     /// wrong-type. Returns in the same order as `keys`.
+    ///
+    #[doc = include_str!("lib_docs/mget.md")]
     pub fn mget(&mut self, keys: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         match self {
             Self::Embedded(s) => keys.iter().map(|k| s.get(k)).collect(),
@@ -355,6 +408,8 @@ impl Connection {
     }
 
     /// `MSET key value [key value ...]` — set every pair atomically.
+    ///
+    #[doc = include_str!("lib_docs/mset.md")]
     pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => {
@@ -392,6 +447,8 @@ impl Connection {
     /// backend a subscribed TCP connection cannot send normal commands
     /// per the RESP spec; the embedded backend has no such restriction
     /// but `Subscriber` is still a distinct type for API symmetry.
+    ///
+    #[doc = include_str!("lib_docs/publish.md")]
     pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => Ok(s.publish(channel, message)),
@@ -403,6 +460,25 @@ impl Connection {
         }
     }
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Connection>();
+    send_sync::<ClusterClient>();
+    send_sync::<IdxInfo>();
+    send_sync::<IdxPage>();
+    send_sync::<IdxRow>();
+    send_sync::<IdxType>();
+    send_sync::<PipelineBuf>();
+    send_sync::<Subscriber>();
+    send_sync::<SubscriberEvents<'static>>();
+    send_sync::<SubscriberMessages<'static>>();
+    send_sync::<Transaction<'static>>();
+    send_sync::<TransactionReplies>();
+    send_sync::<ZPopHit>();
+};
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

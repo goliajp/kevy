@@ -30,11 +30,15 @@ impl<C: Commands> Shard<C> {
             // Mirror the store-origin event classes into the store's
             // capture mask (all-off keeps every store hook at a single
             // byte test). Channel gating still happens at publish time.
-            let on = !flags.is_empty();
+            use kevy_store::KeyspaceEvent as K;
+            let on = flags.is_active();
+            let classes = [
+                (crate::NotificationFlags::NEW_KEY, K::New),
+                (crate::NotificationFlags::EXPIRED, K::Expired),
+                (crate::NotificationFlags::EVICTED, K::Evicted),
+            ];
             self.store.set_notify_capture(
-                on && flags.new_key,
-                on && flags.expired,
-                on && flags.evicted,
+                classes.into_iter().filter(|(f, _)| on && flags.contains(*f)).map(|(_, k)| k),
             );
         }
         if let Some(t) = live.slowlog_slower_than_micros {
@@ -162,12 +166,11 @@ impl<C: Commands> Shard<C> {
     /// every `tick_interval_ms`, so the cost is amortised across thousands
     /// of writes per check. No-op when AOF is disabled or all rules are 0.
     pub(crate) fn maybe_auto_rewrite_aof(&mut self) {
-        let policy = kevy_persist::RewritePolicy {
-            pct: self.auto_aof_rewrite_pct,
-            min_size: self.auto_aof_rewrite_min_size,
-            bytes: self.auto_aof_rewrite_bytes,
-            interval_secs: self.auto_aof_rewrite_interval_secs,
-        };
+        let policy = kevy_persist::RewritePolicy::default()
+            .with_pct(self.auto_aof_rewrite_pct)
+            .with_min_size(self.auto_aof_rewrite_min_size)
+            .with_bytes(self.auto_aof_rewrite_bytes)
+            .with_interval_secs(self.auto_aof_rewrite_interval_secs);
         let Some(aof) = &self.aof else { return };
         if !aof.rewrite_due(policy) {
             return;
@@ -277,9 +280,7 @@ impl<C: Commands> Shard<C> {
                 self.id,
                 crate::CLIENT_OUTPUT_HARD_LIMIT,
             );
-            if let Some(c) = self.conns.get_mut(&id) {
-                c.closing = true;
-            }
+            self.mark_closing(id);
             self.dirty.push(id);
         }
     }

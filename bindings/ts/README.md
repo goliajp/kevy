@@ -1,4 +1,4 @@
-# @goliapkg/kevy
+# @goliapkg/kevy-ts
 
 The first-party **TypeScript** client for kevy — the pure-Rust
 Redis-compatible engine. One `connect(url)` ships both faces of the

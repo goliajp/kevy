@@ -1,7 +1,7 @@
 //! The read-only index admin surface (stats and enumeration). A
 //! `#[path]` child of `ops_index.rs`, split under the 500-LOC rule.
 
-use kevy_index::IndexKind;
+use kevy_index::{IndexKind, IndexSpec};
 
 use crate::KevyResult;
 use crate::ops_index::SegmentStats;
@@ -25,6 +25,12 @@ impl Store {
     /// Declared indexes (name, prefix, kind), declaration order.
     pub fn idx_list(&self) -> Vec<(Vec<u8>, Vec<u8>, IndexKind)> {
         let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.1.iter().map(|(s, _)| (s.name.clone(), s.prefix.clone(), s.kind)).collect()
+        g.1.iter().map(|(s, _)| (s.name().to_vec(), s.prefix().to_vec(), s.kind())).collect()
+    }
+
+    /// The declaration of the index named `name`, as the catalog holds it.
+    pub fn idx_spec(&self, name: &[u8]) -> Option<IndexSpec> {
+        let g = self.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.get(name).map(|(s, _)| s.clone())
     }
 }

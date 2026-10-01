@@ -8,15 +8,29 @@ use crate::snapshot_fmt::{
     VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_RELATIVE_TTL, VERSION_SEG_STUB,
     capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
+use kevy_replicate::feed::FeedPosition;
 use kevy_store::Store;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
-/// Read the recovery-point cursor from a snapshot's header:
-/// `Some((generation, offset))` for format v5+, `None` for older
+/// Read the recovery-point cursor from a snapshot's header: the feed
+/// position the snapshot was taken at for format v5+, `None` for older
 /// (cursor-less) snapshots. Does not load entries.
-pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
+///
+/// ```
+/// use kevy_replicate::feed::FeedPosition;
+///
+/// let dir = kevy_tmpdir::unique_dir("cursor-doc");
+/// let path = dir.join("dump.kevy");
+/// let file = std::fs::File::create(&path)?;
+/// let store = kevy_store::Store::new();
+/// kevy_persist::write_snapshot_to_with_cursor(&store, file, Some(FeedPosition::new(3, 42)))?;
+/// assert_eq!(kevy_persist::read_snapshot_cursor(&path)?, Some(FeedPosition::new(3, 42)));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<FeedPosition>> {
     let mut r = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
@@ -33,11 +47,22 @@ pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
     r.read_exact(&mut off_bytes)?;
     let generation = u64::from_le_bytes(gen_bytes);
     let offset = u64::from_le_bytes(off_bytes);
-    Ok(Some((generation, offset)))
+    Ok(Some(FeedPosition::new(generation, offset)))
 }
 
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
 /// first — call on a fresh store). Errors on a bad magic/version or truncation.
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("load-doc");
+/// let path = dir.join("dump.rdb");
+/// std::fs::write(&path, b"not a snapshot")?;
+/// let mut store = kevy_store::Store::new();
+/// let err = kevy_persist::load_snapshot(&mut store, &path).unwrap_err();
+/// assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
     let r = BufReader::new(File::open(path)?);
     load_snapshot_from(store, r)
@@ -49,6 +74,19 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
 /// apply a primary-shipped snapshot to a fresh local store without
 /// touching disk. Entries are inserted, not cleared first — call on
 /// a fresh store. Errors on bad magic/version or truncation.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut primary = Store::new();
+/// primary.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let mut shipped = Vec::new();
+/// kevy_persist::write_snapshot_to(&primary, &mut shipped)?;
+/// let mut replica = Store::new();
+/// kevy_persist::load_snapshot_from(&mut replica, std::io::Cursor::new(shipped))?;
+/// assert_eq!(replica.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
     load_snapshot_filtered(store, r, |_| true)
 }
@@ -58,11 +96,47 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
 /// parsed to stay in frame). The single-source replica path broadcasts
 /// one snapshot payload to every shard and each loads its own hash
 /// slice — no intermediate store, no re-serialization.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut primary = Store::new();
+/// for key in [&b"user:1"[..], b"order:1"] {
+///     primary.set(key, b"v".to_vec(), None, SetCondition::Always);
+/// }
+/// let mut shipped = Vec::new();
+/// kevy_persist::write_snapshot_to(&primary, &mut shipped)?;
+/// // this shard owns only the users
+/// let mut shard = Store::new();
+/// kevy_persist::load_snapshot_filtered(&mut shard, shipped.as_slice(), |k| k.starts_with(b"user:"))?;
+/// assert_eq!(shard.dbsize(), 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn load_snapshot_filtered<R: Read>(
+    store: &mut Store,
+    r: R,
+    keep: impl Fn(&[u8]) -> bool,
+) -> io::Result<()> {
+    load_snapshot_with_aux(store, r, keep).map(drop)
+}
+
+/// [`load_snapshot_filtered`], returning the auxiliary frame the snapshot
+/// carried beside the keyspace, if any (see
+/// [`crate::SnapshotSource::aux_frame`]).
+///
+/// ```
+/// let store = kevy_store::Store::new();
+/// let mut image = Vec::new();
+/// kevy_persist::write_snapshot_to(&store, &mut image)?;
+/// let mut back = kevy_store::Store::new();
+/// assert!(kevy_persist::load_snapshot_with_aux(&mut back, image.as_slice(), |_| true)?.is_none());
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn load_snapshot_with_aux<R: Read>(
     store: &mut Store,
     mut r: R,
     keep: impl Fn(&[u8]) -> bool,
-) -> io::Result<()> {
+) -> io::Result<Option<crate::Argv>> {
     let version = read_snapshot_header(&mut r)?;
     // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline
@@ -81,7 +155,7 @@ pub fn load_snapshot_filtered<R: Read>(
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             store.demote_to_watermark();
-            return Ok(());
+            return crate::snapshot_aux::read_trailer(&mut r, store, &keep);
         }
         records += 1;
         if records.is_multiple_of(crate::REPLAY_DEMOTE_INTERVAL) {
@@ -135,10 +209,24 @@ fn load_segstub_record<R: Read>(
     r.read_exact(&mut seq)?;
     let mut weight = [0u8; 4];
     r.read_exact(&mut weight)?;
-    if keep(&key) {
-        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+    if !keep(&key) {
+        return Ok(());
     }
-    Ok(())
+    // the browser build keeps no row segments, so a snapshot that points
+    // into them cannot be loaded there
+    #[cfg(target_arch = "wasm32")]
+    return {
+        let _ = (store, seq, weight);
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot holds a cold-row record, and this target has no row segments",
+        ))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        store.load_row_stub(key, u32::from_le_bytes(seq), u32::from_le_bytes(weight));
+        Ok(())
+    }
 }
 
 /// One `OP_HFTTL` record: `[key][field][deadline_ms: u64 LE]`.
@@ -306,10 +394,11 @@ fn read_stream_groups<R: Read>(r: &mut R) -> io::Result<Vec<kevy_store::LoadedGr
             let seq = read_u64(r)?;
             let consumer = read_bytes(r)?;
             let delivery_time_ms = read_u64(r)?;
-            let delivery_count = read_u32(r)?;
+            // a count past 32 bits follows in the group reads record
+            let delivery_count = u64::from(read_u32(r)?);
             pel.push((ms, seq, consumer, delivery_time_ms, delivery_count));
         }
-        groups.push(kevy_store::LoadedGroup { name, last_delivered, consumers, pel });
+        groups.push(kevy_store::LoadedGroup::new(name, last_delivered, consumers, pel));
     }
     Ok(groups)
 }

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""One row per stone: can it be lifted, is its API stable, is it documented,
-does it run.
+"""One row per stone: can it be lifted, is its API stable, is it documented.
 
 `suite/architecture.toml` names seventeen crates as stone — "business-free,
 any project could take these, highest quality bar". Until now that was a
 list. `check_architecture.py` verified only that their dependencies point
 down the layers; nothing measured the bar itself.
 
-Four independent readings per stone, each from a different tool so that no
+Three independent readings per stone, each from a different tool so that no
 single failure can make a stone look good:
 
 - **lifts** — `tools/extract_stone.py`: the published form, unpacked
@@ -18,9 +17,8 @@ single failure can make a stone look good:
   recording the clean reading now.
 - **docs** — nightly rustdoc `--show-coverage`: documented items, and how
   many carry an **executable** example. Prose is unverified; a doctest is
-  compiled and run.
-- **dead** — `bench/DEAD-SET.json`: never-executed regions attributed to
-  this crate.
+  compiled and run. The coverage pass runs here, so the tables it reads
+  come from this tree and not from an earlier build.
 
 This reports. `stonegate` (G3) decides, and its thresholds come from what
 this measures rather than from taste — including the one this run made
@@ -34,6 +32,7 @@ Exit: 0 wrote the report, 2 refused.
 import collections
 import glob
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -42,9 +41,8 @@ import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ARCH = ROOT / "suite/architecture.toml"
-DEADSET = ROOT / "bench/DEAD-SET.json"
 DOCDIR = ROOT / "target/doc"
-OUT_MD = ROOT / "bench/STONE-REPORT.md"
+OUT_MD = ROOT / "target/reports/STONE-REPORT.md"
 OUT_JSON = ROOT / "bench/STONE-REPORT.json"
 
 
@@ -60,6 +58,10 @@ def stones():
     if not out:
         refuse("the architecture map lists no stones")
     return out
+
+
+def platform_name():
+    return {"darwin": "macos"}.get(sys.platform, sys.platform)
 
 
 def workspace_version():
@@ -146,35 +148,31 @@ def docs():
     return out
 
 
-def dead_by_crate():
-    """-> ({crate: {regions, dead}}, platform).
-
-    Carries the denominator on purpose. A crate the corpus never compiled
-    reports zero dead regions and, without `regions`, outranks every crate
-    that was actually measured. That is not a good score, it is no score.
-    """
-    if not DEADSET.exists():
-        return {}, None
-    doc = json.loads(DEADSET.read_text())
-    return doc.get("crates", {}), doc.get("platform")
+def rustdoc_coverage():
+    """Write this tree's per-crate coverage tables into target/doc."""
+    for t in glob.glob(str(DOCDIR / "*.txt")):
+        pathlib.Path(t).unlink()
+    env = dict(os.environ, RUSTDOCFLAGS="-Z unstable-options --show-coverage")
+    r = subprocess.run(["cargo", "+nightly", "doc", "--workspace", "--no-deps"],
+                       cwd=ROOT, env=env, capture_output=True, text=True)
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout).strip().splitlines()[-5:]
+        refuse("the nightly rustdoc coverage pass failed:\n  " + "\n  ".join(tail))
 
 
 def main():
     args = sys.argv[1:]
     version = workspace_version()
+    platform = platform_name()
     lift = lifts("--skip-lift" in args)
+    rustdoc_coverage()
     dc = docs()
-    dead, dead_platform = dead_by_crate()
     if not dc:
-        refuse("no rustdoc coverage tables in target/doc; run "
-               "`RUSTDOCFLAGS='-Z unstable-options --show-coverage' "
-               "cargo +nightly doc --workspace --no-deps` first")
+        refuse("the rustdoc coverage pass wrote no tables in target/doc")
 
     rows = []
     for c in stones():
-        cov = dead.get(c) or {}
-        row = {"crate": c, "dead_regions": cov.get("dead", 0),
-               "measured_regions": cov.get("regions", 0)}
+        row = {"crate": c}
         row.update({k: lift.get(c, {}).get(k) for k in ("packaged", "built", "tested", "tests")})
         row["lift_note"] = lift.get(c, {}).get("note", "")
         # Carried so the gate can tell "this crate does not lift" from "the
@@ -186,27 +184,25 @@ def main():
         rows.append(row)
         d = row["docs"]
         print(f"  {c:<16} lift={row['tested']} tests={row['tests']} "
-              f"doc={d.get('pct', 0):.0f}% ex={d.get('examples', 0)} "
-              f"dead={row['dead_regions'] if row['measured_regions'] else 'NOT MEASURED'}")
+              f"doc={d.get('pct', 0):.0f}% ex={d.get('examples', 0)}")
 
     OUT_JSON.write_text(json.dumps(
-        {"version": version, "dead_platform": dead_platform, "stones": rows},
+        {"version": version, "platform": platform, "stones": rows},
         indent=2) + "\n")
-    write_md(rows, version, dead_platform)
+    write_md(rows, version, platform)
     print(f"stonereport: {len(rows)} stones -> {OUT_MD.relative_to(ROOT)}")
     return 0
 
 
-def write_md(rows, version, dead_platform):
+def write_md(rows, version, platform):
     lifted = sum(1 for r in rows if r["tested"])
     notests = [r["crate"] for r in rows if r["tested"] and not r["tests"]]
-    unmeasured = [r["crate"] for r in rows if not r["measured_regions"]]
     noex = [r["crate"] for r in rows if not r["docs"].get("examples")]
     out = [
         "# Stone report", "",
         f"Seventeen crates classified `stone` in `suite/architecture.toml`, "
         f"at workspace version {version}.", "",
-        "Generated by `tools/stone_report.py`; do not edit. Four readings per",
+        "Generated by `tools/stone_report.py`; do not edit. Three readings per",
         "stone, each from a different tool, so no single failure can make a",
         "stone look good.", "",
         f"**{lifted}/{len(rows)} lift** — unpack the published form outside the",
@@ -217,28 +213,22 @@ def write_md(rows, version, dead_platform):
     if notests:
         out += [f"**{', '.join(notests)} lift with zero tests** — which is why a",
                 "boolean `tested` cannot be the bar.", ""]
-    if unmeasured:
-        out += [f"**{', '.join(unmeasured)} is not in the corpus at all** — zero",
-                "regions compiled, so its zero dead regions are no score rather",
-                "than a good one.", ""]
-    if dead_platform and dead_platform != "linux":
-        out += [f"Dead-region counts are from a **{dead_platform}** run and are",
-                "not baseline material: cfg(linux) code is absent from that run",
-                "rather than dead in it.", ""]
-    out += ["| stone | lifts | tests | docs | examples | dead regions | semver |",
-            "|---|---|---:|---:|---:|---:|---|"]
-    for r in sorted(rows, key=lambda r: (r["tested"] is not True, -r["dead_regions"])):
+    if platform != "linux":
+        out += [f"Taken on **{platform}**, which is not the enforcing platform:",
+                "cfg(linux) crates are absent from this reading rather than",
+                "measured in it.", ""]
+    out += ["| stone | lifts | tests | docs | examples | semver |",
+            "|---|---|---:|---:|---:|---|"]
+    for r in sorted(rows, key=lambda r: (r["tested"] is not True, r["crate"])):
         d, s = r["docs"], r["semver"]
         lift = "yes" if r["tested"] else ("builds" if r["built"] else "no")
         sv = ("—" if not s else "unpublished" if s.get("unpublished")
               else "clean" if s["ok"] else f"**{s['note']}**")
         note = f" — {r['lift_note']}" if r["lift_note"] else ""
-        dr = (f"{r['dead_regions']}/{r['measured_regions']}"
-              if r["measured_regions"] else "**not measured**")
         out.append(f"| {r['crate']}{note} | {lift} | {r['tests']} | "
                    f"{d.get('documented', 0)}/{d.get('items', 0)} "
-                   f"({d.get('pct', 0):.0f}%) | {d.get('examples', 0)} | "
-                   f"{dr} | {sv} |")
+                   f"({d.get('pct', 0):.0f}%) | {d.get('examples', 0)} | {sv} |")
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
     OUT_MD.write_text("\n".join(out) + "\n")
 
 

@@ -1,412 +1,491 @@
 //! [`Segment`] — one shard's slice of one index (index-follows-key).
-//! Range = `BTreeSet<(value, key)>`; Unique = the same
-//! tree (point lookups are a 1-value range) plus a duplicate counter
-//! for the declarative fence.
 //!
-//! The runtime keeps a reverse map `key → value` inside the segment so
-//! `apply` can remove a row's OLD entry without re-reading history.
+//! Entries are `(value, key)` pairs kept in value order, ties broken by
+//! key, each with the row's stored `VALUES` beside it. They live packed in
+//! the leaves of a counted B+ tree, encoded so that byte order is entry
+//! order (see the `seg_codec` module). Nothing maps a key back to its
+//! entry: a write names the row's old value, which the write path read
+//! before it changed the row.
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::collections::HashMap;
-use std::ops::Bound;
-
-use crate::rowvalues::RowValues;
+use crate::key_dir::KeyDir;
+use crate::seg_codec::{Codec, Form, be8, put_column};
+use crate::seg_leaf::{Ent, Shape};
+use crate::seg_tree::{Pos, Tree};
+use crate::segment_stats::SegmentStats;
+use crate::spec::IndexSpec;
 use crate::value::IndexValue;
 
 /// Opaque pagination cursor: the last `(value, key)` served. Encoded
 /// by the runtime into the wire cursor; `None` = start.
+///
+/// ```
+/// use kevy_index::{Cursor, IndexValue};
+/// let c = Cursor::new(IndexValue::I64(30), b"user:7".to_vec());
+/// assert_eq!(c.key, b"user:7");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Cursor {
     /// Last value served.
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// for (k, v) in [(b"a", 1), (b"b", 2)] { s.apply(k, None, Some(IndexValue::I64(v))); }
+    /// let (_, next) = s.range(&IndexValue::I64(0), &IndexValue::I64(9), None, 1);
+    /// assert_eq!(next.expect("more to read").value, IndexValue::I64(1));
+    /// ```
     pub value: IndexValue,
     /// Last key served (tiebreak within a value).
+    ///
+    /// ```
+    /// # use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// for k in [b"x", b"y"] { s.apply(k, None, Some(IndexValue::I64(5))); }
+    /// let (_, next) = s.range(&IndexValue::I64(5), &IndexValue::I64(5), None, 1);
+    /// assert_eq!(next.expect("more to read").key, b"x", "ties break on the key");
+    /// ```
     pub key: Vec<u8>,
 }
 
-/// Sizing + health counters (`IDX.LIST` / memory formula).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SegmentStats {
-    /// Live entries.
-    pub entries: u64,
-    /// Approximate heap bytes (the measured side of the documented
-    /// memory formula).
-    pub approx_bytes: u64,
-    /// Rows excluded because the field failed coercion / was missing.
-    pub coerce_failures: u64,
-    /// Values currently held by more than one key (unique fence).
-    pub duplicates: u64,
+impl Cursor {
+    /// The cursor just past `(value, key)`, the last entry served.
+    ///
+    /// ```
+    /// use kevy_index::{Cursor, IndexValue};
+    /// assert_eq!(Cursor::new(IndexValue::I64(1), b"k".to_vec()).value, IndexValue::I64(1));
+    /// ```
+    pub fn new(value: IndexValue, key: Vec<u8>) -> Cursor {
+        Cursor { value, key }
+    }
 }
 
-/// Per-entry structural overhead in the memory formula.
-const ENTRY_OVERHEAD: usize = 48;
-
 /// One shard's slice of one index.
-#[derive(Debug, Default)]
+///
+/// A write passes the row's value before the write (`old`) and after it
+/// (`new`); `None` means the row had, or now has, no entry.
+///
+/// ```
+/// use kevy_index::{IndexValue, Segment};
+/// let mut s = Segment::new();
+/// s.apply(b"u:1", None, Some(IndexValue::I64(30)));
+/// s.apply(b"u:2", None, Some(IndexValue::I64(40)));
+/// let (hits, _) = s.range(&IndexValue::I64(35), &IndexValue::I64(50), None, 10);
+/// assert_eq!(hits, vec![(b"u:2".to_vec(), IndexValue::I64(40))]);
+/// assert_eq!(s.count(&IndexValue::I64(0), &IndexValue::I64(99)), 2);
+/// s.remove(b"u:1", &IndexValue::I64(30));
+/// assert_eq!(s.eq(&IndexValue::I64(30), 10), Vec::<Vec<u8>>::new());
+/// ```
+#[derive(Debug)]
 pub struct Segment {
-    tree: BTreeSet<(IndexValue, Vec<u8>)>,
-    back: HashMap<Vec<u8>, IndexValue>,
-    value_counts: BTreeMap<IndexValue, u32>,
+    pub(crate) tree: Tree,
+    pub(crate) codec: Codec,
+    /// `entries` and `approx_bytes` are derived in [`Segment::stats`].
     stats: SegmentStats,
-    /// The stored-value side-channel — `Some` only when the index
-    /// declared `VALUES`. An index without the declaration holds `None`
-    /// and pays nothing: every values touch below is a never-taken
-    /// `if let` (the `Option<Positions>` physical-bypass pattern, A5).
-    values: Option<RowValues>,
+    key_dir: Option<KeyDir>,
+    /// Scratch for an order key and a payload, reused by every write.
+    ebuf: Vec<u8>,
+    pbuf: Vec<u8>,
+    /// The background repack's hand, driven by [`Segment::tidy`].
+    pub(crate) tidy: crate::seg_tree::Tidy,
+}
+
+impl Default for Segment {
+    fn default() -> Self {
+        Segment::with_codec(Codec::new(Form::Unset, b"", 0))
+    }
 }
 
 impl Segment {
-    /// Empty segment.
+    pub(crate) fn with_codec(codec: Codec) -> Segment {
+        Segment {
+            tree: Tree::new(shape_of(&codec)),
+            codec,
+            stats: SegmentStats::default(),
+            key_dir: None,
+            ebuf: Vec::new(),
+            pbuf: Vec::new(),
+            tidy: Default::default(),
+        }
+    }
+
+    /// Empty segment. Its value type is set by the first value it holds.
+    ///
+    /// ```
+    /// assert_eq!(kevy_index::Segment::new().stats().entries, 0);
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Empty segment carrying the stored-value side-channel for `n`
-    /// declared `VALUES` fields (`n` = the spec's `values.len()`).
+    /// Empty segment that stores `n` declared `VALUES` fields per row.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::with_values(1);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(1)), &[Some(b"eu")]);
+    /// assert_eq!(s.stored(&IndexValue::I64(1), b"k", 0), Some(b"eu".to_vec()));
+    /// ```
     pub fn with_values(n: usize) -> Self {
-        Segment { values: Some(RowValues::new(n)), ..Self::default() }
+        Segment::with_codec(Codec::new(Form::Unset, b"", n))
     }
 
-    /// [`Segment::apply`] plus the row's declared stored values. The
-    /// values follow the entry: an indexed row stores them, an excluded
-    /// or deleted one drops them.
+    /// Empty segment shaped by `spec`: its value type, the key prefix its
+    /// rows share (left out of every stored key), a composite value stored
+    /// as its own encoding, and the declared `VALUES`. A key outside the
+    /// prefix is still accepted; the segment then stores whole keys.
+    ///
+    /// ```
+    /// use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment, ValType};
+    /// let spec = IndexSpec::builder("age", "user:", IndexKind::Range, ValType::I64)
+    ///     .with_field("age")
+    ///     .build()?;
+    /// let mut s = Segment::for_spec(&spec);
+    /// s.apply(b"user:42", None, Some(IndexValue::I64(30)));
+    /// assert_eq!(s.eq(&IndexValue::I64(30), 10), vec![b"user:42".to_vec()]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn for_spec(spec: &IndexSpec) -> Self {
+        let form = match (spec.composite(), spec.ty()) {
+            (Some(cols), _) => Form::Composite(cols.iter().map(|c| (c.ty, c.order)).collect()),
+            (None, crate::ValType::I64) => Form::I64,
+            (None, crate::ValType::F64) => Form::F64,
+            (None, _) => Form::Str,
+        };
+        Segment::with_codec(Codec::new(form, spec.prefix(), spec.values().len()))
+    }
+
+    /// Write-path maintenance: the row at `key` held `old` and now
+    /// coerces to `new` (`None` = excluded / row deleted, counted as a
+    /// coerce failure).
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// s.apply(b"k", None, Some(IndexValue::I64(1)));
+    /// s.apply(b"k", Some(&IndexValue::I64(1)), Some(IndexValue::I64(2)));
+    /// assert!(s.contains(&IndexValue::I64(2), b"k") && !s.contains(&IndexValue::I64(1), b"k"));
+    /// s.apply(b"k", Some(&IndexValue::I64(2)), None);
+    /// assert_eq!((s.stats().entries, s.stats().coerce_failures), (0, 1));
+    /// ```
+    pub fn apply(&mut self, key: &[u8], old: Option<&IndexValue>, new: Option<IndexValue>) {
+        self.apply_with_values(key, old, new, &[]);
+    }
+
+    /// [`Segment::apply`] plus the row's declared stored values, which
+    /// ride with the entry.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::with_values(1);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(1)), &[Some(b"old")]);
+    /// let one = IndexValue::I64(1);
+    /// s.apply_with_values(b"k", Some(&one), Some(one.clone()), &[Some(b"new")]);
+    /// assert_eq!(s.stored(&one, b"k", 0), Some(b"new".to_vec()), "same value, new stored field");
+    /// ```
     pub fn apply_with_values(
         &mut self,
         key: &[u8],
+        old: Option<&IndexValue>,
         new: Option<IndexValue>,
         vals: &[Option<&[u8]>],
     ) {
-        let indexed = new.is_some();
-        self.apply(key, new);
-        if let Some(rv) = &mut self.values {
-            if indexed {
-                rv.set(key, vals);
-            } else {
-                rv.clear(key);
+        let Some(v) = new else {
+            if let Some(o) = old {
+                self.remove(key, o);
             }
+            self.stats.coerce_failures += 1;
+            return;
+        };
+        if old.is_some_and(|o| *o == v) && self.codec.arity == 0 {
+            return;
         }
-    }
-
-    /// `key`'s stored value for declared `VALUES` field `field`, or
-    /// `None` when the row has none (or the index declared none).
-    pub fn stored(&self, key: &[u8], field: usize) -> Option<&[u8]> {
-        self.values.as_ref()?.get(key, field)
-    }
-
-    /// Every stored value of one row, aligned with the declared
-    /// `VALUES` order — what an eviction carries into a cold entry's
-    /// payload so the clause-carrying cold path never re-reads the
-    /// row. Empty when the index declared no values.
-    pub fn stored_row(&self, key: &[u8]) -> Vec<Option<&[u8]>> {
-        match self.values.as_ref() {
-            Some(rv) => (0..rv.arity()).map(|f| rv.get(key, f)).collect(),
-            None => Vec::new(),
+        if let Some(o) = old.filter(|o| **o != v) {
+            self.remove(key, o);
         }
-    }
-
-    /// The `(value, key)` tree, for the clause-carrying scan.
-    pub(crate) fn tree(&self) -> &BTreeSet<(IndexValue, Vec<u8>)> {
-        &self.tree
-    }
-
-    /// Synchronous write-path maintenance: the row at `key` now
-    /// coerces to `new` (`None` = excluded / row deleted). Replaces
-    /// any previous entry for the key.
-    pub fn apply(&mut self, key: &[u8], new: Option<IndexValue>) {
-        if let Some(old) = self.back.remove(key) {
-            self.tree.remove(&(old.clone(), key.to_vec()));
-            self.stats.entries -= 1;
-            self.stats.approx_bytes = self
-                .stats
-                .approx_bytes
-                .saturating_sub((old.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(&old);
+        if self.codec.form == Form::Unset {
+            self.codec.form = Form::of(&v);
+            self.tree = Tree::new(shape_of(&self.codec));
         }
-        match new {
-            Some(v) => {
-                self.stats.entries += 1;
-                self.stats.approx_bytes += (v.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64;
-                self.inc_count(&v);
-                self.back.insert(key.to_vec(), v.clone());
-                self.tree.insert((v, key.to_vec()));
-            }
-            None => {
-                self.stats.coerce_failures += 1;
-            }
+        if !self.codec.form.admits(&v) {
+            // a value of another type than the segment's: excluded
+            self.stats.coerce_failures += 1;
+            return;
         }
+        self.fit_key(key);
+        self.insert(key, &v, vals);
     }
 
-    /// The largest value present, if any — the window boundary's
-    /// tree-tail read.
-    pub fn max_value(&self) -> Option<&IndexValue> {
-        self.tree.last().map(|(v, _)| v)
-    }
-
-    /// Entries strictly below `bound`, tree order — the read-only
-    /// preview of [`Self::split_off_below`]'s batch (the slide builds
-    /// its segment from this BEFORE cutting, so an I/O failure leaves
-    /// the tree untouched).
-    pub fn iter_below(&self, bound: &IndexValue) -> impl Iterator<Item = (&IndexValue, &[u8])> {
-        let end = (bound.clone(), Vec::new());
-        self.tree
-            .range((core::ops::Bound::Unbounded, core::ops::Bound::Excluded(end)))
-            .map(|(v, k)| (v, k.as_slice()))
-    }
-
-    /// Detach every entry whose value sorts below `bound`, in tree
-    /// order — the window-eviction cut. The detached batch leaves all
-    /// of the segment's books (tree, reverse map, value counts, stored
-    /// values, stats) exactly as if each entry had been removed one by
-    /// one; the empty-key sentinel keeps every entry AT `bound` in the
-    /// hot tree, so the cut is strictly `< bound`.
-    pub fn split_off_below(&mut self, bound: &IndexValue) -> Vec<(IndexValue, Vec<u8>)> {
-        let kept = self.tree.split_off(&(bound.clone(), Vec::new()));
-        let evicted: Vec<(IndexValue, Vec<u8>)> =
-            core::mem::replace(&mut self.tree, kept).into_iter().collect();
-        for (v, k) in &evicted {
-            self.back.remove(k);
-            self.stats.entries -= 1;
-            self.stats.approx_bytes = self
-                .stats
-                .approx_bytes
-                .saturating_sub((v.approx_bytes() + k.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(v);
-            if let Some(rv) = &mut self.values {
-                rv.clear(k);
-            }
+    fn insert(&mut self, key: &[u8], v: &IndexValue, vals: &[Option<&[u8]>]) {
+        self.ebuf.clear();
+        self.codec.put_entry(v, key, &mut self.ebuf);
+        self.pbuf.clear();
+        for f in 0..self.codec.arity {
+            put_column(vals.get(f).copied().flatten(), &mut self.pbuf);
         }
-        evicted
-    }
-
-    /// Row deleted (no coercion involved — not a coerce failure).
-    pub fn remove(&mut self, key: &[u8]) {
-        if let Some(rv) = &mut self.values {
-            rv.clear(key);
-        }
-        if let Some(old) = self.back.remove(key) {
-            self.tree.remove(&(old.clone(), key.to_vec()));
-            self.stats.entries -= 1;
-            self.stats.approx_bytes = self
-                .stats
-                .approx_bytes
-                .saturating_sub((old.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64);
-            self.dec_count(&old);
-        }
-    }
-
-    fn inc_count(&mut self, v: &IndexValue) {
-        let c = self.value_counts.entry(v.clone()).or_insert(0);
-        *c += 1;
-        if *c == 2 {
+        let vlen = self.codec.value_len(&self.ebuf);
+        let (codec, ebuf) = (&self.codec, &self.ebuf);
+        let mut held = 0;
+        let e = Ent { key: ebuf, vlen, payload: &self.pbuf };
+        let new = self.tree.insert_seen(e, |t, at| {
+            held = holders(t, codec, &ebuf[..vlen], t.prev_pos(at), t.normalize(at));
+        });
+        if new && held == 1 {
             self.stats.duplicates += 1;
         }
-    }
-
-    fn dec_count(&mut self, v: &IndexValue) {
-        if let Some(c) = self.value_counts.get_mut(v) {
-            if *c == 2 {
-                self.stats.duplicates -= 1;
-            }
-            *c -= 1;
-            if *c == 0 {
-                self.value_counts.remove(v);
-            }
+        if let Some(d) = &mut self.key_dir {
+            d.put(key, v);
         }
     }
 
-    /// Ordered scan of `[min, max]` (inclusive), resuming after
-    /// `cursor`, up to `limit` hits. Returns `(key, value)` pairs in
-    /// `(value, key)` order plus the cursor to resume from (`None` =
-    /// exhausted).
-    pub fn range(
-        &self,
-        min: &IndexValue,
-        max: &IndexValue,
-        cursor: Option<&Cursor>,
-        limit: usize,
-    ) -> (Vec<(Vec<u8>, IndexValue)>, Option<Cursor>) {
-        let lower: Bound<(IndexValue, Vec<u8>)> = match cursor {
-            Some(c) => Bound::Excluded((c.value.clone(), c.key.clone())),
-            None => Bound::Included((min.clone(), Vec::new())),
-        };
-        // Upper bound is exact via take-while — a synthetic sentinel
-        // key would MISS max-valued keys sorting above it.
-        let mut out = Vec::with_capacity(limit.min(64));
-        let mut iter = self.tree.range((lower, Bound::Unbounded));
-        for (v, k) in iter.by_ref() {
-            if v > max {
-                break;
-            }
-            out.push((k.clone(), v.clone()));
-            if out.len() == limit {
-                break;
-            }
+    /// Row deleted: take its entry (held under `old`) out. Not a coerce
+    /// failure.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// s.apply(b"k", None, Some(IndexValue::I64(1)));
+    /// s.remove(b"k", &IndexValue::I64(1));
+    /// assert_eq!((s.stats().entries, s.stats().coerce_failures), (0, 0));
+    /// ```
+    pub fn remove(&mut self, key: &[u8], old: &IndexValue) {
+        if !self.codec.form.admits(old) || !self.codec.fits_key(key) {
+            return;
         }
-        let next = if out.len() == limit {
-            out.last().map(|(k, v)| Cursor { value: v.clone(), key: k.clone() })
-        } else {
-            None
-        };
-        (out, next)
+        self.ebuf.clear();
+        self.codec.put_entry(old, key, &mut self.ebuf);
+        let vlen = self.codec.value_len(&self.ebuf);
+        let (codec, ebuf) = (&self.codec, &self.ebuf);
+        let mut held = 0;
+        let gone = self.tree.remove_seen(ebuf, |t, at| {
+            held = holders(t, codec, &ebuf[..vlen], t.prev_pos(at), t.next_pos(at));
+        });
+        if gone && held == 1 {
+            self.stats.duplicates -= 1;
+        }
+        if gone && let Some(d) = &mut self.key_dir {
+            d.remove(key);
+        }
     }
 
-    /// Point lookup: every key holding exactly `value` (unique kind's
-    /// read; >1 hit = the declarative fence's `-DUPLICATE` signal).
-    pub fn eq(&self, value: &IndexValue, limit: usize) -> Vec<Vec<u8>> {
-        let lower = Bound::Included((value.clone(), Vec::new()));
-        self.tree
-            .range((lower, Bound::Unbounded))
-            .take_while(|(v, _)| v == value)
-            .take(limit)
-            .map(|(_, k)| k.clone())
+    /// Re-encode every entry when `key` does not fit the segment's key
+    /// form (it lacks the prefix, or is not all digits after it).
+    fn fit_key(&mut self, key: &[u8]) {
+        if self.codec.fits_key(key) {
+            return;
+        }
+        let wide = self.codec.widened_for(key);
+        let mut entries: Vec<(Vec<u8>, usize, Vec<u8>)> = Vec::with_capacity(self.tree.len);
+        let mut w = crate::seg_walk::Walker::new(self, self.tree.first_pos(), false);
+        while w.advance() {
+            let payload = w.payload().to_vec();
+            let (v, k) = w.pair();
+            let mut e = Vec::new();
+            wide.put_entry(v, k, &mut e);
+            let vlen = wide.value_len(&e);
+            entries.push((e, vlen, payload));
+        }
+        self.codec = wide;
+        self.tree.rebuild(entries.iter().map(|(e, vlen, p)| Ent {
+            key: e,
+            vlen: *vlen,
+            payload: p,
+        }));
+    }
+
+    /// Whether the segment holds `key` under `value`.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// s.apply(b"k", None, Some(IndexValue::I64(7)));
+    /// assert!(s.contains(&IndexValue::I64(7), b"k"));
+    /// assert!(!s.contains(&IndexValue::I64(8), b"k"));
+    /// ```
+    pub fn contains(&self, value: &IndexValue, key: &[u8]) -> bool {
+        self.find(value, key).is_some()
+    }
+
+    /// The position of `(value, key)`, when held.
+    pub(crate) fn find(&self, value: &IndexValue, key: &[u8]) -> Option<Pos> {
+        if !self.codec.form.admits(value) || !self.codec.fits_key(key) {
+            return None;
+        }
+        SCRATCH.with(|b| {
+            let mut e = b.borrow_mut();
+            e.clear();
+            self.codec.put_entry(value, key, &mut e);
+            let p = crate::seg_leaf::Probe::new(&e);
+            let pos = self.tree.lower_bound(&p)?;
+            let l = self.tree.leaf(pos.leaf);
+            (l.cmp_at(&p, pos.slot, &self.tree.ov) == std::cmp::Ordering::Equal).then_some(pos)
+        })
+    }
+
+    /// `key`'s stored value for declared `VALUES` field `field`, where the
+    /// row is held under `value`; `None` when the row has none.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::with_values(2);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(1)), &[Some(b"eu"), None]);
+    /// assert_eq!(s.stored(&IndexValue::I64(1), b"k", 0), Some(b"eu".to_vec()));
+    /// assert_eq!(s.stored(&IndexValue::I64(1), b"k", 1), None);
+    /// ```
+    pub fn stored(&self, value: &IndexValue, key: &[u8], field: usize) -> Option<Vec<u8>> {
+        if field >= self.codec.arity {
+            return None;
+        }
+        let pos = self.find(value, key)?;
+        let payload = self.tree.leaf(pos.leaf).tail(pos.slot, &self.tree.ov).payload;
+        crate::seg_codec::nth_column(payload, field).into_vec()
+    }
+
+    /// Every stored value of the row held under `value`, in declared
+    /// `VALUES` order; empty when the index declares none or the row is
+    /// not held.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::with_values(2);
+    /// s.apply_with_values(b"k", None, Some(IndexValue::I64(1)), &[Some(b"a"), Some(b"12")]);
+    /// assert_eq!(s.stored_row(&IndexValue::I64(1), b"k"), [Some(b"a".to_vec()), Some(b"12".to_vec())]);
+    /// ```
+    pub fn stored_row(&self, value: &IndexValue, key: &[u8]) -> Vec<Option<Vec<u8>>> {
+        let Some(pos) = self.find(value, key) else { return Vec::new() };
+        let payload = self.tree.leaf(pos.leaf).tail(pos.slot, &self.tree.ov).payload;
+        let mut at = 0;
+        (0..self.codec.arity)
+            .map(|_| crate::seg_codec::column(payload, &mut at).into_vec())
             .collect()
     }
 
-    /// Count within `[min, max]` without materializing keys.
-    pub fn count(&self, min: &IndexValue, max: &IndexValue) -> u64 {
-        let lower = Bound::Included((min.clone(), Vec::new()));
-        self.tree.range((lower, Bound::Unbounded)).take_while(|(v, _)| v <= max).count() as u64
-    }
-
-    /// Verify hook: what value does the segment hold for `key`?
-    /// (`IDX.VERIFY` compares this against a fresh row coercion.)
-    pub fn verify_entry(&self, key: &[u8]) -> Option<&IndexValue> {
-        self.back.get(key)
-    }
-
-    /// Ordered streaming scan over the WHOLE segment: ascending (or
-    /// descending) `(value, key)` order, resuming exclusively past
-    /// `after`. The virtual-view pager drives this and probes
-    /// membership per candidate — O(limit × selectivity⁻¹) instead of
-    /// materializing the full member set.
-    pub fn scan<'s>(
-        &'s self,
-        after: Option<&Cursor>,
-        desc: bool,
-    ) -> Box<dyn Iterator<Item = (&'s IndexValue, &'s [u8])> + 's> {
-        match (after, desc) {
-            (None, false) => Box::new(self.tree.iter().map(|(v, k)| (v, k.as_slice()))),
-            (None, true) => Box::new(self.tree.iter().rev().map(|(v, k)| (v, k.as_slice()))),
-            (Some(c), false) => Box::new(
-                self.tree
-                    .range((Bound::Excluded((c.value.clone(), c.key.clone())), Bound::Unbounded))
-                    .map(|(v, k)| (v, k.as_slice())),
-            ),
-            (Some(c), true) => Box::new(
-                self.tree
-                    .range((Bound::Unbounded, Bound::Excluded((c.value.clone(), c.key.clone()))))
-                    .rev()
-                    .map(|(v, k)| (v, k.as_slice())),
-            ),
+    /// Keep a key → value directory beside the entries (`on`), or drop
+    /// it. Views ask a row's value by key alone; an index no view reads
+    /// has no directory and pays nothing for one.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// s.apply(b"k", None, Some(IndexValue::I64(3)));
+    /// s.set_key_dir(true);
+    /// assert_eq!(s.key_dir().and_then(|d| d.get(b"k")), Some(IndexValue::I64(3)));
+    /// ```
+    pub fn set_key_dir(&mut self, on: bool) {
+        if !on {
+            self.key_dir = None;
+            return;
         }
-    }
-
-    /// Visit every `(key, value)` entry (verify / audit walks).
-    pub fn each_entry<F: FnMut(&[u8], &IndexValue)>(&self, mut f: F) {
-        for (k, v) in &self.back {
-            f(k.as_slice(), v);
+        if self.key_dir.is_some() {
+            return;
         }
+        let mut d = KeyDir::new();
+        self.each_entry(|k, v| d.put(k, v));
+        self.key_dir = Some(d);
     }
 
-    /// Live counters. The stored-value column's heap joins the memory
-    /// term when (and only when) the index declared `VALUES`.
+    /// The key → value directory, when [`Segment::set_key_dir`] asked for
+    /// one.
+    ///
+    /// ```
+    /// assert!(kevy_index::Segment::new().key_dir().is_none());
+    /// ```
+    pub fn key_dir(&self) -> Option<&KeyDir> {
+        self.key_dir.as_ref()
+    }
+
+    /// Live counters. The memory term is every byte the segment's
+    /// structures hold: its leaves, its inner nodes and their separators,
+    /// out-of-line entries, and the key directory when there is one.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// s.apply(b"k", None, Some(IndexValue::I64(3)));
+    /// assert_eq!(s.stats().entries, 1);
+    /// assert!(s.stats().approx_bytes >= 1784, "at least one leaf");
+    /// ```
     pub fn stats(&self) -> SegmentStats {
         let mut s = self.stats;
-        if let Some(rv) = &self.values {
-            s.approx_bytes += rv.approx_bytes();
-        }
+        s.entries = self.tree.len as u64;
+        s.approx_bytes =
+            self.tree.heap_bytes() as u64 + self.key_dir.as_ref().map_or(0, KeyDir::approx_bytes);
         s
     }
+
+    /// Repack every entry into full leaves. Entries written in random
+    /// order leave leaves about 69% full; a build ends with this, so what
+    /// stays resident is the packed form.
+    ///
+    /// ```
+    /// use kevy_index::{IndexValue, Segment};
+    /// let mut s = Segment::new();
+    /// for i in 0..10_000 {
+    ///     s.apply(format!("k{i}").as_bytes(), None, Some(IndexValue::I64(i * 7919 % 10_000)));
+    /// }
+    /// let before = s.stats().approx_bytes;
+    /// s.repack();
+    /// assert!(s.stats().approx_bytes < before);
+    /// assert_eq!(s.stats().entries, 10_000);
+    /// ```
+    pub fn repack(&mut self) {
+        self.tree.repack();
+    }
+
+    pub(crate) fn note_cut(&mut self, dups: u64, keys: &[(IndexValue, Vec<u8>)]) {
+        self.stats.duplicates -= dups;
+        if let Some(d) = &mut self.key_dir {
+            for (_, k) in keys {
+                d.remove(k);
+            }
+        }
+    }
 }
+
+/// What a segment's leaves carry: its stored values, and each value's
+/// length when values are not a fixed 8 bytes.
+fn shape_of(c: &Codec) -> Shape {
+    Shape { payloads: c.arity > 0, vlens: !matches!(c.form, Form::I64 | Form::F64) }
+}
+
+thread_local! {
+    /// An order key being looked up by a `&self` read, so a point lookup
+    /// allocates nothing.
+    static SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// How many entries next to a spot hold the value `vb`, counting no
+/// further than 2: walking left from `left` and right from `right`.
+fn holders(t: &Tree, c: &Codec, vb: &[u8], left: Option<Pos>, right: Option<Pos>) -> usize {
+    let fixed = matches!(c.form, Form::I64 | Form::F64);
+    let head = if fixed { be8(vb) } else { 0 };
+    let same = |p: Pos| {
+        let l = t.leaf(p.leaf);
+        if fixed { l.head(p.slot) == head } else { l.starts_with(p.slot, vb, &t.ov) }
+    };
+    let mut n = 0;
+    let mut at = left;
+    while let Some(p) = at.filter(|_| n < 2) {
+        if !same(p) {
+            break;
+        }
+        n += 1;
+        at = t.prev_pos(p);
+    }
+    let mut at = right;
+    while let Some(p) = at.filter(|_| n < 2) {
+        if !same(p) {
+            break;
+        }
+        n += 1;
+        at = t.next_pos(p);
+    }
+    n
+}
+
+#[path = "segment_read.rs"]
+mod read;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn i(v: i64) -> IndexValue {
-        IndexValue::I64(v)
-    }
-
-    fn seeded() -> Segment {
-        let mut s = Segment::new();
-        for (k, v) in [("u1", 30), ("u2", 25), ("u3", 30), ("u4", 40), ("u5", 18)] {
-            s.apply(k.as_bytes(), Some(i(v)));
-        }
-        s
-    }
-
-    #[test]
-    fn apply_replace_remove_and_stats() {
-        let mut s = seeded();
-        assert_eq!(s.stats().entries, 5);
-        assert_eq!(s.stats().duplicates, 1, "30 held twice");
-        // replace u1's value: 30 no longer duplicated
-        s.apply(b"u1", Some(i(31)));
-        assert_eq!(s.stats().entries, 5);
-        assert_eq!(s.stats().duplicates, 0);
-        // coerce-failure excludes and counts
-        s.apply(b"u2", None);
-        assert_eq!(s.stats().entries, 4);
-        assert_eq!(s.stats().coerce_failures, 1);
-        // remove is not a coerce failure
-        s.remove(b"u3");
-        assert_eq!(s.stats().entries, 3);
-        assert_eq!(s.stats().coerce_failures, 1);
-        assert!(s.verify_entry(b"u3").is_none());
-        assert_eq!(s.verify_entry(b"u4"), Some(&i(40)));
-    }
-
-    #[test]
-    fn range_scan_orders_and_paginates() {
-        let s = seeded();
-        let (page1, cur) = s.range(&i(18), &i(30), None, 2);
-        assert_eq!(page1[0], (b"u5".to_vec(), i(18)));
-        assert_eq!(page1[1], (b"u2".to_vec(), i(25)));
-        let cur = cur.expect("more pages");
-        let (page2, cur2) = s.range(&i(18), &i(30), Some(&cur), 10);
-        assert_eq!(
-            page2,
-            vec![(b"u1".to_vec(), i(30)), (b"u3".to_vec(), i(30))],
-            "value tie broken by key"
-        );
-        assert!(cur2.is_none(), "exhausted");
-        assert_eq!(s.count(&i(18), &i(30)), 4);
-        assert_eq!(s.count(&i(99), &i(100)), 0);
-    }
-
-    #[test]
-    fn eq_and_duplicate_fence() {
-        let s = seeded();
-        assert_eq!(s.eq(&i(30), 10), vec![b"u1".to_vec(), b"u3".to_vec()]);
-        assert_eq!(s.eq(&i(40), 10), vec![b"u4".to_vec()]);
-        assert!(s.eq(&i(99), 10).is_empty());
-    }
-
-    #[test]
-    fn long_keys_at_max_value_not_missed() {
-        let mut s = Segment::new();
-        let long_key = vec![0xFFu8; 80]; // sorts above any 64-byte sentinel
-        s.apply(&long_key, Some(i(30)));
-        s.apply(b"short", Some(i(30)));
-        let (hits, _) = s.range(&i(30), &i(30), None, 10);
-        assert_eq!(hits.len(), 2, "max-valued long key must not be missed");
-        assert_eq!(s.eq(&i(30), 10).len(), 2);
-        assert_eq!(s.count(&i(30), &i(30)), 2);
-    }
-
-    #[test]
-    fn f64_and_str_orders() {
-        let mut s = Segment::new();
-        s.apply(b"a", Some(IndexValue::F64(1.5)));
-        s.apply(b"b", Some(IndexValue::F64(-0.5)));
-        let (hits, _) = s.range(&IndexValue::F64(-1.0), &IndexValue::F64(2.0), None, 10);
-        assert_eq!(hits[0].0, b"b".to_vec());
-
-        let mut t = Segment::new();
-        t.apply(b"x", Some(IndexValue::Str(b"banana".to_vec())));
-        t.apply(b"y", Some(IndexValue::Str(b"apple".to_vec())));
-        let (hits, _) =
-            t.range(&IndexValue::Str(b"a".to_vec()), &IndexValue::Str(b"z".to_vec()), None, 10);
-        assert_eq!(hits[0].0, b"y".to_vec());
-    }
-}
+#[path = "segment_tests.rs"]
+mod tests;

@@ -23,13 +23,14 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 # Reuse the gate's own exclusions rather than restating them: a door the
 # gate ignores must not be bumped either.
-from check_version_alignment import skip  # noqa: E402
+from check_version_alignment import PODSPEC_RE, skip  # noqa: E402
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -71,15 +72,27 @@ def record(f: pathlib.Path, txt: str, changes: list) -> None:
 # manifests, scripts, and the documents that tell a reader what to import.
 HISTORICAL = (
     "CHANGELOG.md",
-    ".claude/ROADMAP.md",
     "bench/FINDING-",
     "bench/PERF-",
+    # an upgrade guide is the record of one hop: its `go get …/v6@v6.4.0`
+    # names the release it upgrades to, and stays right after the next major
+    "docs/upgrading-",
+    "docs/zh/upgrading-",
+    "docs/ja/upgrading-",
 )
 
 
 def historical(p) -> bool:
     rel = str(p.relative_to(ROOT))
     return any(rel == h or rel.startswith(h) for h in HISTORICAL)
+
+
+def tracked():
+    """Every file git tracks. Layer 7 is about what the repository tells a
+    reader to import; a local file git does not carry tells nobody."""
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"],
+                         capture_output=True, text=True, check=True).stdout
+    return sorted(ROOT / p for p in out.split("\0") if p)
 
 
 def cargo_files():
@@ -174,6 +187,14 @@ def bump_patterned(new: str, changes: list) -> None:
         if txt != f.read_text(encoding="utf-8"):
             changes.append((f, txt))
 
+    for f in sorted(ROOT.glob("bindings/**/*.podspec")):
+        if skip(f):
+            continue
+        txt = f.read_text(encoding="utf-8")
+        edited = PODSPEC_RE.sub(lambda m: m.group(1) + new + m.group(3), txt)
+        if edited != txt:
+            changes.append((f, edited))
+
     for f in sorted(ROOT.glob("bindings/**/pom.xml")):
         if skip(f):
             continue
@@ -252,7 +273,7 @@ def bump_go_module_major(new: str, changes: list) -> None:
         return
     used = re.compile(r"(github\.com/goliajp/kevy-go)/v\d+")
     want = rf"\1/v{major}"
-    for f in sorted(ROOT.glob("**/*")):
+    for f in tracked():
         if f.is_dir() or skip(f) or historical(f) or f.suffix not in (
                 ".go", ".mod", ".sh", ".md", ".yml", ".yaml"):
             continue

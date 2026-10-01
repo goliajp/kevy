@@ -4,8 +4,8 @@
 //! writes — keyspace-mutating verbs) and a fleet of **replica**
 //! connections (for reads — round-robin across them, fallback to the
 //! primary when no replica is configured). A per-command
-//! `consistent: bool` knob (`READCONSISTENT` semantics) forces a read
-//! to the primary for callers that need fresh data.
+//! [`ReadConsistency`] (`READCONSISTENT` semantics) forces a read to the
+//! primary for callers that need fresh data.
 //!
 //! Topology model: the operator supplies the primary address + a list of
 //! replica addresses to [`ReadWriteClient::connect`]; the client
@@ -18,8 +18,12 @@
 //! — a small static table mirroring `kevy::cmd`'s server-side rule
 //! (duplicated here on purpose: this crate is downstream of
 //! `kevy-resp-client` only, so it never depends on the server crate).
+//!
+#![doc = include_str!("rw_docs/crate_example.md")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+mod consistency;
 
 use std::collections::HashMap;
 use std::io;
@@ -27,10 +31,49 @@ use std::io;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
+pub use consistency::ReadConsistency;
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<ReadWriteClient>();
+    send_sync::<ReadConsistency>();
+};
+
 /// Read/write-split cluster client. Owns one `RespClient` to the
 /// primary node + one per replica node. Round-robins reads across
 /// the replica fleet (fallback to primary on empty fleet or
-/// `consistent = true`).
+/// [`ReadConsistency::Primary`]).
+///
+/// ```
+/// use kevy_cluster_rw::ReadWriteClient;
+/// use kevy_resp::Reply;
+/// # struct Node(u16, std::sync::Arc<std::sync::atomic::AtomicBool>, std::path::PathBuf);
+/// # impl Drop for Node { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.2);
+/// #     self.1.store(true, std::sync::atomic::Ordering::SeqCst); } }
+/// # fn node() -> Node {
+/// #     let (port, stop) = (kevy_testnet::free_port(), std::sync::Arc::default());
+/// #     let dir = std::env::temp_dir().join(format!("kevy-rw-doc-{}-{port}", std::process::id()));
+/// #     std::fs::create_dir_all(&dir).unwrap();
+/// #     let (s, d) = (std::sync::Arc::clone(&stop), dir.clone());
+/// #     std::thread::spawn(move || kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+/// #         .bind([127, 0, 0, 1], port).shards(1).with_data_dir(d).with_aof(false).run(s));
+/// #     kevy_testnet::assert_listening(port, "kevy node");
+/// #     Node(port, stop, dir)
+/// # }
+/// # fn main() -> std::io::Result<()> {
+/// // two independent nodes, so the example can see where each command went
+/// let (primary, replica) = (node(), node());
+/// let mut c = ReadWriteClient::connect(("127.0.0.1", primary.0), &[("127.0.0.1", replica.0)])?;
+/// c.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?; // lands on the primary
+/// // a real replica would have caught up; this one never hears of the write
+/// assert_eq!(c.request(&[b"GET".to_vec(), b"k".to_vec()])?, Reply::Nil);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct ReadWriteClient {
     primary: RespClient,
@@ -40,6 +83,9 @@ pub struct ReadWriteClient {
     /// after-write pattern that pins to a single replica is accepted
     /// (no fairness guarantee).
     rr_counter: usize,
+    /// Some node was reached over `kevys://`: a redirect to a node this
+    /// client has no key for is refused rather than followed in plaintext.
+    encrypted: bool,
     /// v3-cluster Phase 3 scope cache: `host:port` → live
     /// `RespClient`. Populated on demand when a write returns
     /// `-MISDIRECTED writer is <host:port>` — the client opens a
@@ -79,6 +125,17 @@ impl ReadWriteClient {
     /// `[replication] role = "replica"`; the client assumes they all
     /// share the keyspace of the primary (operator-enforced — kevy
     /// has no automatic discovery).
+    ///
+    /// ```
+    /// use std::net::TcpListener;
+    /// use kevy_cluster_rw::ReadWriteClient;
+    ///
+    /// let l = TcpListener::bind("127.0.0.1:0")?; // stands in for all three nodes
+    /// let node = ("127.0.0.1", l.local_addr()?.port());
+    /// assert_eq!(ReadWriteClient::connect(node, &[node, node])?.replica_count(), 2);
+    /// assert!(ReadWriteClient::connect(node, &[("127.0.0.1", 1)]).is_err(), "a node is down");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn connect(primary: (&str, u16), replicas: &[(&str, u16)]) -> io::Result<Self> {
         let primary_conn = RespClient::connect(primary.0, primary.1)?;
         let mut replica_conns = Vec::with_capacity(replicas.len());
@@ -89,12 +146,42 @@ impl ReadWriteClient {
             primary: primary_conn,
             replicas: replica_conns,
             rr_counter: 0,
+            encrypted: false,
+            scope_writers: HashMap::new(),
+            scope_key_targets: HashMap::new(),
+        })
+    }
+
+    /// [`Self::connect`] by URL, one per node: `kevy://host:port`, or
+    /// `kevys://host:port?server_key=<hex>[&client_key_file=<path>]` for a
+    /// node's encrypted client port (each node has its own key).
+    ///
+    #[doc = include_str!("rw_docs/connect_urls.md")]
+    pub fn connect_urls(primary: &str, replicas: &[&str]) -> io::Result<Self> {
+        let replica_conns =
+            replicas.iter().map(|u| RespClient::connect_url(u)).collect::<io::Result<Vec<_>>>()?;
+        Ok(Self {
+            primary: RespClient::connect_url(primary)?,
+            replicas: replica_conns,
+            rr_counter: 0,
+            encrypted: std::iter::once(&primary).chain(replicas).any(|u| u.starts_with("kevys://")),
             scope_writers: HashMap::new(),
             scope_key_targets: HashMap::new(),
         })
     }
 
     /// Number of replica connections.
+    ///
+    /// ```
+    /// # let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+    /// # let port = l.local_addr()?.port();
+    /// use kevy_cluster_rw::ReadWriteClient;
+    ///
+    /// // no replicas: every read falls back to the primary
+    /// let c = ReadWriteClient::connect(("127.0.0.1", port), &[])?;
+    /// assert_eq!(c.replica_count(), 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn replica_count(&self) -> usize {
         self.replicas.len()
     }
@@ -107,6 +194,33 @@ impl ReadWriteClient {
     /// mapping for follow-up writes on the same key, and retries
     /// **once**. A second `-MISDIRECTED` from the retry surfaces as
     /// an error.
+    ///
+    /// ```
+    /// use kevy_cluster_rw::{ReadConsistency, ReadWriteClient};
+    /// # struct Node(u16, std::sync::Arc<std::sync::atomic::AtomicBool>, std::path::PathBuf);
+    /// # impl Drop for Node { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.2);
+    /// #     self.1.store(true, std::sync::atomic::Ordering::SeqCst); } }
+    /// # fn node() -> Node {
+    /// #     let (port, stop) = (kevy_testnet::free_port(), std::sync::Arc::default());
+    /// #     let dir = std::env::temp_dir().join(format!("kevy-rw-doc-{}-{port}", std::process::id()));
+    /// #     std::fs::create_dir_all(&dir).unwrap();
+    /// #     let (s, d) = (std::sync::Arc::clone(&stop), dir.clone());
+    /// #     std::thread::spawn(move || kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+    /// #         .bind([127, 0, 0, 1], port).shards(1).with_data_dir(d).with_aof(false).run(s));
+    /// #     kevy_testnet::assert_listening(port, "kevy node");
+    /// #     Node(port, stop, dir)
+    /// # }
+    /// # fn main() -> std::io::Result<()> {
+    /// let (primary, replica) = (node(), node());
+    /// let mut c = ReadWriteClient::connect(("127.0.0.1", primary.0), &[("127.0.0.1", replica.0)])?;
+    /// // INCR is a write, but the explicit call routes any command to the primary
+    /// let incr = [b"INCR".to_vec(), b"hits".to_vec()];
+    /// assert_eq!(c.request_write(&incr)?, kevy_resp::Reply::Int(1));
+    /// let get = [b"GET".to_vec(), b"hits".to_vec()];
+    /// assert_eq!(c.request_read(&get, ReadConsistency::Primary)?, kevy_resp::Reply::Bulk(b"1".to_vec()));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn request_write(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         // Fast path: a prior MISDIRECTED for this key cached its
         // writer's address — skip the primary round-trip.
@@ -157,6 +271,12 @@ impl ReadWriteClient {
     /// caller deserves to see the error rather than burn round-trips.
     fn request_via_writer(&mut self, addr: &str, args: &[Vec<u8>]) -> io::Result<Reply> {
         if !self.scope_writers.contains_key(addr) {
+            if self.encrypted {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("MISDIRECTED to {addr}, which this encrypted client has no key for"),
+                ));
+            }
             let (host, port) = split_host_port(addr).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -180,10 +300,16 @@ impl ReadWriteClient {
     }
 
     /// Route a read command to a replica (round-robin); fallback to
-    /// the primary when no replica is configured or when
-    /// `consistent` is `true`.
-    pub fn request_read(&mut self, args: &[Vec<u8>], consistent: bool) -> io::Result<Reply> {
-        if consistent || self.replicas.is_empty() {
+    /// the primary when no replica is configured or when `consistency`
+    /// is [`ReadConsistency::Primary`].
+    ///
+    #[doc = include_str!("rw_docs/request_read.md")]
+    pub fn request_read(
+        &mut self,
+        args: &[Vec<u8>],
+        consistency: ReadConsistency,
+    ) -> io::Result<Reply> {
+        if matches!(consistency, ReadConsistency::Primary) || self.replicas.is_empty() {
             return self.primary.request(args);
         }
         let idx = self.rr_counter % self.replicas.len();
@@ -193,59 +319,101 @@ impl ReadWriteClient {
 
     /// Auto-routed command. Classifies `args[0]` via [`is_write_verb`]
     /// and dispatches to either [`Self::request_write`] or
-    /// [`Self::request_read`] (`consistent = false`). Convenience for
+    /// [`Self::request_read`] ([`ReadConsistency::Eventual`]). Convenience for
     /// callers that don't want to make the read/write decision
     /// explicit.
+    ///
+    /// ```
+    /// use kevy_cluster_rw::ReadWriteClient;
+    /// use kevy_resp::Reply;
+    /// # struct Node(u16, std::sync::Arc<std::sync::atomic::AtomicBool>, std::path::PathBuf);
+    /// # impl Drop for Node { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.2);
+    /// #     self.1.store(true, std::sync::atomic::Ordering::SeqCst); } }
+    /// # fn node() -> Node {
+    /// #     let (port, stop) = (kevy_testnet::free_port(), std::sync::Arc::default());
+    /// #     let dir = std::env::temp_dir().join(format!("kevy-rw-doc-{}-{port}", std::process::id()));
+    /// #     std::fs::create_dir_all(&dir).unwrap();
+    /// #     let (s, d) = (std::sync::Arc::clone(&stop), dir.clone());
+    /// #     std::thread::spawn(move || kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1))
+    /// #         .bind([127, 0, 0, 1], port).shards(1).with_data_dir(d).with_aof(false).run(s));
+    /// #     kevy_testnet::assert_listening(port, "kevy node");
+    /// #     Node(port, stop, dir)
+    /// # }
+    /// # fn main() -> std::io::Result<()> {
+    /// let (primary, replica) = (node(), node());
+    /// let mut c = ReadWriteClient::connect(("127.0.0.1", primary.0), &[("127.0.0.1", replica.0)])?;
+    /// let argv = |parts: &[&str]| parts.iter().map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// // RPUSH is a write verb: the primary gets it
+    /// assert_eq!(c.request(&argv(&["RPUSH", "q", "a", "b"]))?, Reply::Int(2));
+    /// // LLEN is a read: served by the replica, which (unreplicated here) has no list
+    /// assert_eq!(c.request(&argv(&["LLEN", "q"]))?, Reply::Int(0));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
         let Some(verb) = args.first() else {
             return self.primary.request(args);
         };
-        if is_write_verb(verb) { self.request_write(args) } else { self.request_read(args, false) }
+        if is_write_verb(verb) {
+            self.request_write(args)
+        } else {
+            self.request_read(args, ReadConsistency::Eventual)
+        }
     }
 }
 
-/// `true` when `verb` is a keyspace-mutating command and so must run
-/// against the primary. Otherwise the command is read-side and a
-/// replica can serve it.
+/// `true` when `verb` must run against the primary: a command the
+/// server counts as a keyspace write, or one that writes no key but
+/// only the primary can answer for. Otherwise a replica can serve it.
 ///
-/// The table mirrors `kevy::cmd::is_write_verb` (server-side) — kept
-/// in sync by review. Verbs not listed here (including PING / ECHO /
-/// CLUSTER / CLIENT / HELLO) are read-side or keyspace-neutral.
+/// The keyspace writes come from the server's command table
+/// (`kevy_resp::ops_table`), the same write column the server's own
+/// classification is held to.
+///
+/// ```
+/// use kevy_cluster_rw::is_write_verb;
+///
+/// assert!(is_write_verb(b"SET"));
+/// assert!(is_write_verb(b"hset")); // case-insensitive
+/// assert!(is_write_verb(b"BLPOP")); // a pop writes
+/// assert!(!is_write_verb(b"GET"));
+/// assert!(!is_write_verb(b"PING")); // keyspace-neutral goes read-side
+/// ```
 pub fn is_write_verb(verb: &[u8]) -> bool {
     let mut buf = [0u8; 32];
     let upper = ascii_upper(verb, &mut buf);
+    is_keyspace_write(upper) || runs_on_the_primary(upper)
+}
+
+fn is_keyspace_write(upper: &[u8]) -> bool {
+    use kevy_resp::ops_table::{spec, surface};
+    core::str::from_utf8(upper)
+        .ok()
+        .and_then(spec)
+        .is_some_and(|o| o.write && o.surfaces & surface::SERVER != 0)
+}
+
+/// Commands with no keyspace row that still belong on the primary: a
+/// script may write any key, a transaction's `EXEC` runs its writes,
+/// admin changes the node, and a publish counts the primary's
+/// subscribers.
+fn runs_on_the_primary(upper: &[u8]) -> bool {
     matches!(
         upper,
-        // strings + counters
-        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"MSET" | b"MSETNX"
-        | b"APPEND" | b"INCR" | b"INCRBY" | b"INCRBYFLOAT"
-        | b"DECR" | b"DECRBY" | b"GETSET" | b"GETDEL"
-        | b"SETRANGE"
-        // generic keyspace
-        | b"DEL" | b"UNLINK" | b"EXPIRE" | b"EXPIREAT" | b"PEXPIRE" | b"PEXPIREAT"
-        | b"PERSIST" | b"RENAME" | b"RENAMENX" | b"TYPE" // TYPE is read but cheap to misclassify
-        | b"COPY" | b"OBJECT"
-        // hash
-        | b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT"
-        // list
-        | b"LPUSH" | b"RPUSH" | b"LPUSHX" | b"RPUSHX" | b"LPOP" | b"RPOP"
-        | b"LREM" | b"LTRIM" | b"LSET" | b"LINSERT" | b"RPOPLPUSH" | b"LMOVE"
-        | b"BLPOP" | b"BRPOP" | b"BLMOVE"
-        // set
-        | b"SADD" | b"SREM" | b"SPOP" | b"SMOVE" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE"
-        // zset
-        | b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMAX"
-        | b"ZREMRANGEBYRANK" | b"ZREMRANGEBYSCORE" | b"ZREMRANGEBYLEX"
-        // stream
-        | b"XADD" | b"XDEL" | b"XTRIM" | b"XGROUP" | b"XACK" | b"XCLAIM" | b"XAUTOCLAIM"
-        // server admin (mutates state)
-        | b"FLUSHDB" | b"FLUSHALL" | b"CONFIG" | b"SAVE" | b"BGSAVE" | b"BGREWRITEAOF"
-        | b"REPLICAOF" | b"SLAVEOF"
-        // pub/sub PUBLISH technically mutates subscriber state — route to primary
-        // so the publisher's "delivered count" reflects the primary's registry
-        | b"PUBLISH" | b"SPUBLISH"
-        // txn
-        | b"MULTI" | b"EXEC" | b"DISCARD" | b"WATCH" | b"UNWATCH"
+        b"EVAL"
+            | b"EVALSHA"
+            | b"MULTI"
+            | b"EXEC"
+            | b"DISCARD"
+            | b"WATCH"
+            | b"UNWATCH"
+            | b"CONFIG"
+            | b"SAVE"
+            | b"BGSAVE"
+            | b"BGREWRITEAOF"
+            | b"REPLICAOF"
+            | b"SLAVEOF"
+            | b"PUBLISH"
     )
 }
 
@@ -307,100 +475,5 @@ fn split_host_port(addr: &str) -> Option<(&str, u16)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn writes_classified_correctly() {
-        for verb in
-            [&b"SET"[..], b"DEL", b"LPUSH", b"HSET", b"ZADD", b"XADD", b"FLUSHDB", b"REPLICAOF"]
-        {
-            assert!(is_write_verb(verb), "{:?} should be write", std::str::from_utf8(verb));
-        }
-    }
-
-    #[test]
-    fn reads_classified_correctly() {
-        for verb in
-            [&b"GET"[..], b"HGET", b"LRANGE", b"SMEMBERS", b"ZSCORE", b"XRANGE", b"PING", b"INFO"]
-        {
-            assert!(!is_write_verb(verb), "{:?} should be read", std::str::from_utf8(verb));
-        }
-    }
-
-    #[test]
-    fn classification_is_case_insensitive() {
-        assert!(is_write_verb(b"set"));
-        assert!(is_write_verb(b"Set"));
-        assert!(is_write_verb(b"SET"));
-        assert!(!is_write_verb(b"get"));
-        assert!(!is_write_verb(b"Get"));
-    }
-
-    #[test]
-    fn long_verb_doesnt_panic_on_classification() {
-        // Verbs longer than 32 bytes (silly but legal RESP) are
-        // truncated by the upper-buf — they fall through to the
-        // catch-all read classification.
-        assert!(!is_write_verb(&[b'X'; 64]));
-    }
-
-    // ---- scope MISDIRECTED parser ----
-
-    #[test]
-    fn parse_misdirected_basic() {
-        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004".to_vec());
-        assert_eq!(parse_misdirected(&r).as_deref(), Some("10.0.0.1:6004"));
-    }
-
-    #[test]
-    fn parse_misdirected_strips_trailing_crlf() {
-        // Some encoders leave `\r\n` in the Error payload; parser
-        // tolerates both shapes.
-        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004\r\n".to_vec());
-        assert_eq!(parse_misdirected(&r).as_deref(), Some("10.0.0.1:6004"));
-    }
-
-    #[test]
-    fn parse_misdirected_rejects_unrelated_error() {
-        let r = Reply::Error(b"ERR something else".to_vec());
-        assert!(parse_misdirected(&r).is_none());
-        // Non-Error replies are also rejected.
-        let r = Reply::Simple(b"OK".to_vec());
-        assert!(parse_misdirected(&r).is_none());
-    }
-
-    #[test]
-    fn split_host_port_dotted_v4_and_dns() {
-        assert_eq!(split_host_port("10.0.0.1:6004"), Some(("10.0.0.1", 6004)));
-        assert_eq!(split_host_port("db.local:6105"), Some(("db.local", 6105)));
-    }
-
-    #[test]
-    fn parse_quiesced_basic() {
-        let r = Reply::Error(b"QUIESCED migrating to 10.0.0.1:6004".to_vec());
-        assert_eq!(parse_quiesced(&r).as_deref(), Some("10.0.0.1:6004"));
-    }
-
-    #[test]
-    fn parse_quiesced_strips_trailing_crlf() {
-        let r = Reply::Error(b"QUIESCED migrating to 10.0.0.1:6004\r\n".to_vec());
-        assert_eq!(parse_quiesced(&r).as_deref(), Some("10.0.0.1:6004"));
-    }
-
-    #[test]
-    fn parse_quiesced_rejects_unrelated_error() {
-        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004".to_vec());
-        assert!(parse_quiesced(&r).is_none());
-        let r = Reply::Simple(b"OK".to_vec());
-        assert!(parse_quiesced(&r).is_none());
-    }
-
-    #[test]
-    fn split_host_port_rejects_bad_inputs() {
-        assert!(split_host_port("nohost:").is_none());
-        assert!(split_host_port(":6004").is_none());
-        assert!(split_host_port("no-colon").is_none());
-        assert!(split_host_port("host:99999").is_none()); // u16 overflow
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

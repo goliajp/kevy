@@ -18,33 +18,35 @@ pub(super) fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, us
 fn serialize_prefix_rows(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
     let mut bulk = Vec::new();
     let mut count = 0usize;
-    let keys = store.collect_keys(None, None);
-    for key in keys {
-        if !key.starts_with(prefix) {
-            continue;
-        }
-        let ttl_ms = store.pttl(&key);
-        let abs_expire = if ttl_ms > 0 {
-            Some(kevy_store::now_unix_ms().saturating_add(ttl_ms as u64))
-        } else {
-            None
-        };
-        match store.type_of(&key) {
-            "string" => emit_string(store, &key, &mut bulk, &mut count),
-            "hash" => emit_hash(store, &key, &mut bulk, &mut count),
-            "list" => emit_list(store, &key, &mut bulk, &mut count),
-            "set" => emit_set(store, &key, &mut bulk, &mut count),
-            "zset" => emit_zset(store, &key, &mut bulk, &mut count),
-            "stream" => super::scope_move_stream::emit_stream(store, &key, &mut bulk, &mut count),
-            _ => continue, // none — key raced away between collect and here
-        }
-        if let Some(ms) = abs_expire {
-            let ms_str = ms.to_string();
-            append_resp_argv(&mut bulk, &[b"PEXPIREAT", &key, ms_str.as_bytes()]);
-            count += 1;
+    // the prefix's keys a batch at a time, not a copy of every key in the
+    // shard; serializing reads rows and inserts nothing, so none is missed
+    let mut walk = crate::key_walk::KeyWalk::new(prefix);
+    while !walk.is_done() {
+        for key in walk.next_batch(store, 1024) {
+            emit_key(store, &key, &mut bulk, &mut count);
         }
     }
     (bulk, count)
+}
+
+/// One key as its frames (and a `PEXPIREAT` when it has a deadline).
+fn emit_key(store: &mut Store, key: &[u8], bulk: &mut Vec<u8>, count: &mut usize) {
+    let ttl_ms = store.pttl(key);
+    let abs_expire = (ttl_ms > 0).then(|| kevy_store::now_unix_ms().saturating_add(ttl_ms as u64));
+    match store.type_of(key) {
+        "string" => emit_string(store, key, bulk, count),
+        "hash" => emit_hash(store, key, bulk, count),
+        "list" => emit_list(store, key, bulk, count),
+        "set" => emit_set(store, key, bulk, count),
+        "zset" => emit_zset(store, key, bulk, count),
+        "stream" => super::scope_move_stream::emit_stream(store, key, bulk, count),
+        _ => return,
+    }
+    if let Some(ms) = abs_expire {
+        let ms_str = ms.to_string();
+        append_resp_argv(bulk, &[b"PEXPIREAT", key, ms_str.as_bytes()]);
+        *count += 1;
+    }
 }
 
 fn emit_string(store: &mut Store, key: &[u8], bulk: &mut Vec<u8>, count: &mut usize) {
@@ -132,5 +134,22 @@ pub(super) fn append_resp_argv(out: &mut Vec<u8>, parts: &[&[u8]]) {
         out.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
         out.extend_from_slice(p);
         out.extend_from_slice(b"\r\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_gone_by_the_time_it_is_emitted_adds_no_frame() {
+        let mut s = Store::new();
+        let (mut bulk, mut count) = (Vec::new(), 0);
+        emit_key(&mut s, b"app:gone", &mut bulk, &mut count);
+        assert_eq!((bulk.len(), count), (0, 0));
+        s.set_slice(b"app:k", b"v", None, kevy_store::SetCondition::Always);
+        emit_key(&mut s, b"app:k", &mut bulk, &mut count);
+        assert_eq!(bulk, b"*3\r\n$3\r\nSET\r\n$5\r\napp:k\r\n$1\r\nv\r\n");
+        assert_eq!(count, 1);
     }
 }

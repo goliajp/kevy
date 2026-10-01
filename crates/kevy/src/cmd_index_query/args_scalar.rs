@@ -196,16 +196,16 @@ impl Query {
         now: i64,
     ) -> Result<(IndexValue, IndexValue), Vec<u8>> {
         if let Shape::Where(w) = &self.shape {
-            let Some(cols) = &spec.composite else {
+            let Some(cols) = &spec.composite() else {
                 return Err(crate::cmd_index_query::query_claused::clause_chunk(
                     kevy_index::WHERE_NOT_COMPOSITE,
                 ));
             };
             let (lo, hi) = kevy_index::composite_bounds(cols, w, now)
-                .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e))?;
+                .map_err(|e| crate::cmd_index_query::query_claused::clause_chunk(&e.to_string()))?;
             return Ok((IndexValue::Str(lo), IndexValue::Str(hi)));
         }
-        self.bounds(spec.ty, now).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])
+        self.bounds(spec.ty(), now).ok_or_else(|| vec![crate::cmd_index_query::ST_BADARGS])
     }
 
     pub(in crate::cmd_index_query) fn cursor(&self, _ty: ValType) -> Option<Cursor> {

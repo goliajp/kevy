@@ -7,7 +7,7 @@
 //! shard — and `args[1]` is the OPERATOR, not a key, so the command
 //! would land on whichever shard the word "AND" hashes to.
 //!
-//! The byte arithmetic itself is `kevy_store::bitop_combine`, shared
+//! The byte arithmetic itself is `kevy_store::BitOp::combine`, shared
 //! with the embedded facade. It used to live in `kevy-embedded`, where
 //! this crate could not reach it: a sibling. Copying it here would have
 //! duplicated the padding rules — the 0xff tail of NOT among them — in
@@ -69,8 +69,7 @@ impl<C: Commands> Shard<C> {
         self.push_pending_slot(conn_id, targets.len() as u32, agg, false);
         for (shard, op) in targets {
             if shard == self.id {
-                let part = self.exec_op(op);
-                self.fold(conn_id, seq, part);
+                self.exec_local(conn_id, seq, op);
             } else {
                 let origin = self.id;
                 self.send_to(shard, Inbound::Request { origin, conn: conn_id, seq, op });
@@ -92,7 +91,7 @@ impl<C: Commands> Shard<C> {
             argv.push(b"DEL");
             argv.push(&key);
         } else {
-            self.store.set_slice(&key, value, None, false, false);
+            self.store.set_slice(&key, value, None, kevy_store::SetCondition::Always);
             argv.push(b"SET");
             argv.push(&key);
             argv.push(value);
@@ -129,14 +128,12 @@ impl<C: Commands> Shard<C> {
             }
         }
         let max_len = srcs.iter().map(Vec::len).max().unwrap_or(0);
-        let value =
-            if max_len == 0 { Vec::new() } else { kevy_store::bitop_combine(op, &srcs, max_len) };
+        let value = if max_len == 0 { Vec::new() } else { op.combine(&srcs, max_len) };
         let dst_shard = self.shard_of(&dst);
         self.rearm_bitop_slot(conn_id, seq);
         let put = Op::BitOpResult { key: dst, value };
         if dst_shard == self.id {
-            let part = self.exec_op(put);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, put);
         } else {
             let origin = self.id;
             self.send_to(dst_shard, Inbound::Request { origin, conn: conn_id, seq, op: put });

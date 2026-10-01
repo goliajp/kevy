@@ -10,6 +10,7 @@ use crate::snapshot_fmt::{
     write_bytes, write_ttl,
 };
 use crate::snapshot_payload;
+use kevy_replicate::feed::FeedPosition;
 use kevy_store::Value;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -18,6 +19,21 @@ use std::path::Path;
 /// Write a point-in-time snapshot of `src` (a live [`kevy_store::Store`] or a
 /// frozen [`kevy_store::SnapshotView`]) to `path`, atomically: data is written
 /// to `<path>.tmp`, fsynced, then renamed over `path`.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let dir = kevy_tmpdir::unique_dir("save-doc");
+/// let path = dir.join("dump.rdb");
+/// kevy_persist::save_snapshot(&store, &path)?;
+/// let mut back = Store::new();
+/// kevy_persist::load_snapshot(&mut back, &path)?;
+/// assert_eq!(back.get(b"k").ok().flatten().as_deref(), Some(&b"v"[..]));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> {
     let tmp = write_snapshot_tmp(src, path)?;
     std::fs::rename(&tmp, path)
@@ -34,18 +50,40 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 /// that need durability (disk) wrap in `BufWriter<File>` and call
 /// `sync_all` themselves; callers that need bytes (network ship)
 /// pass a `Vec<u8>`.
-pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// // ship over the wire: bytes, no file
+/// let mut wire = Vec::new();
+/// kevy_persist::write_snapshot_to(&store, &mut wire)?;
+/// let mut replica = Store::new();
+/// kevy_persist::load_snapshot_from(&mut replica, wire.as_slice())?;
+/// assert_eq!(replica.dbsize(), 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: W) -> io::Result<()> {
     write_snapshot_to_with_cursor(src, sink, None)
 }
 
-/// [`write_snapshot_to`] with the recovery-point header: when
-/// `cursor = Some((generation, offset))` the snapshot records the feed
-/// position it was taken at (format v5); `None` writes the legacy v4
-/// stream unchanged.
+/// [`write_snapshot_to`] with the recovery-point header: when `cursor`
+/// is `Some`, the snapshot records the feed position it was taken at
+/// (format v5); `None` writes the legacy v4 stream unchanged.
+///
+/// ```
+/// let mut bytes = Vec::new();
+/// let store = kevy_store::Store::new();
+/// let at = kevy_replicate::feed::FeedPosition::new(3, 42);
+/// kevy_persist::write_snapshot_to_with_cursor(&store, &mut bytes, Some(at))?;
+/// assert!(bytes.starts_with(b"KEVYSNAP"));
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     src: &S,
-    sink: &mut W,
-    cursor: Option<(u64, u64)>,
+    sink: W,
+    cursor: Option<FeedPosition>,
 ) -> io::Result<()> {
     // Field-TTL records force format v6; collect them first so
     // the header version is known before anything is written.
@@ -56,15 +94,16 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     let version = snapshot_version(src, !fttl.is_empty(), cursor.is_some());
     w.write_all(&[version])?;
     if version >= VERSION_FEED_CURSOR {
-        let (generation, offset) = cursor.unwrap_or((0, 0));
-        w.write_all(&generation.to_le_bytes())?;
-        w.write_all(&offset.to_le_bytes())?;
+        let at = cursor.unwrap_or_default();
+        w.write_all(&at.generation.to_le_bytes())?;
+        w.write_all(&at.offset.to_le_bytes())?;
     }
     // The source yields *remaining* ms; v3 persists the absolute
     // Unix-ms deadline (now + remaining) so the TTL survives a restart.
     let now = kevy_store::now_unix_ms();
     // Enumeration is infallible; capture the first write error to surface.
     let mut err: Option<io::Error> = None;
+    let mut group_reads = Vec::new();
     src.for_each_entry(|key, value, ttl| {
         let deadline = ttl.map(|ms| now.saturating_add(ms));
         if err.is_none()
@@ -72,6 +111,7 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
         {
             err = Some(e);
         }
+        crate::snapshot_group_reads::collect(key, value, &mut group_reads);
     });
     if let Some(e) = err {
         return Err(e);
@@ -83,7 +123,23 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
         w.write_all(&d.to_le_bytes())?;
     }
     w.write_all(&[OP_EOF])?;
+    write_trailer(&mut w, src.aux_frame(), &group_reads)?;
     w.flush()?;
+    Ok(())
+}
+
+/// What follows `OP_EOF`: the aux frame, then the group read records.
+fn write_trailer<W: Write>(
+    w: &mut W,
+    aux: Option<crate::Argv>,
+    group_reads: &[crate::snapshot_group_reads::GroupReads],
+) -> io::Result<()> {
+    if let Some(frame) = aux {
+        crate::snapshot_aux::write_aux(w, &frame)?;
+    }
+    for r in group_reads {
+        crate::snapshot_group_reads::write(w, r)?;
+    }
     Ok(())
 }
 
@@ -107,14 +163,47 @@ fn snapshot_version<S: SnapshotSource>(src: &S, has_fttl: bool, has_cursor: bool
 /// leisure, then the store-owning thread renames it in the same critical
 /// section that resets the AOF — keeping the snapshot/AOF commit adjacent
 /// instead of seconds apart.
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("snapshot-tmp-doc");
+/// let path = dir.join("dump.rdb");
+/// let tmp = kevy_persist::write_snapshot_tmp(&kevy_store::Store::new(), &path)?;
+/// assert!(tmp.exists() && !path.exists(), "durable, not yet visible");
+/// std::fs::rename(&tmp, &path)?; // the commit, next to the AOF reset
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn write_snapshot_tmp<S: SnapshotSource>(
     src: &S,
     path: &Path,
 ) -> io::Result<std::path::PathBuf> {
+    write_snapshot_tmp_with_cursor(src, path, None)
+}
+
+/// [`write_snapshot_tmp`] with the recovery-point header of
+/// [`write_snapshot_to_with_cursor`]. The file ends with the snapshot's
+/// id, which the log reset that commits with it names
+/// ([`crate::Aof::commit_snapshot`]).
+///
+/// ```
+/// let dir = kevy_tmpdir::unique_dir("snapshot-tmp-cursor-doc");
+/// let path = dir.join("dump.rdb");
+/// let at = kevy_replicate::feed::FeedPosition::new(3, 42);
+/// let tmp = kevy_persist::write_snapshot_tmp_with_cursor(&kevy_store::Store::new(), &path, Some(at))?;
+/// assert_eq!(kevy_persist::read_snapshot_cursor(&tmp)?, Some(at));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn write_snapshot_tmp_with_cursor<S: SnapshotSource>(
+    src: &S,
+    path: &Path,
+    cursor: Option<FeedPosition>,
+) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
         let mut file = File::create(&tmp)?;
-        write_snapshot_to(src, &mut file)?;
+        write_snapshot_to_with_cursor(src, &mut file, cursor)?;
+        crate::log_base::write_snapshot_id(&mut file)?;
         file.sync_all()?; // durably on disk before the rename
     }
     Ok(tmp)
@@ -213,7 +302,9 @@ pub(crate) fn write_stream_groups<W: Write>(
             w.write_all(&seq.to_le_bytes())?;
             write_bytes(w, consumer)?;
             w.write_all(&delivery_time_ms.to_le_bytes())?;
-            w.write_all(&delivery_count.to_le_bytes())?;
+            // a count past 32 bits goes in the group reads record
+            let count = u32::try_from(*delivery_count).unwrap_or(u32::MAX);
+            w.write_all(&count.to_le_bytes())?;
         }
     }
     Ok(())

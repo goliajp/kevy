@@ -7,27 +7,52 @@
 //! # Feature reach
 //!
 //! The wasm module is built with every feature a browser can host —
-//! `core`, `persist`, `index`, `text`, `vector` — so `cmd` reaches the
-//! string/hash/list/set/zset, bitmap, keyspace and misc surfaces *and*
-//! `IDX.*` / `VIEW.*` / `TABLE.*`. What is left out needs something the
-//! browser cannot provide: `replicate` a network peer, `listener` a TCP
-//! socket, `tier` a disk directory.
+//! `core`, `persist`, `index`, `text`, `vector`, `streams-geo` — so `cmd`
+//! reaches the string/hash/list/set/zset, bitmap, keyspace and misc
+//! surfaces, `IDX.*` / `VIEW.*` / `TABLE.*`, and the stream (`X*`) and
+//! geo (`GEO*`) commands. What is left out needs something the browser
+//! cannot provide: `replicate` a network peer, `listener` a TCP socket,
+//! `tier` a disk directory. Verbs outside the embedded surface
+//! (transactions, scripting) answer `unknown command`, and for those it
+//! is the correct answer rather than a build mistake.
 //!
-//! It was built `["core", "persist"]` until 2026-08, which meant the
-//! project's own landing page demonstrated secondary indexes against an
-//! engine compiled without them, and answered its own example with
-//! `unknown command`. Verbs outside the embedded surface (streams,
-//! transactions, geo, scripting — the ESTORE_OPS manifest is the
-//! boundary) still answer that way, and for those it is the correct
-//! answer rather than a build mistake.
+//! # Blocking
 //!
-//! # Persistence note
+//! Nothing here waits. The module runs on the page's (or a worker's) one
+//! thread, and a call that parked it would freeze the tab without ever
+//! seeing the write that could wake it. `XREAD … BLOCK` and
+//! `XREADGROUP … BLOCK` answer an error that says so; the blocking pops
+//! (`BLPOP`, `BRPOP`, …) are not in the embedded surface and answer
+//! `unknown command`. Poll without `BLOCK` from a timer, or publish on a
+//! channel next to the write and read when the message arrives.
 //!
-//! `cmd` runs through [`kevy_embedded::Store::dispatch_argv`] directly, so
-//! writes issued this way are **not** mirrored into the host-mediated AOF
-//! pump (the typed ops' `log_frame` path). A store that mixes `cmd` writes
-//! with the durability pump will not see those writes in its replay log.
-//! The typed KV surface remains the durable write path.
+//! # Persistence
+//!
+//! With frame capture on ([`crate::abi_core::OPEN_CAPTURE_AOF`]), a write
+//! through `cmd` queues the frames a native AOF would hold for it, the
+//! same pump the typed ops feed: an `XADD *` as the id it chose, a group
+//! read as the deliveries it made, a relative expiry as its deadline. A
+//! stream and its consumer groups survive a reload like any other key.
+//!
+//! ```
+//! use kevy_wasm::abi_core::*;
+//! use kevy_wasm::abi_cmd::*;
+//! # fn out(h: u32) -> Vec<u8> {
+//! #     // SAFETY: the result buffer stays valid until the next call on `h`.
+//! #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+//! # }
+//! # fn pack(args: &[&[u8]]) -> Vec<u8> {
+//! #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+//! # }
+//! let h = kevy_open(0);
+//! for argv in [&[&b"SADD"[..], b"s", b"a", b"b"][..], &[b"SCARD", b"s"]] {
+//!     let packed = pack(argv);
+//!     // SAFETY: `packed` is readable for the call.
+//!     unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
+//! }
+//! assert_eq!(out(h), b":2\r\n"); // a verb the typed surface does not have
+//! kevy_close(h);
+//! ```
 
 use crate::{BAD_HANDLE, ERR, Instance, arg, with};
 
@@ -40,15 +65,37 @@ use crate::{BAD_HANDLE, ERR, Instance, arg, with};
 /// lands in the instance result buffer (RESP2; the wasm build negotiates
 /// no RESP3); the loader parses it into a `Reply`.
 ///
-/// Returns the reply byte length (`>= 0`), [`ERR`] (`-1`) on a
-/// malformed/empty packed argv (message in the result buffer), or
-/// [`BAD_HANDLE`] (`-2`) for an unknown handle. A verb-level failure
+/// Returns the reply byte length (`>= 0`), `-1` on a malformed/empty
+/// packed argv (message in the result buffer), or `-2` for an unknown
+/// handle. A verb-level failure
 /// (`-ERR …`, `WRONGTYPE …`) is a *successful* call whose reply bytes are
 /// a RESP error frame — not a `-1` status.
 ///
+/// ```
+/// use kevy_wasm::abi_core::*;
+/// use kevy_wasm::abi_cmd::*;
+/// # fn out(h: u32) -> Vec<u8> {
+/// #     // SAFETY: the result buffer stays valid until the next call on `h`.
+/// #     unsafe { std::slice::from_raw_parts(kevy_out_ptr(h), kevy_out_len(h) as usize) }.to_vec()
+/// # }
+/// # fn pack(args: &[&[u8]]) -> Vec<u8> {
+/// #     args.iter().flat_map(|a| (a.len() as u32).to_le_bytes().into_iter().chain(a.iter().copied())).collect()
+/// # }
+/// let h = kevy_open(0);
+/// let packed = pack(&[b"HSET", b"user", b"name", b"ada"]);
+/// // SAFETY: `packed` is readable for the call.
+/// let n = unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
+/// assert_eq!(n, 4);
+/// assert_eq!(out(h), b":1\r\n");
+/// // SAFETY: as above.
+/// assert_eq!(unsafe { kevy_cmd(h, packed.as_ptr(), 3) }, -1); // truncated argv
+/// kevy_close(h);
+/// ```
+///
 /// # Safety
 ///
-/// Pointer/length pairs follow the [`crate::arg`] contract.
+/// Pointer/length pairs follow the crate's
+/// [bytes-in convention](crate#abi-conventions).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kevy_cmd(h: u32, p: *const u8, l: u32) -> i32 {
     // SAFETY: loader-staged argument buffer, live for this call.
@@ -58,13 +105,24 @@ pub unsafe extern "C" fn kevy_cmd(h: u32, p: *const u8, l: u32) -> i32 {
             return inst.fail("cmd: malformed or empty packed argv");
         };
         inst.out.clear();
-        // Disjoint field borrows: `store` reads, `out` is written.
-        let Instance { store, out, .. } = inst;
-        store.dispatch_argv(&argv, out);
-        if out.len() > i32::MAX as usize {
+        if inst.capture_aof {
+            let mut frames: Vec<Vec<Vec<u8>>> = Vec::new();
+            inst.store.dispatch_argv_recorded(&argv, &mut inst.out, |f| {
+                frames.push(f.iter().map(|p| p.to_vec()).collect());
+            });
+            for f in &frames {
+                let parts: Vec<&[u8]> = f.iter().map(Vec::as_slice).collect();
+                inst.log_frame(&parts);
+            }
+        } else {
+            // Disjoint field borrows: `store` reads, `out` is written.
+            let Instance { store, out, .. } = inst;
+            store.dispatch_argv(&argv, out);
+        }
+        if inst.out.len() > i32::MAX as usize {
             return ERR;
         }
-        out.len() as i32
+        inst.out.len() as i32
     })
 }
 

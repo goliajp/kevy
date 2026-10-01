@@ -25,8 +25,9 @@
 //! returns. Single-threaded per shard so a `Cell<Vec<...>>` would
 //! suffice, but `RefCell<Vec<...>>` gives a cleaner `take` shape.
 //!
-//! Zero overhead when no Lua write happens this dispatch (the buffer
-//! stays empty → drain is one capacity-check branch).
+//! Zero overhead when no Lua write happens this dispatch: a push also
+//! sets the propagation module's armed flag, and the post-write step
+//! only drains when that flag is set.
 
 use std::cell::RefCell;
 
@@ -36,12 +37,24 @@ thread_local! {
 
 /// Lua's `redis.call` dispatch closure calls this after every
 /// wake-triggering write (LPUSH / RPUSH / XADD / ZADD / ZINCRBY).
-/// The runtime drains via [`drain_lua_wake_buffer`] after the outer
+/// The runtime drains the buffer after the outer
 /// EVAL dispatch returns and fires `wake_key` for each.
 ///
-/// Cheap: one thread-local lookup + one `Vec::push` per call.
+/// Cheap: one thread-local lookup + one `Vec::push` per call, plus the
+/// flag that tells the post-write step to drain.
+///
+/// ```
+/// // inside a `redis.call` dispatch closure, after a write that can wake a
+/// // parked BLPOP / XREAD BLOCK / BZPOPMIN on this key
+/// let mut store = kevy_rt::Store::new();
+/// let n = store.lpush(b"jobs", &[&b"j1"[..]])?;
+/// kevy_rt::push_lua_wake_key(b"jobs");
+/// assert_eq!(n, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn push_lua_wake_key(key: &[u8]) {
     LUA_WAKE_BUFFER.with(|b| b.borrow_mut().push(key.to_vec()));
+    crate::propagation::arm();
 }
 
 /// Drain the per-shard Lua wake buffer. The runtime calls this once

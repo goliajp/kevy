@@ -15,7 +15,7 @@ fn big(fill: u8) -> Vec<u8> {
 }
 
 fn set(s: &mut Store, k: &[u8], v: &[u8]) {
-    s.set(k, v.to_vec(), None, false, false);
+    s.set(k, v.to_vec(), None, crate::SetCondition::Always);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //
 // Bun loads the engine over bun:ffi; Node loads the hand-written N-API
 // addon (kevy-napi). Either way this file is the API: the typed methods below
-// mirror @goliapkg/kevy (the wasm package), and cmd() reaches all 184 verbs.
+// mirror @goliapkg/kevy (the wasm package), and cmd() reaches every verb the engine answers.
 //
 //   import { open } from "@goliapkg/kevy-node";
 //   const db = open({ dir: "data/" });

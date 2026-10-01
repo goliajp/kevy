@@ -7,7 +7,8 @@ frozen) and **2.x → 3.x** (a capability major: everything carried
 over). Each chapter is explicit about what upgrades automatically,
 what needs a code change, and how to go back.
 
-**Coming from 6.3 or 6.2?** Those hops are
+**Coming from 6.4, 6.3 or 6.2?** Those hops are
+[upgrading-6.4-to-7.0.md](upgrading-6.4-to-7.0.md),
 [upgrading-6.3-to-6.4.md](upgrading-6.3-to-6.4.md) and
 [upgrading-6.2-to-6.3.md](upgrading-6.2-to-6.3.md), not this page.
 
@@ -429,7 +430,7 @@ unification, not an API rewrite**: the 1.16 surface is contained in
 ## What is compatible automatically
 
 **Wire protocol.** RESP is unchanged. 3.x remains reply-checked
-byte-for-byte against valkey 9.1 in CI (94 commands). Existing Redis
+byte-for-byte against valkey 9.1 in CI (99 commands). Existing Redis
 clients, scripts, and `redis-cli` sessions work as before.
 
 **Snapshots.** The 3.x loader reads every 2.x snapshot format
@@ -497,7 +498,7 @@ ladder — [docs/availability.md](availability.md)), and the migration
 toolchain (`kevy-cli import/export/--verify/diff/
 inspect/digest`). Start at [docs/designing-on-kevy.md](designing-on-kevy.md)
 and [docs/cookbook.md](cookbook.md); performance receipts live in
-[bench/PERF-LEDGER.md](../bench/PERF-LEDGER.md).
+[PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md).
 
 None of these activate implicitly: a 3.x server with a 2.x workload
 has an empty catalog, and the index hook on an empty catalog is on

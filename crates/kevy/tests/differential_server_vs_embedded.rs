@@ -1,7 +1,7 @@
 //! The differential harness: does the embedded facade answer what the server
 //! answers?
 //!
-//! The clone atlas (`bench/CLONE-ATLAS.md`, 2026-08-27) found one pair
+//! The clone atlas (`tools/clone_atlas.py`, 2026-08-27) found one pair
 //! dominating every other duplication signal in the workspace:
 //! `kevy-embedded` against `kevy`, 35 of the top 60 cross-crate pairs and 751
 //! shared fingerprints, an order of magnitude past anything else. The matches
@@ -100,7 +100,7 @@ const CORPUS: &[&str] = &[
     "SISMEMBER s a",
     "SCARD s",
     "SREM s a",
-    // zset — dispatch/zset.rs against cmd_zadd.rs
+    // zset
     "ZADD z 1 one 2 two 3 three",
     "ZSCORE z two",
     "ZCARD z",
@@ -128,6 +128,147 @@ const CORPUS: &[&str] = &[
     "TTL nosuchkey",
     "RENAME n n2",
     "GET n2",
+    // every verb the shared command layer runs for both surfaces, so the
+    // register below can hold that none is left undriven; replies that
+    // depend on the clock or on a random draw are kept out
+    "DECRBY n2 3",
+    "SETNX sn a",
+    "SETNX sn b",
+    "GETSET sn c",
+    "GETDEL sn",
+    "GETDEL sn",
+    "SET f 1",
+    "INCRBYFLOAT f 1.5",
+    "SET r hello",
+    "GETRANGE r 1 3",
+    "SETRANGE r 5 world",
+    "SETRANGE r abc x",
+    "GETEX r",
+    "GETEX r EX 100",
+    "GETEX r XX 1",
+    "SET t v PX 100000 NX",
+    "SET t w NX",
+    "SET t w XX EX 0",
+    "SETBIT b 7 1",
+    "GETBIT b 7",
+    "BITCOUNT b",
+    "BITPOS b 1",
+    "BITPOS b 3",
+    "HEXISTS h f2",
+    "HINCRBYFLOAT h fl 2.5",
+    "HKEYS h",
+    "HVALS h",
+    "HSET one only 1",
+    "HRANDFIELD one",
+    "HRANDFIELD one 0",
+    "HSCAN h 0 MATCH f*",
+    "HEXPIRE h 100 FIELDS 1 f2",
+    "HPERSIST h FIELDS 1 f2",
+    "HTTL h FIELDS 1 f2",
+    "HPTTL h FIELDS 2 f2 nope",
+    "HPEXPIRE h 100000 NX FIELDS 1 f2",
+    "HPEXPIREAT h 1 FIELDS 1 f2",
+    "HPEXPIRE h 100 FIELDS 3 f2",
+    "LPUSH l x y",
+    "RPOP l",
+    "LSET l 0 z",
+    "LINSERT l BEFORE z w",
+    "LINSERT l AFTER missing w",
+    "LREM l 0 w",
+    "LTRIM l 0 0",
+    "LRANGE l 0 -1",
+    "SADD solo m",
+    "SRANDMEMBER solo",
+    "SPOP solo",
+    "SPOP solo",
+    "ZREVRANGE z 0 -1 WITHSCORES",
+    "ZREVRANGEBYSCORE z +inf -inf LIMIT 0 1",
+    "ZADD q 1 a 2 b 3 c 4 d 5 e",
+    "ZPOPMIN q",
+    "ZPOPMIN.BELOW q 3",
+    "ZREMRANGEBYRANK q 0 0",
+    "ZREMRANGEBYSCORE q (4 +inf",
+    "ZSCAN q 0",
+    "ZADD q GT CH 1 d",
+    "ZADD q INCR 2 d",
+    "ZRANGEBYSCORE q -inf +inf WITHSCORES LIMIT 0 -1",
+    "EXISTS n2 nope n2",
+    "TOUCH n2",
+    "PTTL n2",
+    "PEXPIRE n2 100000",
+    "PERSIST n2",
+    "EXPIREAT n2 4102444800",
+    "PERSIST n2",
+    "PEXPIREAT n2 1",
+    "EXISTS n2",
+    "MSET m1 a m2 b",
+    "RENAMENX m1 m2",
+    "RENAMENX m1 m3",
+    "UNLINK m2 m3",
+    // streams: explicit IDs only, and no reply that carries an idle time
+    "XADD st 1-1 f v",
+    "XADD st 2-1 f w",
+    "XADD st MAXLEN 5 3-1 g x",
+    "XADD st 1-0 f v",
+    "XADD nost NOMKSTREAM 1-1 a b",
+    "XLEN st",
+    "XRANGE st - +",
+    "XRANGE st - + COUNT 1",
+    "XREVRANGE st + - COUNT 2",
+    "XREAD COUNT 1 STREAMS st 0",
+    "XREAD STREAMS st 3-1",
+    "XGROUP CREATE st g 0",
+    "XGROUP CREATE nost g 0",
+    "XREADGROUP GROUP g c1 COUNT 2 STREAMS st >",
+    "XPENDING st g",
+    "XACK st g 1-1",
+    "XCLAIM st g c2 0 2-1 JUSTID",
+    "XAUTOCLAIM st g c3 0 0 JUSTID",
+    "XINFO GROUPS st",
+    "XDEL st 3-1",
+    "XTRIM st MAXLEN 1",
+    "XSETID st 9-9",
+    "XADD st 5-1 f v",
+    "TYPE st",
+    // geo
+    "GEOADD g 13.361389 38.115556 Palermo 15.087269 37.502669 Catania",
+    "GEOADD g XX CH 13.361389 38.2 Palermo",
+    "GEOADD g 200 100 bad",
+    "GEOPOS g Palermo nope",
+    "GEODIST g Palermo Catania km",
+    "GEOHASH g Palermo Catania",
+    "GEOSEARCH g FROMLONLAT 15 37 BYRADIUS 200 km ASC WITHDIST",
+    "GEOSEARCHSTORE gs g FROMMEMBER Palermo BYRADIUS 200 km STOREDIST",
+    "GEORADIUS g 15 37 200 km ASC WITHCOORD",
+    "GEORADIUSBYMEMBER g Palermo 200 km STORE gr",
+    "ZRANGE gr 0 -1 WITHSCORES",
+    // XINFO on groups with no consumer, so no reply carries a clock
+    "XADD xi 1-1 a 1",
+    "XADD xi 2-1 b 2",
+    "XADD xi 3-1 c 3",
+    "XGROUP CREATE xi g0 0 ENTRIESREAD 1",
+    "XGROUP CREATE xi g1 $",
+    "XGROUP CREATE xi g2 0 ENTRIESREAD -2",
+    "XINFO STREAM xi",
+    "XINFO STREAM xi FULL COUNT 2",
+    "XINFO GROUPS xi",
+    "XGROUP SETID xi g0 2-1 ENTRIESREAD 2",
+    "XGROUP SETID xi nog 0",
+    "XDEL xi 3-1",
+    "XINFO GROUPS xi",
+    "XTRIM xi MAXLEN 1",
+    "XINFO STREAM xi",
+    "XINFO CONSUMERS xi g0",
+    "XINFO CONSUMERS xi nog",
+    "XINFO STREAM nokey",
+    "XINFO STREAM xi FULL COUNT x",
+    "XINFO HELP",
+    "XINFO bogus",
+    // the internal record verb: both refuse it from a caller, in one wording
+    "XINTERNAL.CONSUMERSEEN st g c 1",
+    "TYPE q",
+    "FLUSHALL",
+    "DBSIZE",
     // index — dispatch/idx_create.rs against cmd_index.rs
     "IDX.CREATE t SCHEMA name TEXT age NUMERIC",
     "IDX.LIST",
@@ -171,6 +312,49 @@ const EXPECTED: &[(&str, &str)] = &[
         "Same harness boundary: cmd_resolve.rs:191 routes VIEW.LIST to          Route::Extension. The server implements it in          cmd_view_reduce.rs:182.",
     ),
 ];
+
+/// Verbs the shared command layer runs for the server only. The embedded
+/// engine does not serve them, and says so.
+const SERVER_ONLY: &[(&str, &str)] = &[
+    ("BLPOP", "blocking; an in-process caller has no connection to park"),
+    ("BRPOP", "blocking, as BLPOP"),
+    ("BRPOPLPUSH", "blocking, as BLPOP"),
+    ("BZPOPMIN", "blocking, as BLPOP"),
+    ("FLUSHDB", "the embedded surface names the one keyspace FLUSHALL"),
+    ("HMSET", "the deprecated alias of HSET; the embedded surface never had it"),
+    ("LMOVE", "two keys that may live on two embedded shards"),
+    ("RPOPLPUSH", "two keys, as LMOVE"),
+    ("LPOS", "not on the embedded surface"),
+    ("PSETEX", "not on the embedded surface; SET … PX is"),
+    ("SETEX", "not on the embedded surface; SET … EX is"),
+    ("SSCAN", "not on the embedded surface; the registry ledgers it as a gap"),
+];
+
+/// The register over the shared command layer, held both ways: every
+/// verb `kevy_verbs::exec` runs is either driven by the corpus above or
+/// named as server-only, and a server-only name is one the embedded
+/// engine really refuses. A verb added to the layer without a corpus
+/// line or a reason fails here.
+#[test]
+fn every_shared_layer_verb_is_driven_or_server_only() {
+    let driven: BTreeSet<&str> = CORPUS.iter().filter_map(|c| c.split(' ').next()).collect();
+    let server_only: BTreeSet<&str> = SERVER_ONLY.iter().map(|(n, _)| *n).collect();
+    assert!(kevy_verbs::VERBS.len() > 90, "the shared layer's table is nearly empty");
+    let embedded = kevy_embedded::Store::open(kevy_embedded::Config::default()).expect("open");
+    let mut silent = Vec::new();
+    for v in kevy_verbs::VERBS {
+        let refused = embedded_reply(&embedded, &argv(v.name)).starts_with(b"-ERR unknown command");
+        if server_only.contains(v.name) {
+            assert!(refused, "{}: named server-only but the embedded engine serves it", v.name);
+        } else if !driven.contains(v.name) {
+            silent.push(v.name);
+        }
+    }
+    let stale: Vec<&str> =
+        server_only.iter().copied().filter(|n| kevy_verbs::verb(n.as_bytes()).is_none()).collect();
+    assert!(silent.is_empty(), "shared-layer verbs the corpus never drives: {silent:?}");
+    assert!(stale.is_empty(), "server-only names the shared layer does not run: {stale:?}");
+}
 
 fn render(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).replace("\r\n", "\\r\\n").chars().take(160).collect()

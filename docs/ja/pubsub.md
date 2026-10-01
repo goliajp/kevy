@@ -104,20 +104,20 @@ run("kevy://prod-cache:6379")?;
 組み込み側のコードがすでに`Store`を持っているなら、URLの間接層を飛ばして直接バスと話せます：
 
 ```rust
-use kevy_embedded::{Config, PubsubFrame, Store};
+use kevy_embedded::{Config, PubsubEvent, Store};
 
 let store = Store::open(Config::default().with_ttl_reaper_manual())?;
 
 // 購読者は受信キューを所有する。
 let sub = store.subscribe(&[b"jobs"]);
-let _ack = sub.recv()?; // PubsubFrame::Subscribe
+let _ack = sub.recv()?; // PubsubEvent::Subscribe
 
 // `store` のどのクローンも同じバスに届く。
 let writer = store.clone();
 assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
 
 match sub.recv()? {
-    PubsubFrame::Message { channel, payload } => {
+    PubsubEvent::Message { channel, payload } => {
         assert_eq!(channel, b"jobs");
         assert_eq!(payload, b"compute-pi");
     }
@@ -206,7 +206,7 @@ redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
 
 匿名の`mem://`は発行されたメッセージを受け取れません。同じバッキング`Store`にほかの誰も到達できないため、`Subscriber::connect_channels`は`KevyError::Unsupported`で拒否します。publishするつもりがあるなら、常に`mem://<some-name>`を使ってください。
 
-`rediss://`、`kevys://`、`redis://user:pass@…`も同じ理由で拒否されます。kevyはTLSも`AUTH`もなしで出荷されるからです。どちらかが必要なら、ネットワーク境界でstunnelとIP許可リストを前段に置いてください。
+`rediss://`と`redis://user:pass@…`も拒否されます。kevyはTLSも`AUTH`もなしで出荷されるからです。どちらかが必要なら、ネットワーク境界でstunnelとIP許可リストを前段に置いてください。`kevys://`はサーバーの暗号化クライアントポート経由で購読します（[encrypted-links.md](encrypted-links.md)）。
 
 `mem://<name>`と`file:///`のレジストリは**プロセス単位**です。無関係な2つのOSプロセスが同じ名前を開いても、見えるのは独立した2つのバスです。プロセスをまたいだ配信が欲しいなら、kevyサーバーを立てて両側から`kevy://host:port`を開いてください。
 

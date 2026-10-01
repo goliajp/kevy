@@ -73,6 +73,8 @@ fn apply_ingest_frames(
     store: &mut Store,
     bulk: &[u8],
 ) -> Result<usize, IngestError> {
+    // the frames are a record another node wrote, internal verbs included
+    let _record = kevy_rt::RecordApplyGuard::enter();
     let mut buf = bulk.to_vec();
     let mut applied = 0usize;
     let mut scratch = Vec::with_capacity(256);
@@ -119,6 +121,6 @@ fn note_ingested_key(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
         crate::index_runtime::on_write(ctx, store, key);
     }
     if ctx.state.catalogs.view_nonempty() {
-        crate::view_runtime::on_write(ctx, store, key);
+        crate::view_runtime::on_write(ctx);
     }
 }

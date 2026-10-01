@@ -19,23 +19,87 @@ use crate::argv_borrowed::ArgvBorrowed;
 /// Implemented by both [`Argv`] (owned) and [`ArgvBorrowed`] (zero-copy). The
 /// command runtime takes argvs as `&impl ArgvView`, so the local fast path
 /// can hand a borrowed argv straight to dispatch with no memcpy.
+///
+/// Open for implementation: a transport or a log reader that already
+/// holds a command's arguments in its own layout implements it to reach
+/// the command runtime without copying them into an [`Argv`]. An
+/// implementation must keep the three views of one argument vector in
+/// agreement: `get(i)` is `Some` exactly for `i < len()`, and `self[i]`
+/// returns the same bytes as `get(i)` (panicking past the end, as slice
+/// indexing does). The provided methods rely on nothing else.
+///
+/// ```
+/// use kevy_resp::ArgvView;
+/// struct Pair<'a>(&'a [u8], &'a [u8]);
+/// impl std::ops::Index<usize> for Pair<'_> {
+///     type Output = [u8];
+///     fn index(&self, i: usize) -> &[u8] {
+///         self.get(i).expect("argument index in range")
+///     }
+/// }
+/// impl ArgvView for Pair<'_> {
+///     fn len(&self) -> usize {
+///         2
+///     }
+///     fn get(&self, i: usize) -> Option<&[u8]> {
+///         [self.0, self.1].get(i).copied()
+///     }
+/// }
+/// let p = Pair(b"GET", b"k");
+/// assert_eq!(p.first(), Some(&b"GET"[..]));
+/// assert_eq!(p.to_argv().len(), 2);
+/// ```
 pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
     /// Number of arguments.
+    ///
+    /// ```
+    /// use kevy_resp::{Argv, ArgvView};
+    /// let argv = Argv::from(vec![b"MGET".to_vec(), b"a".to_vec(), b"b".to_vec()]);
+    /// assert_eq!(ArgvView::len(&argv), 3);
+    /// ```
     fn len(&self) -> usize;
     /// Argument `i` as a byte slice, or `None` if out of range.
+    ///
+    /// ```
+    /// use kevy_resp::{Argv, ArgvView};
+    /// let argv = Argv::from(vec![b"GET".to_vec(), b"k".to_vec()]);
+    /// assert_eq!(ArgvView::get(&argv, 1), Some(b"k".as_slice()));
+    /// assert_eq!(ArgvView::get(&argv, 2), None);
+    /// ```
     fn get(&self, i: usize) -> Option<&[u8]>;
 
     /// Whether there are no arguments.
+    ///
+    /// ```
+    /// use kevy_resp::{Argv, ArgvView};
+    /// assert!(ArgvView::is_empty(&Argv::default()));
+    /// assert!(!ArgvView::is_empty(&Argv::from(vec![b"PING".to_vec()])));
+    /// ```
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// The first argument (the command name), or `None` if empty.
+    ///
+    /// ```
+    /// use kevy_resp::{ArgvView, parse_command_borrowed};
+    /// let (argv, _) = parse_command_borrowed(b"PING\r\n")?.expect("complete frame");
+    /// assert_eq!(argv.first(), Some(b"PING".as_slice()));
+    /// # Ok::<(), kevy_resp::ProtocolError>(())
+    /// ```
     fn first(&self) -> Option<&[u8]> {
         self.get(0)
     }
 
     /// Iterate the arguments as byte slices.
+    ///
+    /// ```
+    /// use kevy_resp::{ArgvView, parse_command_borrowed};
+    /// let (argv, _) = parse_command_borrowed(b"DEL a b\r\n")?.expect("complete frame");
+    /// let keys: Vec<&[u8]> = argv.iter().skip(1).collect();
+    /// assert_eq!(keys, [b"a".as_slice(), b"b"]);
+    /// # Ok::<(), kevy_resp::ProtocolError>(())
+    /// ```
     fn iter(&self) -> ArgvIter<'_, Self>
     where
         Self: Sized,
@@ -47,6 +111,15 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
     /// its buffer capacity across the clear, so refilling a recycled
     /// [`Argv`] (see [`crate::ArgvPool`]) is allocation-free in steady
     /// state. Object-safe (no `Self: Sized` bound).
+    ///
+    /// ```
+    /// use kevy_resp::{Argv, ArgvView, parse_command_borrowed};
+    /// let (argv, _) = parse_command_borrowed(b"GET k\r\n")?.expect("complete frame");
+    /// let mut scratch = Argv::from(vec![b"stale".to_vec()]);
+    /// argv.copy_into(&mut scratch);
+    /// assert_eq!(scratch, vec![b"GET".to_vec(), b"k".to_vec()]);
+    /// # Ok::<(), kevy_resp::ProtocolError>(())
+    /// ```
     fn copy_into(&self, out: &mut Argv) {
         out.clear();
         let n = self.len();
@@ -63,6 +136,19 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
     /// Used at handoff junctures (cross-shard dispatch, MULTI queue, AOF
     /// logging) that need to outlive the original input buffer. Object-safe
     /// (no `Self: Sized` bound) so callers can hold `&dyn ArgvView`.
+    ///
+    /// ```
+    /// use kevy_resp::{Argv, ArgvView, parse_command_borrowed};
+    /// let input = b"SET k v\r\n".to_vec();
+    /// let owned: Argv = {
+    ///     let (argv, _) = parse_command_borrowed(&input)?.expect("complete frame");
+    ///     let view: &dyn ArgvView = &argv;
+    ///     view.to_argv()
+    /// };
+    /// drop(input);
+    /// assert_eq!(owned.len(), 3);
+    /// # Ok::<(), kevy_resp::ProtocolError>(())
+    /// ```
     fn to_argv(&self) -> Argv {
         let mut out = Argv::default();
         self.copy_into(&mut out);
@@ -74,8 +160,18 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
 ///
 /// Returned by [`ArgvView::iter`]. Concrete (rather than `impl Iterator`) so
 /// the method works for both `Argv` and `ArgvBorrowed` callers.
+///
+/// ```
+/// use kevy_resp::{ArgvView, parse_command_borrowed};
+/// let (argv, _) = parse_command_borrowed(b"SADD s x y\r\n")?.expect("complete frame");
+/// let mut it = ArgvView::iter(&argv);
+/// assert_eq!(it.len(), 4);
+/// assert_eq!(it.next(), Some(b"SADD".as_slice()));
+/// assert_eq!(it.len(), 3);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 #[derive(Debug)]
-pub struct ArgvIter<'a, V: ?Sized + ArgvView> {
+pub struct ArgvIter<'a, V: ?Sized> {
     view: &'a V,
     i: usize,
 }

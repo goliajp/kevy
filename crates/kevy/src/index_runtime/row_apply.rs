@@ -10,13 +10,19 @@
 //! backfill (2048 rows/tick) or a live hook re-derive can never thrash
 //! the hot tier.
 
+use kevy_index::AggRow;
 use kevy_index::{IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
 
 use super::{BuildState, ShardIndex};
 
+/// A row's entry before the write: its index value and stored values.
+pub(super) type OldEntry = Option<(IndexValue, Vec<Option<Vec<u8>>>)>;
+
 /// Apply one scalar row: the coerced primary field, and — when the spec
 /// declares `VALUES` — the row's stored values riding the same write.
+/// `old` is the value the row was indexed under before the write (from
+/// the store's record), which is how the stale entry is found.
 ///
 /// The primary field AND every declared VALUES column read in ONE
 /// [`Store::peek_hash_fields`] row peek — a cold row costs one record
@@ -26,7 +32,13 @@ use super::{BuildState, ShardIndex};
 /// replace the old `exists()` disambiguation probe exactly: a missing
 /// key / non-hash is not a row; a present hash whose primary field is
 /// missing or fails coercion is an excluded row.
-pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
+pub(super) fn apply_scalar_row(
+    store: &mut Store,
+    spec: &IndexSpec,
+    seg: &mut Segment,
+    key: &[u8],
+    old: Option<&IndexValue>,
+) {
     // The driving columns (the composite's declared columns, or the
     // single FIELD) and the stored VALUES columns, one row peek. The
     // derivation itself — coercion or the composite byte encoding —
@@ -35,15 +47,19 @@ pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Se
     let names = spec.scalar_read_names();
     let w = spec.primary_width();
     match store.peek_hash_fields(key, &names) {
-        Ok(None) | Err(_) => seg.remove(key),
+        Ok(None) | Err(_) => {
+            if let Some(o) = old {
+                seg.remove(key, o);
+            }
+        }
         Ok(Some(vals)) => {
             let primary = spec.derive_scalar(&vals[..w]);
             match primary {
-                None => seg.apply_with_values(key, None, &[]),
-                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                None => seg.apply_with_values(key, old, None, &[]),
+                Some(v) if spec.values().is_empty() => seg.apply(key, old, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
-                    seg.apply_with_values(key, Some(v), &refs);
+                    seg.apply_with_values(key, old, Some(v), &refs);
                 }
             }
         }
@@ -51,8 +67,14 @@ pub(super) fn apply_scalar_row(store: &mut Store, spec: &IndexSpec, seg: &mut Se
 }
 
 /// Index one row: read the field from the hash at `key`, coerce,
-/// apply. A missing key / non-hash / missing field clears the row.
-pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
+/// apply. A missing key / non-hash / missing field clears the row. `old`
+/// is what a scalar index held for the row before the write.
+pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8], old: OldEntry) {
+    // Global: the entry goes to its partition's owner, not into `seg`.
+    if let Some(g) = &mut si.global {
+        g.on_row(store, &si.spec, key, old);
+        return;
+    }
     // Agg kind: both fields must resolve — the aggregated value
     // coerces per the declared type, the group key is raw bytes.
     if let Some(a) = &mut si.agg {
@@ -82,7 +104,7 @@ pub(super) fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         }
         return;
     }
-    apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    apply_scalar_row(store, &si.spec, &mut si.seg, key, old.as_ref().map(|o| &o.0));
     // Windowed index: this row's change may shadow a cold entry
     // (rewrite, delete, revival) — the bloom decides if it earns a
     // tombstone. AFTER the scalar apply: a revival needs its hot entry
@@ -108,10 +130,10 @@ fn apply_row_text(
     key: &[u8],
 ) {
     let names: Vec<&[u8]> = spec
-        .fields
+        .fields()
         .iter()
         .map(|f| f.name.as_slice())
-        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .chain(spec.values().iter().map(|v| v.name.as_slice()))
         .collect();
     let fetched = store.peek_hash_fields(key, &names).ok().flatten();
     let (fields, values) = spec.read_row(|f| {
@@ -135,18 +157,19 @@ fn apply_row_agg(store: &mut Store, spec: &IndexSpec, a: &mut kevy_index::AggSeg
     // the old `exists()` probe answered: missing key = not a row
     // (retract); a present hash missing/failing a field = excluded,
     // counted; a present non-hash = excluded, counted.
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
+    let group_field = spec.group_by().unwrap_or_default();
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty(), &raw));
             match (group, val) {
-                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-                _ => a.apply(key, None, true),
+                (Some(g), Some(v)) => a.apply(key, AggRow::Member { group: g, value: v }),
+                _ => a.apply(key, AggRow::Excluded),
             }
         }
-        Ok(None) => a.apply(key, None, false),
-        Err(_) => a.apply(key, None, true),
+        Ok(None) => a.apply(key, AggRow::Removed),
+        Err(_) => a.apply(key, AggRow::Excluded),
     }
 }
 
@@ -160,7 +183,7 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
     // Composite (ORDERPATH) indexes: VERIFY recomputes the whole byte
     // derivation from the declared columns — one row peek, drift stays
     // falsifiable for the mechanical encoding too.
-    if spec.composite.is_some() {
+    if spec.composite().is_some() {
         let names = spec.scalar_read_names();
         return match store.peek_hash_fields(key, &names[..spec.primary_width()]) {
             Ok(None) | Err(_) => RowValue::Gone,
@@ -173,7 +196,7 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
     match store.hget(key, spec.field()) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();
-            match IndexValue::coerce(spec.ty, &raw) {
+            match IndexValue::coerce(spec.ty(), &raw) {
                 Some(v) => RowValue::Value(v),
                 None => RowValue::CoerceFailed,
             }
@@ -193,21 +216,21 @@ pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowV
 }
 
 pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
-    let BuildState::Backfilling { keys, pos } = &mut si.build else {
+    let BuildState::Backfilling(walk) = &mut si.build else {
         return;
     };
-    let end = (*pos + batch).min(keys.len());
-    // Split the borrow: take the key slice out while applying.
-    let slice: Vec<Vec<u8>> = keys[*pos..end].to_vec();
-    *pos = end;
-    let done = *pos >= keys.len();
-    for key in &slice {
-        // Hook-applied entries win: only fill keys not yet indexed.
+    let keys = walk.next_batch(store, batch);
+    let done = walk.is_done();
+    for key in &keys {
+        // Hook-applied entries win: a text, vector or aggregate index
+        // fills only keys it does not hold yet. A scalar row is written
+        // as it is now, which is what a hook applied too, so an entry
+        // already there is left as it is.
         let already = match (&si.text, &si.ann, &si.agg) {
             (Some(ts), _, _) => ts.contains(key),
             (_, Some(g), _) => g.contains(key),
             (_, _, Some(a)) => a.contains(key),
-            _ => si.seg.verify_entry(key).is_some(),
+            _ => false,
         };
         if !already {
             apply_row_backfill(store, si, key);
@@ -218,26 +241,31 @@ pub(super) fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: us
     // growing segment leaves the tier no demotable headroom fails the
     // same declarative way (the per-tick `reserved_bytes` feed already
     // counts this segment's current size).
-    if (si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes)
+    if (si.spec.max_bytes() > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes())
         || store.tier_index_floor_blocked(0)
     {
-        si.seg = Segment::new();
+        si.seg = super::new_scalar_seg(&si.spec);
         si.build = BuildState::FailedOverBudget;
         return;
     }
     if done {
+        // the walk filled leaves in hash order, about 69% full: pack them
+        si.seg.repack();
         si.build = BuildState::Ready;
+        if let Some(g) = &mut si.global {
+            g.finish_build(&si.spec);
+        }
     }
 }
 
 fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    if si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
-        apply_row(store, si, key);
+    // a global index's entries go to their partitions' owners
+    if si.global.is_some() || si.text.is_some() || si.ann.is_some() || si.agg.is_some() {
+        apply_row(store, si, key, None);
         return;
     }
-    // A key deleted since the snapshot resolves to `Gone` → `remove`,
-    // which is a no-op on a segment that never held it.
-    apply_scalar_row(store, &si.spec, &mut si.seg, key);
+    // A key deleted since the walk read it holds nothing to add.
+    apply_scalar_row(store, &si.spec, &mut si.seg, key, None);
     // Windowed index: this row's change may shadow a cold entry
     // (rewrite, delete, revival) — the bloom decides if it earns a
     // tombstone. AFTER the scalar apply: a revival needs its hot entry

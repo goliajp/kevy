@@ -42,7 +42,7 @@ impl Store {
             Some(e) => match &e.value {
                 Value::Set(s) => Ok(s.iter().map(kevy_bytes::SmallBytes::to_vec).collect()),
                 Value::SegSet(s) => Ok(s.keys().map(kevy_bytes::SmallBytes::to_vec).collect()),
-                Value::SmallSetInline(s) => Ok(s.iter_slices().map(<[u8]>::to_vec).collect()),
+                Value::SmallSetInline(s) => Ok(s.iter().map(<[u8]>::to_vec).collect()),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -62,7 +62,7 @@ impl Store {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::SmallSetInline(s) => {
-                    let mut all: Vec<Vec<u8>> = s.iter_slices().map(<[u8]>::to_vec).collect();
+                    let mut all: Vec<Vec<u8>> = s.iter().map(<[u8]>::to_vec).collect();
                     let k = crate::set::shuffle_prefix(&mut all, count, &mut draws);
                     all.truncate(k);
                     Ok(all)
@@ -114,7 +114,7 @@ impl Store {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
                 Value::SmallSetInline(s) => {
-                    let all: Vec<Vec<u8>> = s.iter_slices().map(<[u8]>::to_vec).collect();
+                    let all: Vec<Vec<u8>> = s.iter().map(<[u8]>::to_vec).collect();
                     if all.is_empty() {
                         return Ok(Vec::new());
                     }

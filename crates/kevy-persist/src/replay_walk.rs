@@ -14,6 +14,7 @@ use crate::replay_txn::{TxnMarker, txn_marker};
 
 /// Outcome of an AOF replay run — drives the summary log shape (rendered
 /// in `replay_log.rs`).
+#[derive(Clone)]
 pub(crate) enum ReplayStop {
     Clean,
     TruncatedTail,
@@ -54,9 +55,42 @@ pub(crate) struct V2Walk {
     /// marker makes "was this transaction finished" a property of the
     /// log rather than of how much of it happened to be flushed.
     pub(crate) txn: Option<Vec<Argv>>,
+    /// Where the open transaction's begin marker starts.
+    pub(crate) txn_at: u64,
+    /// Zeros from the last record to the end of the file: the unused part
+    /// of a mapped log's preallocation, not data.
+    pub(crate) zero_tail: u64,
     /// Transactions dropped because the log ended before their commit
     /// marker. Surfaced in the report rather than passed over silently.
     pub(crate) txn_discarded: u64,
+}
+
+impl V2Walk {
+    /// A walk that has applied nothing yet, positioned at `pos`.
+    pub(crate) fn at(pos: u64) -> V2Walk {
+        V2Walk {
+            txn: None,
+            txn_at: 0,
+            zero_tail: 0,
+            txn_discarded: 0,
+            stop: ReplayStop::Clean,
+            pos,
+            replayed: 0,
+            preview: [0u8; 16],
+            preview_len: 0,
+        }
+    }
+}
+
+impl V2Walk {
+    /// Where the log's settled part ends: before a transaction the log
+    /// ended inside of, whose records replay dropped. A log reopened for
+    /// appends must continue from here — appended after an open begin
+    /// marker, new records would be read as part of that transaction and
+    /// dropped with it.
+    pub(crate) fn settled_end(&self) -> u64 {
+        if self.txn.is_some() { self.txn_at } else { self.pos }
+    }
 }
 
 /// Capture up to 16 bytes of the offending bytes for the WARN preview.
@@ -77,32 +111,17 @@ fn outran(claimed: u32, available: usize) -> ReplayStop {
 pub(crate) fn walk_v2(
     r: &mut impl Read,
     start_pos: u64,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    apply: &mut Option<Sink<'_>>,
 ) -> io::Result<V2Walk> {
-    let mut w = V2Walk {
-        txn: None,
-        txn_discarded: 0,
-        stop: ReplayStop::Clean,
-        pos: start_pos,
-        replayed: 0,
-        preview: [0u8; 16],
-        preview_len: 0,
-    };
+    let mut w = V2Walk::at(start_pos);
     let mut payload: Vec<u8> = Vec::new();
+    // one argv for the whole walk: its buffers stay warm across frames
+    let mut args = Argv::default();
     w.stop = loop {
-        let mut header = [0u8; 8];
-        match read_fully(r, &mut header) {
-            Ok(0) => break ReplayStop::Clean,
-            Ok(n) if n < header.len() => break ReplayStop::TruncatedTail,
-            Ok(_) => {}
-            Err(e) => return Err(e),
-        }
-        let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
-        let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
-        if len == 0 || len > crate::record::MAX_RECORD {
-            w.preview_len = preview_of(&header, &mut w.preview);
-            break ReplayStop::CorruptFrame(String::from("record length out of range"));
-        }
+        let (len, crc) = match next_header(r, &mut w)? {
+            Ok(h) => h,
+            Err(stop) => break stop,
+        };
         payload.clear();
         payload.resize(len as usize, 0);
         match read_fully(r, &mut payload) {
@@ -114,7 +133,7 @@ pub(crate) fn walk_v2(
             w.preview_len = preview_of(&payload, &mut w.preview);
             break ReplayStop::CorruptFrame(String::from("record checksum mismatch"));
         }
-        if !apply_record(&payload, len, apply, &mut w) {
+        if !apply_record(&payload, len, &mut args, apply, &mut w) {
             break ReplayStop::CorruptFrame(String::from(
                 "checksummed record does not hold exactly one command",
             ));
@@ -128,47 +147,121 @@ pub(crate) fn walk_v2(
 pub(crate) fn apply_record(
     payload: &[u8],
     len: u32,
-    apply: &mut Option<&mut dyn FnMut(Argv)>,
+    args: &mut Argv,
+    apply: &mut Option<Sink<'_>>,
     w: &mut V2Walk,
 ) -> bool {
-    match kevy_resp::parse_command(payload) {
-        Ok(Some((args, used))) if used == payload.len() => {
-            let marker = txn_marker(&args);
-            match marker {
-                Some(TxnMarker::Begin) => {
-                    // A begin inside a begin cannot happen from this
-                    // writer; if a log ever shows one, the outer
-                    // transaction was never committed — drop it.
-                    if w.txn.take().is_some() {
-                        w.txn_discarded += 1;
-                    }
-                    w.txn = Some(Vec::new());
-                }
-                Some(TxnMarker::Commit) => {
-                    if let Some(buffered) = w.txn.take()
-                        && let Some(f) = apply.as_deref_mut()
-                    {
-                        for a in buffered {
-                            f(a);
-                        }
-                    }
-                }
-                None => match w.txn.as_mut() {
-                    Some(buf) => buf.push(args),
-                    None => {
-                        if let Some(f) = apply.as_deref_mut() {
-                            f(args);
-                        }
-                    }
-                },
+    match kevy_resp::parse_command_into(payload, args) {
+        Ok(Some(used)) if used == payload.len() => {
+            // which snapshot the log continues was settled before replay
+            if crate::log_base::base_of(args).is_none() {
+                route_frame(args, apply, w);
+                w.replayed += 1;
             }
             w.pos += 8 + u64::from(len);
-            w.replayed += 1;
             true
         }
         _ => {
             w.preview_len = preview_of(payload, &mut w.preview);
             false
+        }
+    }
+}
+
+/// Apply one parsed command, or hold it inside an open transaction, or
+/// act on a transaction marker.
+fn route_frame(args: &mut Argv, apply: &mut Option<Sink<'_>>, w: &mut V2Walk) {
+    match txn_marker(args) {
+        Some(TxnMarker::Begin) => {
+            // A begin inside a begin cannot happen from this
+            // writer; if a log ever shows one, the outer
+            // transaction was never committed — drop it.
+            if w.txn.take().is_some() {
+                w.txn_discarded += 1;
+            }
+            w.txn = Some(Vec::new());
+            w.txn_at = w.pos;
+        }
+        Some(TxnMarker::Commit) => {
+            if let Some(buffered) = w.txn.take()
+                && let Some(f) = apply.as_mut()
+            {
+                for mut a in buffered {
+                    f.deliver(&mut a);
+                }
+            }
+        }
+        None => match w.txn.as_mut() {
+            Some(buf) => buf.push(std::mem::take(args)),
+            None => {
+                if let Some(f) = apply.as_mut() {
+                    f.deliver(args);
+                }
+            }
+        },
+    }
+}
+
+/// Where replayed frames go: moved out to an owner, or lent in place, in
+/// which case the frame's buffers are reused for the next record.
+pub(crate) enum Sink<'a> {
+    Owned(&'a mut dyn FnMut(Argv)),
+    InPlace(&'a mut dyn FnMut(&mut Argv)),
+}
+
+impl Sink<'_> {
+    pub(crate) fn deliver(&mut self, frame: &mut Argv) {
+        match self {
+            Sink::Owned(f) => f(std::mem::take(frame)),
+            Sink::InPlace(f) => f(frame),
+        }
+    }
+}
+
+/// Read the next record header: its `(len, crc)`, or why the walk stops
+/// here — a clean end, a zero tail, a torn or impossible header.
+fn next_header(r: &mut impl Read, w: &mut V2Walk) -> io::Result<Result<(u32, u32), ReplayStop>> {
+    let mut header = [0u8; 8];
+    match read_fully(r, &mut header)? {
+        0 => return Ok(Err(ReplayStop::Clean)),
+        n if n < header.len() && header[..n].iter().all(|&b| b == 0) => {
+            w.zero_tail = n as u64;
+            return Ok(Err(ReplayStop::Clean));
+        }
+        n if n < header.len() => return Ok(Err(ReplayStop::TruncatedTail)),
+        _ => {}
+    }
+    let len = u32::from_le_bytes(header[..4].try_into().expect("header is a fixed-size array"));
+    let crc = u32::from_le_bytes(header[4..].try_into().expect("header is a fixed-size array"));
+    // no record has length 0, so zeros from here to the end of the file
+    // are the unused preallocation of a mapped log; zeros followed by
+    // anything else are damage
+    if len == 0
+        && crc == 0
+        && let Some(rest) = zeros_to_end(r)?
+    {
+        w.zero_tail = header.len() as u64 + rest;
+        return Ok(Err(ReplayStop::Clean));
+    }
+    if len == 0 || len > crate::record::MAX_RECORD {
+        w.preview_len = preview_of(&header, &mut w.preview);
+        return Ok(Err(ReplayStop::CorruptFrame(String::from("record length out of range"))));
+    }
+    Ok(Ok((len, crc)))
+}
+
+/// Read `r` to its end; `Some(bytes read)` when every one was zero.
+fn zeros_to_end(r: &mut impl Read) -> io::Result<Option<u64>> {
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut n = 0u64;
+    loop {
+        let got = read_fully(r, &mut buf)?;
+        if buf[..got].iter().any(|&b| b != 0) {
+            return Ok(None);
+        }
+        n += got as u64;
+        if got < buf.len() {
+            return Ok(Some(n));
         }
     }
 }
@@ -187,4 +280,22 @@ pub(crate) fn read_fully<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize
         }
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A read that fails for a reason other than the end fails the walk:
+    /// on the header itself, or while checking that zeros run to the end.
+    #[test]
+    fn a_failing_read_is_an_error_not_an_end() {
+        let dir = kevy_tmpdir::TmpDir::new("walk-read-dir");
+        let not_a_file = || std::fs::File::open(dir.path()).unwrap();
+        let mut w = V2Walk::at(0);
+        assert!(next_header(&mut not_a_file(), &mut w).is_err());
+        let mut zeros_then_fail = (&[0u8; 8][..]).chain(not_a_file());
+        assert!(next_header(&mut zeros_then_fail, &mut w).is_err());
+        assert_eq!(w.zero_tail, 0, "an unread tail is not counted as zeros");
+    }
 }

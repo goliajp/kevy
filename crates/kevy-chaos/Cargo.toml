@@ -14,3 +14,6 @@ workspace = true
 
 # 0-dep: std-only.
 [dependencies]
+# For free_port. This crate had its own, and the two answered the same
+# question differently — see pick_free_port.
+kevy-testnet = { path = "../kevy-testnet" }

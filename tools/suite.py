@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""The kevy test suite runner — three tiers, one manifest, no dark areas.
+"""The kevy test suite runner — four tiers, one manifest, no dark areas.
 
     python3 tools/suite.py precommit            run a tier
+    python3 tools/suite.py premerge             everything CI checks on a push
     python3 tools/suite.py prerelease --list    show what a tier would run
     python3 tools/suite.py --audit              verify the manifest's invariants
+    python3 tools/suite.py full --rerun-unchanged   also run rows whose inputs
+                                                did not change since they passed
 
 The manifest (suite/manifest.toml) is the single source of truth for
 what is checked; this runner is deliberately dumb about content and
 strict about accounting:
 
-- A missing requirement (box, device, docker…) is a loud NOT-RUN row in
+- A missing requirement (box, docker, a browser…) is a loud NOT-RUN row in
   the verdict, never a silent pass. "full minus these" is said out loud.
 - A check that cannot be found fails the AUDIT — a deleted gate cannot
   quietly leave the suite. Every one of this repository's worst greens
@@ -23,14 +26,19 @@ Exit code: 1 on any hard FAIL or audit violation; 0 otherwise (the
 verdict still lists NOT-RUN and advisory rows by name).
 """
 
+import os
 import functools
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
 import time
 import tomllib
+
+import ci_carry
+import suite_requirements as req
+import suite_unchanged
+from suite_requirements import PROBES, children_cpu, requirement_gap
 
 # Line-buffered even when redirected: a tier run under nohup showed a
 # zero-byte log for its whole first hour, which reads as "hung" and is
@@ -40,7 +48,7 @@ print = functools.partial(print, flush=True)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "suite/manifest.toml"
 
-TIERS = ["precommit", "prerelease", "full"]
+TIERS = ["precommit", "premerge", "prerelease", "full"]
 AREAS = {
     "hygiene", "release-pins", "arch", "doc", "perf", "mem", "disk",
     "compat", "dialect", "feature", "case", "doors", "cov",
@@ -56,160 +64,6 @@ def tier_checks(checks, tier):
     """Inheritance: a check runs in its declared tier and above."""
     rank = {t: i for i, t in enumerate(TIERS)}
     return [c for c in checks if rank[c["tier"]] <= rank[tier]]
-
-
-# ── requirement detection ────────────────────────────────────────────
-# Each answers (available, why-not). Detection is cheap and honest:
-# where we cannot know, the answer is "not here", said as such.
-
-def _have_server(profile):
-    """Build the binary, rather than judge whether the one on disk is current.
-
-    Existence alone was not enough: a `target/debug/kevy` from an earlier
-    checkout satisfied it while `doc-toml` used that binary to load the
-    documentation's config blocks, and reported `packed_rows` as an unknown
-    `[server]` key — hours after the source in the same tree had gained it.
-    On the box that binary was rebuilt later in the same tier, by
-    `workspace-tests`, which is why the same check passed on a re-run.
-
-    The first fix compared the binary's mtime against the sources, and was
-    wrong in a way worth recording: cargo decides freshness by hashing
-    content, so a `git checkout` or a merge moves mtimes without changing
-    anything, and the check cried stale after every branch operation. A gate
-    that cries wolf gets worked around.
-
-    So this asks cargo, which is the tool whose job that is. A fresh tree
-    costs ~0.1 s; a stale one costs a build, which is the honest price of
-    the guarantee.
-    """
-    flags = ["--release"] if profile == "release" else []
-    r = subprocess.run(["cargo", "build", "-p", "kevy", "--bin", "kevy", "--quiet", *flags],
-                       cwd=ROOT, capture_output=True, text=True)
-    if r.returncode != 0:
-        tail = (r.stderr or r.stdout).strip().splitlines()
-        why = tail[-1] if tail else f"cargo build --bin kevy failed ({r.returncode})"
-        return False, f"target/{profile}/kevy does not build: {why[:120]}"
-    if not (ROOT / f"target/{profile}/kevy").exists():
-        return False, f"cargo build succeeded but target/{profile}/kevy is not there"
-    return True, ""
-
-
-def _have_linux():
-    import platform
-    return (platform.system() == "Linux"), "not a Linux host"
-
-
-def _have_box():
-    import platform
-    if platform.system() == "Linux" and (os_cpus() or 0) >= 16:
-        return True, ""
-    return False, "needs the 16-core Linux box (quiet, core-pinnable)"
-
-
-def os_cpus():
-    import os
-    try:
-        return len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
-    except AttributeError:
-        return os.cpu_count()
-
-
-def _have_node():
-    if shutil.which("node"):
-        return True, ""
-    return False, "node is not on PATH"
-
-
-def _have_chromium():
-    """A browser, not the library that drives one.
-
-    This asked whether `web/node_modules/playwright-core` existed, which
-    is a different question with a different answer: Playwright installs
-    its browsers separately from itself. On the bench box — library
-    present, browser absent — the requirement read as satisfied and
-    sitegate then failed inside `chromium.launch`, leaving a stack trace
-    that says nothing about the site and everything about the machine.
-    A missing requirement is supposed to be a loud NOT-RUN.
-
-    `web/find-browser.mjs` is the one place that knows where a browser
-    is; run directly it prints the path or exits 1, which is exactly this
-    question. Asking it rather than restating its rules here keeps the
-    runner and `verify.mjs` from ever disagreeing about what counts.
-    """
-    if not shutil.which("node"):
-        return False, "node is not on PATH, so no browser can be located"
-    probe = ROOT / "web/find-browser.mjs"
-    if not probe.exists():
-        return False, f"{probe.relative_to(ROOT)} is missing"
-    r = subprocess.run(
-        ["node", str(probe)], capture_output=True, text=True, cwd=ROOT, timeout=30
-    )
-    if r.returncode == 0 and r.stdout.strip():
-        return True, ""
-    return False, "no Chromium: set CHROME_PATH, or `npx playwright install chromium` in web/"
-
-
-def _have_web_deps():
-    # Distinct from node itself: the box has node and no web/node_modules,
-    # and the first box run failed four site checks that should have been
-    # honest NOT-RUNs for exactly this gap.
-    if (ROOT / "web/node_modules").exists():
-        return True, ""
-    return False, "web/node_modules is not installed (npm ci in web/)"
-
-
-def _have_wasm_artifact():
-    if (ROOT / "crates/kevy-wasm/pkg/kevy.wasm").exists():
-        return True, ""
-    return False, "crates/kevy-wasm/pkg/kevy.wasm is not built (npm run engine in web/)"
-
-
-def _have_docker():
-    if not shutil.which("docker"):
-        return False, "docker is not on PATH"
-    r = subprocess.run(["docker", "info"], capture_output=True, timeout=15)
-    return (r.returncode == 0), "docker daemon is not running"
-
-
-def _have_pgcmp_infra():
-    import socket
-    try:
-        socket.create_connection(("127.0.0.1", 15499), timeout=2).close()
-    except OSError:
-        return False, "no Postgres on 127.0.0.1:15499 (root starts kevy-pgcmp once; see bench/pgcompare.sh)"
-    venv = pathlib.Path.home() / "pgbench-venv/bin/python"
-    if not venv.exists():
-        return False, "no psycopg venv at ~/pgbench-venv"
-    return True, ""
-
-
-def _have_device():
-    import os
-    if os.environ.get("KEVY_DEVICE") == "1":
-        return True, ""
-    return False, "no device session (set KEVY_DEVICE=1 on the machine that has one)"
-
-
-def requirement_gap(check):
-    """The first unmet requirement, or None."""
-    for r in check.get("requires", []):
-        ok, why = {
-            "server-debug": lambda: _have_server("debug"),
-            "server-release": lambda: _have_server("release"),
-            "linux": _have_linux,
-            "box": _have_box,
-            "node": _have_node,
-            "chromium": _have_chromium,
-            "docker": _have_docker,
-            "web-deps": _have_web_deps,
-            "pgcmp-infra": _have_pgcmp_infra,
-            "wasm-artifact": _have_wasm_artifact,
-            "device": _have_device,
-            "ci": lambda: (False, "runs in CI, not locally"),
-        }[r]()
-        if not ok:
-            return f"{r}: {why}"
-    return None
 
 
 # ── audit ────────────────────────────────────────────────────────────
@@ -243,6 +97,8 @@ def audit(suite, checks):
         for t in toks:
             inner += shlex.split(t) if (" " in t) else [t]
         for tok in inner:
+            if "=" in tok and tok.split("=", 1)[0].isidentifier():
+                tok = tok.split("=", 1)[1]  # an env assignment's value
             if "/" in tok and not tok.startswith("-") and not (ROOT / tok).exists():
                 if tok.startswith("target/"):
                     continue  # build products are a requirement, not a file check
@@ -255,9 +111,9 @@ def audit(suite, checks):
     # Budgets are arithmetic: the declared expected-durations of a tier
     # must fit its budget, and the tiers must order strictly.
     budgets = suite["budgets"]
-    if not budgets["precommit"] < budgets["prerelease"]:
-        bad.append("budget order violated: precommit must be < prerelease")
-    for tier in ("precommit", "prerelease"):
+    if not budgets["precommit"] < budgets["premerge"] < budgets["prerelease"]:
+        bad.append("budget order violated: precommit < premerge < prerelease")
+    for tier in ("precommit", "premerge", "prerelease"):
         total = sum(c["expected"] for c in tier_checks(checks, tier)
                     if not requirement_needs_infra(c))
         if total > budgets[tier]:
@@ -287,9 +143,16 @@ def audit(suite, checks):
     for r in sorted(used - set(declared)):
         bad.append(f"requirement {r!r} is named by a check but not declared in "
                    f"[suite.requirements] — nothing says where it is met")
+    for r in sorted(used - set(PROBES)):
+        bad.append(f"requirement {r!r} has no probe in tools/suite.py — a tier "
+                   f"that reaches a check asking for it stops with a KeyError")
     for r in sorted(set(declared) - used):
         bad.append(f"requirement {r!r} is declared but no check asks for it — "
                    f"the list rotted")
+
+    for cid, pat in suite_unchanged.dead_patterns(ROOT, checks):
+        bad.append(f"{cid}: input {pat!r} matches no tracked file — the row "
+                   f"would count as unchanged forever")
 
     # No dark areas in full.
     covered = {c["area"] for c in checks}
@@ -313,20 +176,32 @@ def audit(suite, checks):
         return 1
     n = {t: len(tier_checks(checks, t)) for t in TIERS}
     print(f"suite audit: ok — {len(checks)} checks "
-          f"(precommit {n['precommit']} ⊆ prerelease {n['prerelease']} ⊆ full {n['full']}), "
+          f"(precommit {n['precommit']} ⊆ premerge {n['premerge']} ⊆ prerelease {n['prerelease']} "
+          f"⊆ full {n['full']}), "
           f"{len(covered)} areas covered, budgets hold")
     return 0
 
 
 def requirement_needs_infra(check):
     """Checks whose requirements are inherently absent on some hosts do
-    not count against the local budget arithmetic (box/device/ci)."""
-    return bool({"box", "device", "ci"} & set(check.get("requires", [])))
+    not count against the local budget arithmetic."""
+    return "box" in check.get("requires", [])
 
 
 # ── run ──────────────────────────────────────────────────────────────
 
-def run_tier(suite, checks, tier, only=None, area=None):
+def keep_log(tier, check_id, text):
+    """A row's whole output. A failure's verdict shows six lines, and a
+    flake's cause is rarely in the last six; rerunning to see it again is
+    how the evidence of an intermittent failure gets lost. A pass shows
+    none, and a measurement gate's numbers are the result."""
+    path = ROOT / "target" / "suite-logs" / f"{tier}-{check_id}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path.relative_to(ROOT)
+
+
+def run_tier(suite, checks, tier, only=None, area=None, rerun=False):
     selected = tier_checks(checks, tier)
     if only:
         selected = [c for c in selected if c["id"] == only]
@@ -335,15 +210,28 @@ def run_tier(suite, checks, tier, only=None, area=None):
     if area:
         selected = [c for c in selected if c["area"] == area]
 
-    results = []
+    results, cpu_of = [], {}
     t_start = time.monotonic()
+    carry, carry_why = ({}, "") if only or area else ci_carry.carried(ROOT, selected, tier)
+    if carry_why:
+        print(f"  ci-carry: {carry_why}")
+    same = {} if only or area or rerun or tier in ("precommit", "premerge") \
+        else suite_unchanged.unchanged(ROOT, selected)
     for c in selected:
+        if c["id"] in carry:
+            results.append((c, "CARRIED", 0.0, carry[c["id"]], False))
+            print(f"  ↺ {c['id']:<22} CARRIED  ({carry[c['id']]})")
+            continue
+        if c["id"] in same:
+            results.append((c, "UNCHANGED", 0.0, same[c["id"]], False))
+            print(f"  = {c['id']:<22} UNCHANGED  ({same[c['id']]})")
+            continue
         gap = requirement_gap(c)
         if gap:
-            results.append((c, "NOT-RUN", 0.0, gap))
+            results.append((c, "NOT-RUN", 0.0, gap, False))
             print(f"  ⊘ {c['id']:<22} NOT-RUN  ({gap})")
             continue
-        t0 = time.monotonic()
+        t0, cpu0 = time.monotonic(), children_cpu()
         try:
             # Its own process group, so a timeout kills the whole tree.
             # The first timeout this runner ever fired killed the check's
@@ -351,7 +239,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
             # went on writing runtime files into the repo root, and the
             # NEXT check (rootgate) failed for it. A kill that leaves the
             # children alive converts one red into two, a run apart.
-            import os, signal
+            import signal
             proc = subprocess.Popen(
                 c["cmd"], shell=True, cwd=ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -361,33 +249,32 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 out, err = proc.communicate(timeout=c["timeout"])
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+                out, err = proc.communicate()
+                keep_log(tier, c["id"], (out or "") + (err or ""))
                 raise
             r = subprocess.CompletedProcess(c["cmd"], proc.returncode, out, err)
             took = time.monotonic() - t0
+            cpu_of[c["id"]] = children_cpu() - cpu0
             if r.returncode == 0:
-                results.append((c, "PASS", took, ""))
+                results.append((c, "PASS", took, "", True))
+                # a passing measurement gate's numbers are its result
+                keep_log(tier, c["id"], r.stdout + r.stderr)
                 print(f"  ✓ {c['id']:<22} {took:6.1f}s")
-            elif r.returncode == 2 and c.get("skip_is_exit_2"):
-                # Exit 2 means "I did not answer the question", not "the answer
-                # is no" — a gate that skipped an outward call and says so must
-                # not read as a failure, and must not read as a pass either.
-                # The row carries the reason, the way a NOT-RUN does.
-                why = ((r.stdout + r.stderr).strip().splitlines() or ["exit 2"])[-1]
-                results.append((c, "SKIPPED", took, why))
-                print(f"  ⊘ {c['id']:<22} {took:6.1f}s  SKIPPED — {why[:80]}")
             else:
                 tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
                 status = "ADVISORY" if c.get("advisory") else "FAIL"
-                results.append((c, status, took, "\n".join(tail)))
+                results.append((c, status, took, "\n".join(tail), True))
                 mark = "△" if status == "ADVISORY" else "✗"
-                print(f"  {mark} {c['id']:<22} {took:6.1f}s  {status}")
+                log = keep_log(tier, c["id"], r.stdout + r.stderr)
+                print(f"  {mark} {c['id']:<22} {took:6.1f}s  {status}  (whole output: {log})")
                 for line in tail:
                     print(f"      {line[:140]}")
         except subprocess.TimeoutExpired:
             took = time.monotonic() - t0
-            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s"))
-            print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)")
+            cpu_of[c["id"]] = children_cpu() - cpu0
+            results.append((c, "TIMEOUT", took, f"timed out after {c['timeout']}s", False))
+            print(f"  ✗ {c['id']:<22} {took:6.1f}s  TIMEOUT ({c['timeout']}s)  "
+                  f"(output so far: target/suite-logs/{tier}-{c['id']}.log)")
 
     # Exit hygiene: the tier leaves the tree as it found it. rootgate
     # runs first as a check, but residue produced BY the tier lands
@@ -401,7 +288,7 @@ def run_tier(suite, checks, tier, only=None, area=None):
         # some earlier check had leaked. Only processes running THIS
         # repo's binaries are ours to kill; another session's servers are
         # not, and pgrep's own invocation must not match itself.
-        import os, signal as sig
+        import signal as sig
         leaked = subprocess.run(
             ["pgrep", "-af", str(ROOT / "target")],
             capture_output=True, text=True).stdout.strip()
@@ -416,13 +303,13 @@ def run_tier(suite, checks, tier, only=None, area=None):
                 except (ValueError, ProcessLookupError, PermissionError):
                     pass
             results.append(({"id": "exit-hygiene-procs", "area": "hygiene"},
-                            "FAIL", 0.0, "\n".join(leaked_rows[:4])))
+                            "FAIL", 0.0, "\n".join(leaked_rows[:4]), False))
         sweep = subprocess.run(["bash", "bench/rootgate.sh"], cwd=ROOT,
                                capture_output=True, text=True)
         if sweep.returncode != 0:
             tail = sweep.stdout.strip().splitlines()[:4]
             results.append(({"id": "exit-hygiene", "area": "hygiene"},
-                            "FAIL", 0.0, "\n".join(tail)))
+                            "FAIL", 0.0, "\n".join(tail), False))
             print(f"  ✗ exit-hygiene: the tier itself left residue behind")
             for line in tail:
                 print(f"      {line[:140]}")
@@ -432,30 +319,59 @@ def run_tier(suite, checks, tier, only=None, area=None):
     notrun = [r for r in results if r[1] == "NOT-RUN"]
     advis = [r for r in results if r[1] == "ADVISORY"]
     passed = [r for r in results if r[1] == "PASS"]
+    timeouts = [r for r in results if r[1] == "TIMEOUT"]
+    carried_rows = [r for r in results if r[1] == "CARRIED"]
+    same_rows = [r for r in results if r[1] == "UNCHANGED"]
+    suite_unchanged.record(ROOT, results)
 
     # Real durations land beside the build products so the declared
     # expectations can be corrected from measurement, and cleaning the
     # build cleans this too.
+    # Only a whole tier writes the tier's ledger. `--only` and `--area` run a
+    # subset, and a subset that overwrites the file destroys the record it is
+    # not a substitute for: three of these files were one row each by the time
+    # anyone looked, and suite-full.json's single `mcpgate` row — read for a
+    # while as "one row in the old format" — was a `--only mcpgate` standing
+    # where 99 measurements had been.
     out = ROOT / f"target/suite-{tier}.json"
     out.parent.mkdir(exist_ok=True)
-    # `seconds` is a measurement only when the check ran to completion. A
-    # TIMEOUT row's seconds is the ceiling it hit, and recording the two in
-    # one field is how 120.1 s of timeout became "this gate costs two
-    # minutes" in a later decomposition. `measured` is the witness: read
-    # `seconds` only where it is true.
-    out.write_text(json.dumps(
-        [{"id": c["id"], "status": s, "seconds": round(t, 1),
-          "measured": s != "TIMEOUT",
-          "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _ in results],
-        indent=1))
+    # `seconds` is a measurement only where `measured` says so, and each
+    # row decides that where it is appended rather than here, because the
+    # answer does not follow from the status alone. A TIMEOUT row's seconds
+    # is the ceiling it hit, and recording the two in one field is how
+    # 120.1 s of timeout became "this gate costs two minutes" in a later
+    # decomposition. A NOT-RUN row never ran, and the two FAIL rows this
+    # runner synthesises after the tier carry no duration at all. None of
+    # those is what the check costs, and all used to be filed as though
+    # they were.
+    if not only and not area:
+        out.write_text(json.dumps(
+            [{"id": c["id"], "status": s, "seconds": round(t, 1),
+              "cpu_seconds": round(cpu_of.get(c["id"], 0.0), 1),
+              "measured": m,
+              "ceiling": c["timeout"] if s == "TIMEOUT" else None} for c, s, t, _, m in results],
+            indent=1))
 
     budget = suite["budgets"].get(tier)
     print(f"\nsuite {tier}: {len(passed)} passed, {len(fails)} failed, "
-          f"{len(advis)} advisory, {len(notrun)} not-run — "
+          f"{len(timeouts)} timed out, {len(advis)} advisory, "
+          f"{len(notrun)} not-run, {len(carried_rows)} carried from CI, "
+          f"{len(same_rows)} unchanged since they passed here — "
           f"{wall:.0f}s" + (f" (budget {budget}s)" if budget else ""))
+    # The tally must account for every check that was selected. It did not:
+    # a TIMEOUT was in neither the counts nor the failed list,
+    # so `workspace-tests` hit its 5400s ceiling and 53 checks were reported
+    # as "43 passed, 2 failed, 1 advisory, 5 not-run". Eleven short of the
+    # truth, in a line whose whole job is to be the truth.
+    counted = (len(passed) + len(fails) + len(timeouts) + len(advis)
+               + len(notrun) + len(carried_rows) + len(same_rows))
+    if counted != len(results):
+        print(f"  ✗ the tally covers {counted} of {len(results)} checks — a status this "
+              f"runner does not count is a check that disappeared from its own report")
+        return 1
     if notrun:
         print("  not run here (loudly, not silently):")
-        for c, _, _, why in notrun:
+        for c, _, _, why, _ in notrun:
             reqs = suite.get("requirements", {})
             where = [reqs.get(r, "") for r in c.get("requires", [])]
             where = [w for w in where if w]
@@ -463,16 +379,20 @@ def run_tier(suite, checks, tier, only=None, area=None):
                    "  — runs in NO environment this project has"
             print(f"    ⊘ {c['id']}: {why}{tail}")
     if advis:
-        for c, _, _, why in advis:
+        for c, _, _, why, _ in advis:
             print(f"  △ advisory {c['id']}: {why.splitlines()[-1][:120] if why else ''}")
             # Why it cannot redden the tier, at the moment it did not.
             reason = " ".join(c.get("advisory_reason", "").split())
             if reason:
                 print(f"      advisory because: {reason[:180]}")
-    if fails:
+    if fails or timeouts:
         print("  failed:")
-        for c, _, _, _ in fails:
+        for c, _, _, _, _ in fails:
             print(f"    ✗ {c['id']}")
+        # A check that hit its ceiling did not pass, and did not report a
+        # verdict either. Counting it as neither is how one vanished.
+        for c, _, _, _, _ in timeouts:
+            print(f"    ✗ {c['id']} — timed out at {c['timeout']}s, never finished")
         return 1
     if budget and wall > budget:
         print(f"  ✗ the tier ran over its own budget ({wall:.0f}s > {budget}s) — "
@@ -502,7 +422,8 @@ def main():
     if audit(suite, checks) != 0:
         return 1
     print()
-    return run_tier(suite, checks, tier, only=only, area=area)
+    return run_tier(suite, checks, tier, only=only, area=area,
+                    rerun="--rerun-unchanged" in args)
 
 
 if __name__ == "__main__":

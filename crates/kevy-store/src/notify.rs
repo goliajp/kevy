@@ -14,16 +14,76 @@ use crate::Store;
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 
-/// One captured store-origin event kind. The serving layer maps these
-/// to the Redis event names (`new` / `expired` / `evicted`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One captured store-origin event kind; [`KeyspaceEvent::name`] is the
+/// Redis event name the serving layer publishes it under.
+///
+/// ```
+/// assert_eq!(kevy_store::KeyspaceEvent::Evicted.name(), "evicted");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyspaceEvent {
     /// A key was added to the keyspace.
+    ///
+    /// ```
+    /// use kevy_store::{KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::New]);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// s.set(b"k", b"w".to_vec(), None, SetCondition::Always); // not new
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::New, b"k".to_vec())]);
+    /// ```
     New,
     /// A TTL'd key was removed because its deadline passed.
+    ///
+    /// ```
+    /// use core::time::Duration;
+    /// use kevy_store::{KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::Expired]);
+    /// s.set(b"k", b"v".to_vec(), Some(Duration::from_millis(1)), SetCondition::Always);
+    /// while s.get(b"k")?.is_some() {
+    ///     std::thread::sleep(Duration::from_millis(1));
+    /// }
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Expired, b"k".to_vec())]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Expired,
     /// A key was removed by maxmemory eviction.
+    ///
+    /// ```
+    /// use kevy_store::{EvictionPolicy, KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::Evicted]);
+    /// s.set_max_memory(1, EvictionPolicy::AllKeysLru);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// s.try_evict_after_write();
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Evicted, b"k".to_vec())]);
+    /// ```
     Evicted,
+}
+
+impl KeyspaceEvent {
+    /// The Redis keyspace-event name (`new` / `expired` / `evicted`).
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::KeyspaceEvent::New.name(), "new");
+    /// ```
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Expired => "expired",
+            Self::Evicted => "evicted",
+        }
+    }
+
+    fn capture_bit(self) -> u8 {
+        match self {
+            Self::New => CAPTURE_NEW,
+            Self::Expired => CAPTURE_EXPIRED,
+            Self::Evicted => CAPTURE_EVICTED,
+        }
+    }
 }
 
 pub(crate) const CAPTURE_NEW: u8 = 1 << 0;
@@ -31,13 +91,23 @@ pub(crate) const CAPTURE_EXPIRED: u8 = 1 << 1;
 pub(crate) const CAPTURE_EVICTED: u8 = 1 << 2;
 
 impl Store {
-    /// Choose which store-origin event kinds to capture. The serving
-    /// layer mirrors its notify-keyspace-events flags here; all-off
-    /// (the default) reduces every capture hook to one byte test.
-    pub fn set_notify_capture(&mut self, new_key: bool, expired: bool, evicted: bool) {
-        self.notify_capture = (u8::from(new_key) * CAPTURE_NEW)
-            | (u8::from(expired) * CAPTURE_EXPIRED)
-            | (u8::from(evicted) * CAPTURE_EVICTED);
+    /// Choose which store-origin event kinds to capture, replacing the
+    /// previous choice. The serving layer mirrors its
+    /// notify-keyspace-events flags here; none (the default) reduces
+    /// every capture hook to one byte test.
+    ///
+    /// ```
+    /// use kevy_store::{KeyspaceEvent, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::New]);
+    /// s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::New, b"k".to_vec())]);
+    /// s.set_notify_capture([]);
+    /// s.set(b"k2", b"v".to_vec(), None, SetCondition::Always);
+    /// assert!(!s.has_notify_events());
+    /// ```
+    pub fn set_notify_capture(&mut self, kinds: impl IntoIterator<Item = KeyspaceEvent>) {
+        self.notify_capture = kinds.into_iter().fold(0, |m, k| m | k.capture_bit());
     }
 
     /// Whether any events are waiting to be drained (one length read).

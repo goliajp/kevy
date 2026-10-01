@@ -51,6 +51,11 @@ def test_protocol_error_preserves_wire_text():
     assert str(err) == "ERR wrong number of arguments for 'set'"
 
 
+def test_read_only_default_text_is_the_servers():
+    # the server's reply to a write on a read-only replica, byte for byte
+    assert str(kevy.ReadOnlyError()) == "READONLY You can't write against a read only replica."
+
+
 def test_remote_typed_method_raises_protocol(remote_server):
     # A typed remote method surfaces a server -ERR as a raised error.
     c = kevy.connect(remote_server.url)

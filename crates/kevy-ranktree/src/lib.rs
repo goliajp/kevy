@@ -13,7 +13,7 @@
 //! Redis solves the same problem with a skiplist whose forward pointers carry
 //! spans. Both give O(log N) rank/select; the B-tree was chosen because:
 //!
-//! * **Cache behaviour** — a node holds up to [`node::MAX_KEYS`] keys in one
+//! * **Cache behaviour** — a node holds up to `node::MAX_KEYS` keys in one
 //!   contiguous buffer, so a descent touches ~log₈(N) cache lines where a
 //!   skiplist chases one pointer per level *and* per element during range
 //!   walks. Ordered full scans (persistence rewrites, snapshots) iterate
@@ -43,6 +43,16 @@
 //!
 //! Constraints: pure Rust, zero dependencies, `no_std`-capable behind the
 //! `alloc` feature, `#![forbid(unsafe_code)]`.
+//!
+//! ```
+//! use kevy_ranktree::RankTree;
+//!
+//! let t: RankTree<u32> = [50, 10, 40, 20, 30].into_iter().collect();
+//! assert_eq!(t.rank_of(&40), Some(3), "rank: how many keys sort before it");
+//! assert_eq!(t.select(1), Some(&20), "select: the key at a rank");
+//! assert_eq!(t.range(&(15..45)).copied().collect::<Vec<_>>(), vec![20, 30, 40]);
+//! assert_eq!(t.count_in(&(15..45)), 3, "counted, not walked");
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -54,12 +64,22 @@ mod insert;
 mod iter;
 mod node;
 mod remove;
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<RankTree<u64>>();
+    send_sync::<Iter<'static, u64>>();
+    send_sync::<IterRev<'static, u64>>();
+    send_sync::<Range<'static, u64>>();
+};
+
 #[cfg(test)]
 mod tests_invariants;
 
 use core::ops::{Bound, RangeBounds};
 
-pub use iter::{Iter, IterRev};
+pub use iter::{Iter, IterRev, Range};
 use node::Node;
 
 /// An ordered set of `K` with O(log N) order statistics (rank / select).
@@ -356,9 +376,9 @@ impl<K: Ord> RankTree<K> {
     /// assert_eq!(got, vec![3, 5]);
     /// ```
     #[must_use]
-    pub fn range<R: RangeBounds<K>>(&self, bounds: &R) -> Iter<'_, K> {
+    pub fn range<R: RangeBounds<K>>(&self, bounds: &R) -> Range<'_, K> {
         let (lo, hi) = self.bound_ranks(bounds);
-        Iter::new_from(&self.root, lo).capped(hi.saturating_sub(lo))
+        Range(Iter::new_from(&self.root, lo).capped(hi.saturating_sub(lo)))
     }
 
     /// `(first rank inside, first rank past)` for `bounds`.

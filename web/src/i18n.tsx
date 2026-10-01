@@ -9,7 +9,7 @@
 // made, no hedging, no filler connectives — those read as translationese
 // in Chinese and Japanese and as padding in English.
 //
-// Every number here is measured and sourced. bench/REPORT.md holds the
+// Every number here is measured and sourced. PERFORMANCE.md holds the
 // throughput figures (precision bench, n=1M x 10 runs); the command count
 // comes from site/data/commands.json, which is generated from VERB_META.
 
@@ -52,9 +52,9 @@ const dict: Dict = {
   'front.title.b': { en: 'Redis-compatible', zh: 'Redis 兼容', ja: 'Redis 互換' },
   'front.title.c': { en: ' engine that goes further', zh: '，但走得更远', ja: 'の、その先へ' },
   'front.abstract': {
-    en: 'Your Redis client connects unchanged and every operation is faster — 2.5× on GET, 4.1× on SET against valkey 9.1, and ahead of Redis 8 on all seven verbs measured. What it adds is the rest of the data layer: vector search, full-text, secondary indexes, materialised views and a change feed, inside the engine rather than in four services around it. Pure Rust, no third-party crates, 46 of them. The terminal below is the real engine compiled to WebAssembly, running in this tab.',
-    zh: '你的 Redis 客户端不用改一行就能连上，而每个操作都更快 —— 对 valkey 9.1，GET 快 2.5 倍、SET 快 4.1 倍；对 Redis 8，实测的七条命令全部领先。它多出来的是数据层的其余部分：向量检索、全文、二级索引、物化视图、变更流，全在引擎内部，而不是围着它的四个服务里。纯 Rust，零第三方 crate，共 46 个。下面这个终端是真引擎编译成 WebAssembly 后跑在你这个标签页里。',
-    ja: 'お使いの Redis クライアントは一行も変えずに接続でき、しかも全操作が速い——valkey 9.1 に対して GET は 2.5 倍、SET は 4.1 倍。Redis 8 に対しても、計測した 7 コマンドすべてで上回ります。加えてデータ層の残りが揃います：ベクトル検索、全文検索、セカンダリインデックス、マテリアライズドビュー、チェンジフィード。周辺の四つのサービスではなく、エンジンの中に。純 Rust、サードパーティ crate ゼロ、全 46 crate。下のターミナルは本物のエンジンを WebAssembly にしたもので、このタブの中で動いています。',
+    en: 'Your Redis client connects unchanged and every operation is faster — 2.2× on GET, at least 3.7× on SET against valkey 9.1, and ahead of Redis 8 on all seven verbs measured. What it adds is the rest of the data layer: vector search, full-text, secondary indexes, materialised views and a change feed, inside the engine rather than in four services around it. Pure Rust, no third-party crates, 46 of them. The terminal below is the real engine compiled to WebAssembly, running in this tab.',
+    zh: '你的 Redis 客户端不用改一行就能连上，而每个操作都更快 —— 对 valkey 9.1，GET 快 2.2 倍、SET 至少快 3.7 倍；对 Redis 8，实测的七条命令全部领先。它多出来的是数据层的其余部分：向量检索、全文、二级索引、物化视图、变更流，全在引擎内部，而不是围着它的四个服务里。纯 Rust，零第三方 crate，共 46 个。下面这个终端是真引擎编译成 WebAssembly 后跑在你这个标签页里。',
+    ja: 'お使いの Redis クライアントは一行も変えずに接続でき、しかも全操作が速い——valkey 9.1 に対して GET は 2.2 倍、SET は 3.7 倍以上。Redis 8 に対しても、計測した 7 コマンドすべてで上回ります。加えてデータ層の残りが揃います：ベクトル検索、全文検索、セカンダリインデックス、マテリアライズドビュー、チェンジフィード。周辺の四つのサービスではなく、エンジンの中に。純 Rust、サードパーティ crate ゼロ、全 46 crate。下のターミナルは本物のエンジンを WebAssembly にしたもので、このタブの中で動いています。',
   },
   'front.fig.speed': {
     en: 'SET, against valkey 9.1',
@@ -92,9 +92,9 @@ const dict: Dict = {
   'term.prompt': { en: 'type a command', zh: '输入命令', ja: 'コマンドを入力' },
   'term.reset': { en: 'clear', zh: '清空', ja: 'クリア' },
   'term.reach': {
-    en: '112 of the 191 server verbs — the embedded surface. Arrow keys walk history; a pasted block runs line by line.',
-    zh: '服务端 191 条动词中的 112 条 —— 嵌入式面。方向键翻历史，整段粘贴逐行执行。',
-    ja: 'サーバーの 191 動詞のうち 112——組み込み面。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
+    en: 'The embedded engine, streams and geo included, running in this tab. Arrow keys walk history; a pasted block runs line by line.',
+    zh: '嵌入式引擎在这个标签页里运行，stream 和 geo 都在。方向键翻历史，整段粘贴逐行执行。',
+    ja: '組み込みエンジンがこのタブで動いています。ストリームと geo も含みます。矢印キーで履歴、貼り付けたブロックは一行ずつ実行。',
   },
   'term.booting': { en: 'starting engine…', zh: '正在启动引擎…', ja: 'エンジン起動中…' },
   'term.live': { en: 'live', zh: '运行中', ja: '実行中' },

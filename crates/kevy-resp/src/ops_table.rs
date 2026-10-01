@@ -14,63 +14,144 @@
 //! verbs missing from embedded replay — silent data loss on reopen
 //! that shipped across many releases before being caught. This table
 //! makes that drift class a CI failure.
+//!
+//! ```
+//! use kevy_resp::ops_table::{NotifyKind, spec, surface};
+//!
+//! let row = spec("RPUSH").expect("registered");
+//! assert!(row.write && row.growing);
+//! assert_eq!(row.notify, Some(NotifyKind::List));
+//! assert_eq!(row.wake_idx, Some(1));
+//! assert_ne!(row.surfaces & surface::SERVER, 0);
+//! ```
 
-/// Surface bits: where an op is implemented **today**. Absence of a
-/// bit is ground truth, not aspiration — should-exist-but-doesn't
-/// lives in [`KNOWN_GAPS`], which parity tests keep exhaustive.
-pub mod surface {
-    /// Server RESP dispatch (`kevy` crate).
-    pub const SERVER: u16 = 1 << 0;
-    /// Embedded `Store` facade method (`kevy-embedded`).
-    pub const ESTORE: u16 = 1 << 1;
-    /// Embedded `Pipeline` entry.
-    pub const PIPE: u16 = 1 << 2;
-    /// Embedded `AtomicCtx` **and** `AtomicAllShards` (the two must
-    /// never drift — the parity test asserts both).
-    pub const ATOMIC: u16 = 1 << 3;
-    /// Embedded AOF replay arm (`replay.rs`) — REQUIRED for every
-    /// verb any embedded facade logs, and for every server verb an
-    /// embed-as-replica must apply.
-    pub const REPLAY: u16 = 1 << 4;
-    /// AOF rewrite emit set (`kevy-persist::rewrite_fmt`).
-    pub const REWRITE: u16 = 1 << 5;
-}
+#[path = "ops_surface.rs"]
+pub mod surface;
 
-/// Keyspace-notification class (neutral mirror of `kevy-rt`'s
-/// `NotifyClass`, which this crate cannot depend on).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Keyspace-notification class of a command (the Redis class letter
+/// each variant names).
+///
+/// ```
+/// use kevy_resp::ops_table::{NotifyKind, spec};
+/// assert_eq!(spec("LPUSH").and_then(|s| s.notify), Some(NotifyKind::List));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum NotifyKind {
     /// Redis notification class `$` (string commands).
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("APPEND").unwrap().notify, Some(NotifyKind::String));
+    /// ```
     String,
     /// Class `h`.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("HSET").unwrap().notify, Some(NotifyKind::Hash));
+    /// ```
     Hash,
     /// Class `l`.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("RPUSH").unwrap().notify, Some(NotifyKind::List));
+    /// ```
     List,
     /// Class `s`.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("SADD").unwrap().notify, Some(NotifyKind::Set));
+    /// ```
     Set,
     /// Class `z`.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("ZADD").unwrap().notify, Some(NotifyKind::Zset));
+    /// ```
     Zset,
     /// Class `t`.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("XADD").unwrap().notify, Some(NotifyKind::Stream));
+    /// ```
     Stream,
     /// Class `g` (DEL / EXPIRE / PERSIST …).
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("DEL").unwrap().notify, Some(NotifyKind::Generic));
+    /// ```
     Generic,
 }
 
 /// One registry row: a command's classification + the surfaces it
-/// exists on today.
-#[derive(Debug, Clone, Copy)]
+/// exists on today. The rows are the crate's own [`OP_TABLE`]; read them
+/// with [`spec`].
+///
+/// ```
+/// let get = kevy_resp::ops_table::spec("GET").unwrap();
+/// assert!(!get.write && get.notify.is_none());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct OpSpec {
     /// Canonical uppercase command name.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::spec;
+    /// assert_eq!(spec("GET").unwrap().name, "GET");
+    /// // lookups are by the canonical uppercase form
+    /// assert!(spec("get").is_none());
+    /// ```
     pub name: &'static str,
     /// Server `is_write_verb` classification (AOF/replication gate).
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::spec;
+    /// assert!(spec("SET").unwrap().write);
+    /// assert!(!spec("GET").unwrap().write);
+    /// ```
     pub write: bool,
     /// Subset of `write` that can grow memory (OOM precheck).
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::spec;
+    /// assert!(spec("SET").unwrap().growing);
+    /// // DEL writes but only frees memory
+    /// let del = spec("DEL").unwrap();
+    /// assert!(del.write && !del.growing);
+    /// ```
     pub growing: bool,
     /// Keyspace-notification class; `None` = no notification.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{NotifyKind, spec};
+    /// assert_eq!(spec("SET").unwrap().notify, Some(NotifyKind::String));
+    /// assert_eq!(spec("GET").unwrap().notify, None);
+    /// ```
     pub notify: Option<NotifyKind>,
     /// Producer verbs that wake blocked waiters: key arg index.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::spec;
+    /// // LPUSH key ... wakes BLPOP waiters on argv[1]
+    /// assert_eq!(spec("LPUSH").unwrap().wake_idx, Some(1));
+    /// assert_eq!(spec("SET").unwrap().wake_idx, None);
+    /// ```
     pub wake_idx: Option<u8>,
     /// Bitset of [`surface`] flags where the op exists today.
+    ///
+    /// ```
+    /// use kevy_resp::ops_table::{spec, surface};
+    /// let xadd = spec("XADD").unwrap();
+    /// assert_ne!(xadd.surfaces & surface::SERVER, 0);
+    /// assert_eq!(xadd.surfaces & surface::ESTORE, 0);
+    /// ```
     pub surfaces: u16,
 }
 
@@ -93,8 +174,54 @@ const WR: bool = true; // write
 const GROW: bool = true;
 const NG: bool = false; // non-growing
 
+/// The internal record verb that carries a stream consumer's last contact
+/// with its group: `XINTERNAL.CONSUMERSEEN key group consumer unix-ms`.
+/// kevy writes it to the AOF, the replication stream and the feed, and
+/// applies it on replay and on a replica; a client that sends it is
+/// refused. It is not a Redis command and is not documented as one.
+///
+/// ```
+/// use kevy_resp::ops_table::{CONSUMER_SEEN, spec, surface};
+/// let row = spec(CONSUMER_SEEN).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const CONSUMER_SEEN: &str = "XINTERNAL.CONSUMERSEEN";
+
+/// The internal record verb that carries the whole index, view and table
+/// catalog: `XINTERNAL.CATALOG lineage version index view table`. Every
+/// catalog command is recorded as one, and every snapshot and rewritten
+/// log keeps the current one; replay and a replica apply it when it is
+/// newer than what they hold. A client that sends it is refused.
+///
+/// ```
+/// use kevy_resp::ops_table::{CATALOG, spec, surface};
+/// let row = spec(CATALOG).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const CATALOG: &str = "XINTERNAL.CATALOG";
+
+/// The internal record verb that puts back a pending entry of a stream
+/// consumer group, the entry it names still in the stream or not:
+/// `XINTERNAL.PENDING key group consumer delivery-ms delivery-count id`.
+/// A rewritten log writes one for each pending entry whose stream entry
+/// is gone, which no client command can make again. A client that sends
+/// it is refused.
+///
+/// ```
+/// use kevy_resp::ops_table::{PENDING, spec, surface};
+/// let row = spec(PENDING).unwrap();
+/// assert!(row.write && row.surfaces == surface::REPLAY, "applied, never served");
+/// ```
+pub const PENDING: &str = "XINTERNAL.PENDING";
+
 /// The registry. One row per command. Kept grouped by type family and
 /// alphabetical inside each group so a missing row is easy to spot.
+///
+/// ```
+/// use kevy_resp::ops_table::OP_TABLE;
+/// assert!(OP_TABLE.iter().any(|o| o.name == "SET"));
+/// assert!(OP_TABLE.iter().all(|o| !o.growing || o.write));
+/// ```
 #[rustfmt::skip]
 pub const OP_TABLE: &[OpSpec] = &[
     // ---- strings -----------------------------------------------------
@@ -109,18 +236,18 @@ pub const OP_TABLE: &[OpSpec] = &[
     // off the verb, so any class here would publish a name Redis does
     // not have. The column stayed Some(String) while the verb was
     // ESTORE-only and nothing on the server could act on it.
-    op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE),
+    op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("GETRANGE",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETSET",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("INCR",         WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBYFLOAT",  WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("MGET",         RD, NG,   None,            None,    SERVER | ESTORE),
-    op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE),
-    op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER),
+    op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
+    op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER | REPLAY),
     op("SET",          WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
-    op("SETEX",        WR, GROW, Some(N::String), None,    SERVER),
-    op("SETNX",        WR, GROW, Some(N::String), None,    SERVER | ESTORE),
+    op("SETEX",        WR, GROW, Some(N::String), None,    SERVER | REPLAY),
+    op("SETNX",        WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("SETRANGE",     WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
     op("STRLEN",       RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- bitmap (string-backed) ---------------------------------------
@@ -140,14 +267,13 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HKEYS",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HLEN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HMGET",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
-    op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER),
+    op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER | REPLAY),
     op("HSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HSET",         WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
-    // Hash field TTLs (Redis 7.4). Relative forms are
-    // effect-logged as the absolute HPEXPIREAT (exemption below);
-    // HPEXPIREAT is the canonical replay/rewrite carrier.
-    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
-    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    // Hash field TTLs (Redis 7.4). A relative form is followed in the
+    // log by the absolute HPEXPIREAT it set, the replay/rewrite carrier.
+    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
+    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPTTL",        RD, NG,   None,            None,    SERVER | ESTORE),
@@ -155,16 +281,16 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- lists --------------------------------------------------------
-    // BLPOP/BRPOP never write directly: the blocked-serve path
-    // executes (and AOF-logs) the effect as a plain LPOP/RPOP.
-    op("BLPOP",        RD, NG,   None,            None,    SERVER),
-    op("BRPOP",        RD, NG,   None,            None,    SERVER),
+    // BLPOP/BRPOP write when they pop, and record the pop as a plain
+    // LPOP/RPOP.
+    op("BLPOP",        WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BRPOP",        WR, NG,   None,            None,    SERVER | REPLAY),
     // Blocking form notifies via its executed effect, not the verb.
-    op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER),
+    op("BRPOPLPUSH",   WR, GROW, None,            None,    SERVER | REPLAY),
     op("LINDEX",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("LINSERT",      WR, GROW, Some(N::List),            None,    SERVER | ESTORE | REPLAY),
     op("LLEN",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
-    op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER),
+    op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
     op("LPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LPOS",         RD, NG,   None,            None,    SERVER),
     op("LPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
@@ -173,7 +299,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("LSET",         WR, GROW, Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LTRIM",        WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("RPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
-    op("RPOPLPUSH",    WR, GROW, Some(N::List),   None,    SERVER),
+    op("RPOPLPUSH",    WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
     op("RPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     // ---- sets ---------------------------------------------------------
     op("SADD",         WR, GROW, Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
@@ -191,7 +317,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
-    op("BZPOPMIN",     WR, NG,   None,            None,    SERVER),
+    op("BZPOPMIN",     WR, NG,   None,            None,    SERVER | REPLAY),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
@@ -200,7 +326,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // REPLAY arm of their own is needed (the effect verbs replay).
     op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     // Delayed-job primitive; embedded logs the ZREM effect.
-    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
@@ -215,73 +341,75 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZREVRANGEBYSCORE", RD, NG, None,          None,    SERVER | ESTORE),
     op("ZSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCORE",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
-    // ---- streams (server-only today; embedded exposure undecided) -----
-    op("XACK",         WR, NG,   Some(N::Stream), None,    SERVER),
-    op("XADD",         WR, GROW, Some(N::Stream), Some(1), SERVER | REWRITE),
-    op("XAUTOCLAIM",   WR, GROW, Some(N::Stream), None,    SERVER),
-    op("XCLAIM",       WR, GROW, Some(N::Stream), None,    SERVER | REWRITE),
-    op("XDEL",         WR, NG,   Some(N::Stream), None,    SERVER),
-    op("XGROUP",       WR, GROW, Some(N::Stream), None,    SERVER | REWRITE),
+    // ---- streams (embedded replay with its streams-geo feature) --------
+    op("XACK",         WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
+    op("XADD",         WR, GROW, Some(N::Stream), Some(1), SERVER | REPLAY | REWRITE),
+    op("XAUTOCLAIM",   WR, GROW, Some(N::Stream), None,    SERVER | REPLAY),
+    op("XCLAIM",       WR, GROW, Some(N::Stream), None,    SERVER | REPLAY | REWRITE),
+    op("XDEL",         WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
+    op("XGROUP",       WR, GROW, Some(N::Stream), None,    SERVER | REPLAY | REWRITE),
     op("XINFO",        RD, NG,   None,            None,    SERVER),
     op("XLEN",         RD, NG,   None,            None,    SERVER),
     op("XPENDING",     RD, NG,   None,            None,    SERVER),
     op("XRANGE",       RD, NG,   None,            None,    SERVER),
     op("XREAD",        RD, NG,   None,            None,    SERVER),
-    op("XREADGROUP",   WR, GROW, Some(N::Stream), None,    SERVER),
+    op("XREADGROUP",   WR, GROW, Some(N::Stream), None,    SERVER | REPLAY),
     op("XREVRANGE",    RD, NG,   None,            None,    SERVER),
-    op("XSETID",       WR, NG,   Some(N::Stream), None,    SERVER | REWRITE),
-    op("XTRIM",        WR, NG,   Some(N::Stream), None,    SERVER),
-    // ---- geo (zset-backed, server-only today) --------------------------
-    op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER),
+    op("XSETID",       WR, NG,   Some(N::Stream), None,    SERVER | REPLAY | REWRITE),
+    op("XTRIM",        WR, NG,   Some(N::Stream), None,    SERVER | REPLAY),
+    // internal: applied from a record, refused from a client
+    op(CONSUMER_SEEN,  WR, NG,   None,            None,    REPLAY),
+    op(CATALOG,        WR, NG,   None,            None,    REPLAY),
+    op(PENDING,        WR, NG,   None,            None,    REPLAY),
+    // ---- geo (zset-backed; embedded replay as streams) ----------------
+    op("GEOADD",       WR, GROW, Some(N::Zset),   None,    SERVER | REPLAY),
     op("GEODIST",      RD, NG,   None,            None,    SERVER),
     op("GEOHASH",      RD, NG,   None,            None,    SERVER),
     op("GEOPOS",       RD, NG,   None,            None,    SERVER),
-    op("GEORADIUS",    WR, GROW, None,            None,    SERVER),
-    op("GEORADIUSBYMEMBER", WR, GROW, None,       None,    SERVER),
+    op("GEORADIUS",    WR, GROW, None,            None,    SERVER | REPLAY),
+    op("GEORADIUSBYMEMBER", WR, GROW, None,       None,    SERVER | REPLAY),
     op("GEOSEARCH",    RD, NG,   None,            None,    SERVER),
-    op("GEOSEARCHSTORE", WR, GROW, None,          None,    SERVER),
+    op("GEOSEARCHSTORE", WR, GROW, None,          None,    SERVER | REPLAY),
     // ---- keyspace -------------------------------------------------------
     op("COPY",         WR, GROW, None,            None,    SERVER | ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
     // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
     // embedded parity = changes_since / changes_tail / feed_shards /
     // info_prefix.
-    // Index engine (IDX.* namespace). CREATE/DROP mutate the
-    // catalog (sidecar-persisted, not data writes — no AOF/replay);
-    // reads ride the extension fan-out.
-    // NB: catalog mutations are deliberately NOT data writes — the
-    // `write` column tracks the AOF/propagation path, and the catalog
-    // persists via its own sidecar (indexes are derived state).
-    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER | ESTORE),
-    op("IDX.DROP",     RD, NG,   None,            None,    SERVER | ESTORE),
+    // Index engine (IDX.* namespace). CREATE/DROP/REBUILD change the
+    // catalog and are recorded as the whole catalog (an XINTERNAL.CATALOG
+    // frame); reads ride the extension fan-out.
+    op("IDX.CREATE",   WR, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.DROP",     WR, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.ADVISE",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.DESCRIBE", RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.QUERY",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
     // IDX.VERIFY: server-only (embedded exposes idx_stats instead).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
     op("IDX.EXPLAIN",  RD, NG,   None,            None,    SERVER),
-    // Views (VIEW.* namespace; catalog ops are sidecar-persisted,
-    // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
-    // EXPLAIN are server-only (embedded rebuilds inline and exposes
-    // view_count instead).
-    op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
+    // Views (VIEW.* namespace; catalog ops are recorded like IDX.*).
+    // VERIFY/REBUILD/EXPLAIN are server-only (embedded rebuilds inline
+    // and exposes view_count instead).
+    op("IDX.REBUILD",  WR, NG,   None,            None,    SERVER),
     op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
     // Tables (the TABLE.* namespace). DECLARE compiles
-    // to IDX specs at declare time; catalog ops are sidecar-persisted,
-    // not data writes — same reasoning as IDX.*.
-    op("TABLE.DECLARE", RD, NG,  None,            None,    SERVER | ESTORE),
-    op("TABLE.ENSURE", RD, NG,   None,            None,    SERVER | ESTORE),
-    op("TABLE.REPLACE", RD, NG,  None,            None,    SERVER | ESTORE),
-    op("TABLE.DROP",   RD, NG,   None,            None,    SERVER | ESTORE),
+    // to IDX specs at declare time; catalog ops are recorded like IDX.*.
+    op("TABLE.DECLARE", WR, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.ENSURE", WR, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.REPLACE", WR, NG,  None,            None,    SERVER | ESTORE),
+    op("TABLE.DROP",   WR, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.LIST",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("TABLE.VERIFY", RD, NG,   None,            None,    SERVER | ESTORE),
-    op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
-    op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("TABLE.DESCRIBE", RD, NG, None,            None,    SERVER | ESTORE),
+    op("VIEW.CREATE",  WR, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.DROP",    WR, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.QUERY",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.DESCRIBE", RD, NG,  None,            None,    SERVER | ESTORE),
     op("VIEW.VERIFY",  RD, NG,   None,            None,    SERVER),
-    op("VIEW.REBUILD", RD, NG,   None,            None,    SERVER),
+    op("VIEW.REBUILD", WR, NG,   None,            None,    SERVER),
     op("VIEW.EXPLAIN", RD, NG,   None,            None,    SERVER),
     op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
@@ -299,18 +427,16 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("PEXPIREAT",    WR, NG,   None,            None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("PTTL",         RD, NG,   None,            None,    SERVER),
     op("RANDOMKEY",    RD, NG,   None,            None,    SERVER | ESTORE),
-    // RENAME/RENAMENX are writes, but the server routes them at the
-    // runtime Op level (Route::Rename → exec_op synthesis) — the
-    // verb-level is_write classification is false by design; the
-    // `write` column mirrors that contract literally.
-    op("RENAME",       RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
-    op("RENAMENX",     RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    // The server runs RENAME/RENAMENX at the runtime Op level
+    // (Route::Rename), which records the move itself.
+    op("RENAME",       WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    op("RENAMENX",     WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("SCAN",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("TIME",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("TOUCH",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("TTL",          RD, NG,   None,            None,    SERVER | ESTORE),
     op("TYPE",         RD, NG,   None,            None,    SERVER | ESTORE),
-    op("UNLINK",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE),
+    op("UNLINK",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | REPLAY),
 ];
 
 /// A confirmed should-exist-but-doesn't hole: `(op, surface, reason)`.
@@ -318,6 +444,14 @@ pub const OP_TABLE: &[OpSpec] = &[
 /// removing its entry is a CI failure, so the ledger can only shrink
 /// truthfully. Categories: F2 = replica-apply holes (replay verbs
 /// missing), F3 = RESP-dispatch holes (facade exists, wire doesn't).
+///
+/// ```
+/// use kevy_resp::ops_table::{KNOWN_GAPS, spec};
+/// for (name, flag, _why) in KNOWN_GAPS {
+///     // a ledgered gap is a surface bit the row really lacks
+///     assert_eq!(spec(name).unwrap().surfaces & flag, 0);
+/// }
+/// ```
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
     (
@@ -325,116 +459,31 @@ pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
         surface::ESTORE,
         "manifest sweep 2026-07-03: scan/hscan/zscan facades exist, sscan missing",
     ),
-    // F2 — server-propagatable writes an embed-as-replica cannot
-    // apply (replay verbs missing). Until closed, embed-as-replica is
-    // only safe for the basic-type verb set.
-    ("SETNX", surface::REPLAY, "F2: replica-apply hole"),
-    ("SETEX", surface::REPLAY, "F2"),
-    ("PSETEX", surface::REPLAY, "F2"),
-    ("MSET", surface::REPLAY, "F2"),
-    ("HMSET", surface::REPLAY, "F2"),
-    ("RPOPLPUSH", surface::REPLAY, "F2"),
-    ("BRPOPLPUSH", surface::REPLAY, "F2"),
-    ("LMOVE", surface::REPLAY, "F2"),
-    ("BLPOP", surface::REPLAY, "F2"),
-    ("BRPOP", surface::REPLAY, "F2"),
-    ("BZPOPMIN", surface::REPLAY, "F2"),
-    ("UNLINK", surface::REPLAY, "F2"),
-    ("GETEX", surface::REPLAY, "F2: embedded getex TTL side-effect logs?  verify at closure"),
-    ("GEOADD", surface::REPLAY, "F2"),
-    ("GEOSEARCHSTORE", surface::REPLAY, "F2"),
-    ("GEORADIUS", surface::REPLAY, "F2"),
-    ("GEORADIUSBYMEMBER", surface::REPLAY, "F2"),
-    ("XADD", surface::REPLAY, "F2"),
-    ("XDEL", surface::REPLAY, "F2"),
-    ("XTRIM", surface::REPLAY, "F2"),
-    ("XSETID", surface::REPLAY, "F2"),
-    ("XGROUP", surface::REPLAY, "F2"),
-    ("XREADGROUP", surface::REPLAY, "F2"),
-    ("XACK", surface::REPLAY, "F2"),
-    ("XCLAIM", surface::REPLAY, "F2"),
-    ("XAUTOCLAIM", surface::REPLAY, "F2"),
 ];
 
 /// Every op name carrying `flag` in its surface bitset.
+///
+/// ```
+/// use kevy_resp::ops_table::{ops_with, surface};
+/// let replayed = ops_with(surface::REPLAY);
+/// assert!(replayed.contains(&"SET"));
+/// assert!(!replayed.contains(&"GET"));
+/// ```
 pub fn ops_with(flag: u16) -> Vec<&'static str> {
     OP_TABLE.iter().filter(|o| o.surfaces & flag != 0).map(|o| o.name).collect()
 }
 
 /// Look up a row by canonical (uppercase) name.
+///
+/// ```
+/// use kevy_resp::ops_table::spec;
+/// assert!(spec("HSET").is_some_and(|s| s.write));
+/// assert!(spec("NOSUCHCMD").is_none());
+/// ```
 pub fn spec(name: &str) -> Option<&'static OpSpec> {
     OP_TABLE.iter().find(|o| o.name == name)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_duplicate_names() {
-        let mut seen = std::collections::HashSet::new();
-        for o in OP_TABLE {
-            assert!(seen.insert(o.name), "duplicate OP_TABLE row: {}", o.name);
-        }
-    }
-
-    #[test]
-    fn growing_implies_write_and_wake_implies_write() {
-        for o in OP_TABLE {
-            if o.growing {
-                assert!(o.write, "{}: growing but not write", o.name);
-            }
-            if o.wake_idx.is_some() {
-                assert!(o.write, "{}: wakes waiters but not write", o.name);
-            }
-        }
-    }
-
-    #[test]
-    fn known_gaps_reference_real_ops_and_are_actual_holes() {
-        for (name, flag, _) in KNOWN_GAPS {
-            let s = spec(name).unwrap_or_else(|| panic!("gap entry for unknown op {name}"));
-            assert_eq!(
-                s.surfaces & flag,
-                0,
-                "{name}: KNOWN_GAPS says surface {flag:#b} is missing, but the table has the bit set — \
-                 the gap was closed; remove the ledger entry"
-            );
-        }
-    }
-
-    #[test]
-    fn every_logged_verb_is_replayable() {
-        // The no-silent-data-loss invariant: an op present on any embedded write
-        // surface (facade/pipe/atomic) that is a write MUST have a
-        // replay arm — unless it is explicitly ledgered.
-        for o in OP_TABLE {
-            let on_embedded_write =
-                o.write && o.surfaces & (surface::ESTORE | surface::PIPE | surface::ATOMIC) != 0;
-            if !on_embedded_write {
-                continue;
-            }
-            let replayable = o.surfaces & surface::REPLAY != 0;
-            let ledgered =
-                KNOWN_GAPS.iter().any(|(n, f, _)| n == &o.name && f & surface::REPLAY != 0);
-            // Ops whose AOF form is a DIFFERENT verb (documented effect
-            // logging): SPOP→SREM handled by SPOP retaining REPLAY for
-            // legacy frames; MSET/SETNX/GETEX log SET/PEXPIREAT forms.
-            let logs_as_other_verb = matches!(
-                o.name,
-                "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
-                    // Algebra stores: effect-logged as DEL + plain ZADD/SADD.
-                    | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
-                    | "ZPOPMIN.BELOW"
-                    | "HEXPIRE" | "HPEXPIRE"
-                    | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE"
-            );
-            assert!(
-                replayable || ledgered || logs_as_other_verb,
-                "{}: embedded write surface without a replay arm and not ledgered — \
-                 this is the silent-data-loss-on-reopen class",
-                o.name
-            );
-        }
-    }
-}
+#[path = "ops_table_tests.rs"]
+mod tests;

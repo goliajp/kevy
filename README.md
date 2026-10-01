@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 kevy ships in three forms, all built from the same engine:
 
 - **Server** — a Redis-wire-compatible daemon. Speaks RESP2, replies are
-  reply-checked byte-for-byte against valkey 9.1 for 94 commands.
+  reply-checked byte-for-byte against valkey 9.1 for 99 commands.
 - **Embedded library** — `kevy-embedded` is the same engine without the
   network. Drop it into a Rust binary and call `Store` directly. Pure
   Rust, zero dependencies, feature-tiered from a bare `core` KV up to
@@ -54,7 +54,9 @@ bounded staleness, quorum-fenced writes) — see
 [docs/availability.md](docs/availability.md).
 4.0 sets it in stone: the public Rust API was consolidated once —
 one error type (`KevyError`), one builder, borrowed write faces
-([docs/UPGRADING.md](docs/UPGRADING.md)) — and is frozen add-only;
+([docs/UPGRADING.md](docs/UPGRADING.md)) — and stayed add-only through
+6.x (7.0 changed it once more, to follow the Rust API Guidelines:
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md));
 the runtime is instance-scoped, so one process can run several
 independent kevys; and the same engine now ships to the browser and
 to the edge (the two sections below).
@@ -74,7 +76,7 @@ Every headline number is gated and re-measured on every train:
 hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
 recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
 [the cookbook](docs/cookbook.md), and
-[the validation ledger](bench/VALIDATION-LEDGER.md).
+[the performance page](PERFORMANCE.md).
 
 ## Which one do I want?
 
@@ -115,7 +117,7 @@ their language registries:
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
 pip install kevy                                 # Python
 dotnet add package kevy                          # C#
-go get github.com/goliajp/kevy-go/v6             # Go
+go get github.com/goliajp/kevy-go/v7             # Go
 flutter pub add flutter_kevy                     # Flutter
 npx expo install expo-kevy                       # React Native (Expo)
 npm i react-native-kevy-nitro                    # React Native (Nitro)
@@ -123,7 +125,7 @@ npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
 <dependency>                                     <!-- Java / Kotlin -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 
@@ -228,7 +230,7 @@ kevy runs in the browser as a real store: the npm package
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) ships
 the engine compiled to `wasm32-unknown-unknown` behind a hand-written
 ES-module loader — no wasm-bindgen, zero dependencies on either side
-of the boundary; six files, 496 KB packed (481 KB gzipped over the wire).
+of the boundary; seven files, 653 KB packed (639 KB gzipped over the wire).
 
 ```sh
 npm install @goliapkg/kevy
@@ -278,28 +280,30 @@ sensor-cache example.
 
 A representative slice from the bare-metal benchmark suite (16-core
 Linux box, server and client pinned to disjoint cores, TCP loopback).
-The KV rows below are `bench/arena.sh`, re-measured 2026-07-19:
-median-of-5, throughput read from each server's own command counter
-over a timed window. Full method, every workload, and the caveats live
-in [`bench/REPORT.md`](bench/REPORT.md); every figure is reproducible
+The KV rows below are `bench/arena.sh`, re-measured 2026-10-01 (kevy 7.0.0):
+each engine on 4 cores, the per-cell median of 15 timed windows (3
+rounds of 5), throughput read from each server's own command counter.
+A `≥` marks a number the load generator set, so the engine does at least
+that; a competitor held back that way gets no ratio (Dragonfly's GET
+below). Full method, every workload, and the caveats live
+in [`PERFORMANCE.md`](PERFORMANCE.md); every figure is reproducible
 from a script in [`bench/`](bench/).
 
 | Workload | kevy | valkey 9.1 | Ratio |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 7.49 M/s | 2.98 M/s | **2.51×** |
-| `SET -c 50 -P 16` | 6.82 M/s | 1.68 M/s | **4.05×** |
+| `GET -c 50 -P 16` | 8.73 M/s | 4.04 M/s | **2.16×** |
+| `SET -c 50 -P 16` | ≥ 7.41 M/s | 2.01 M/s | **≥ 3.68×** |
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
 
-The same `GET -c 50 -P 16` face, four engines on one box — kevy at 7.49 M/s against each (median-of-5; method and per-engine cycle
-accounting in
-[`bench/REPORT.md`](bench/REPORT.md)):
+The same `GET -c 50 -P 16` face, four engines on one box — kevy at 8.73 M/s against each (the same runs; method in
+[`PERFORMANCE.md`](PERFORMANCE.md)):
 
 | Engine | kevy's lead |
 |---|---:|
-| valkey 9.1.2 | **2.34×** |
-| redis 8.10.1 | **1.26×** |
-| dragonfly 1.40.2 | **2.62×** |
+| valkey 9.1.2 | **2.16×** |
+| redis 8.10.2 | **1.60×** |
+| dragonfly 2.0.0 | — |
 
 These ratios are **lower than the ones published before 2026-07-19**,
 and the reason is the ruler, not the engines. The earlier figures read
@@ -313,7 +317,7 @@ The pub/sub and embedded rows are from their own harnesses and were
 not part of this re-measurement.
 
 And the serving face vs redis-stack 7.4.7 (RediSearch), same seeded
-corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
+corpora, recall-aligned ([`PERFORMANCE.md`](PERFORMANCE.md)):
 
 | Query class | kevy | RediSearch | Verdict |
 |---|---:|---:|---|
@@ -325,12 +329,19 @@ corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
 
-**Upgrading?** [docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md)
-is the current hop: nothing to change in code and nothing on disk moves,
-but five answers that were wrong are now right — `GEOSEARCH` near the
-poles, `used_memory` for `APPEND`-grown strings, overflowing month and year
-bounds, a `regexp_*` alternation, and io_uring disconnects — each measured
-against 6.3.0. The hop before it is
+**Upgrading?** [docs/upgrading-6.4-to-7.0.md](docs/upgrading-6.4-to-7.0.md)
+is the current hop: nothing to change for a wire client and the data
+directory opens as it is. Before swapping the binary, check a `maxmemory`
+setting (`used_memory` reads about 1.5 times higher for the same data) and,
+with replicas, upgrade the primary first. A Rust caller follows
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md), a Go caller imports
+`kevy-go/v7`, and a script that runs `kevy-cli doctor` or another tool as
+a bare word puts it after `--kevy`. The guide also says what to do before
+going back to 6.4, and which data-losing defects were fixed; every
+statement in it about mixing versions was measured against the 6.4.0
+binary.
+The hops before it are
+[docs/upgrading-6.3-to-6.4.md](docs/upgrading-6.3-to-6.4.md) and
 [docs/upgrading-6.2-to-6.3.md](docs/upgrading-6.2-to-6.3.md).
 [docs/UPGRADING.md](docs/UPGRADING.md) covers the
 older majors — 3.x → 4.0 (wire and disk carry over; the Rust
@@ -340,7 +351,7 @@ as-is across majors in the upgrade direction.
 
 ## Compatibility
 
-94 commands are reply-checked byte-for-byte against valkey 9.1,
+99 commands are reply-checked byte-for-byte against valkey 9.1,
 covering all five Redis data types (String, Hash, List, Set, Sorted
 Set) plus Streams, Pub/Sub (channel + pattern), Transactions (`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`), Blocking pops, and the standard
@@ -387,7 +398,7 @@ All run unmodified against a default `kevy --port 6379` instance.
 | [`kevy-wasm`](crates/kevy-wasm) | The browser build: hand-written C ABI + the `@goliapkg/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua scripting bridge (backed by the [luna](https://github.com/goliajp/luna) runtime) |
 
-The remaining crates (`kevy-store`, `kevy-rt`, `kevy-persist`,
+The remaining crates (`kevy-store`, `kevy-verbs`, `kevy-rt`, `kevy-persist`,
 `kevy-sys`, `kevy-elect`, `kevy-replicate`, `kevy-scope`,
 `kevy-lua-host`, `kevy-chaos`, `kevy-bench`, `kevy-pubsub-bench`) are
 internal infrastructure for the server and embedded library — they are
@@ -395,7 +406,7 @@ published so the workspace builds reproducibly, but end users typically
 reach for the surfaces above.
 
 **For AI agents & tools**: [`llms.txt`](llms.txt) (machine-first index) ·
-[verb reference](docs/verb-reference.md) (all 189 verbs, generated from the
+[verb reference](docs/verb-reference.md) (all 209 verbs, generated from the
 server's own metadata — the same rows `COMMAND DOCS` serves).
 
 ## Topic guides
@@ -410,6 +421,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Replication | [`docs/replication.md`](docs/replication.md) |
 | Cluster mode | [`docs/cluster.md`](docs/cluster.md) |
 | Deploying behind a proxy (TLS) | [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) |
+| Encrypted links between nodes | [`docs/encrypted-links.md`](docs/encrypted-links.md) |
 | Lua scripting | [`docs/lua.md`](docs/lua.md) |
 | Unix-domain socket | [`docs/uds.md`](docs/uds.md) |
 | Async client | [`docs/async.md`](docs/async.md) |
@@ -418,7 +430,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Tauri apps | [`docs/tauri.md`](docs/tauri.md) |
 | IoT & feature tiers | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard sizing | [`docs/accept-shards.md`](docs/accept-shards.md) |
-| Opt-in allocator (`kevy-alloc`) | [`docs/alloc.md`](docs/alloc.md) |
+| The server's allocator (`kevy-alloc`) | [`docs/alloc.md`](docs/alloc.md) |
 | Error reply reference | [`docs/error-replies.md`](docs/error-replies.md) |
 
 ## Out of scope
@@ -431,6 +443,10 @@ permanently out of scope and there is no plan to add them:
   authentication proxy if you need either —
   [`docs/deploy-behind-a-proxy.md`](docs/deploy-behind-a-proxy.md) is
   the recipe, including why an HTTP reverse proxy cannot do this job.
+  kevy's own encryption is optional and off unless configured: an
+  encrypted client port for Rust clients over `kevys://`, and encrypted
+  replication and election links between nodes —
+  [`docs/encrypted-links.md`](docs/encrypted-links.md).
 - **Multi-DC active-active and cross-DC replication.** Single-DC only.
 - **Multi-database `SELECT`.** One keyspace per server.
 - **ACL.** Single trust domain.
@@ -453,13 +469,15 @@ build for `wasm32-unknown-unknown` and `wasm32-wasip1`.
 
 ## Roadmap and stability
 
-The workspace is on the v4.x line. Persistence format, RESP wire
+The workspace is on the 7.x line. Persistence format, RESP wire
 protocol, public Rust API, CLI flags, env vars, TOML schema, and
 eviction semantics are add-only across each major line — and the
-on-disk formats carry across majors: a snapshot or AOF written by
-v2.0 loads as-is on every 3.x and 4.x build (see
-[docs/UPGRADING.md](docs/UPGRADING.md)). Additive features land in
-minor releases without breaking earlier code. The full stability
+on-disk formats carry across majors in the upgrade direction: a
+snapshot or AOF written by v2.0 loads as-is on every 3.x and 4.x
+build, and 7.0 opens a 6.4 directory as it is (see
+[docs/UPGRADING.md](docs/UPGRADING.md) and each hop's guide). Going
+back a major is a documented step, not a guarantee. Additive features
+land in minor releases without breaking earlier code. The full stability
 contract is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment).
 

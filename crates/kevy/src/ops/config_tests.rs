@@ -216,11 +216,7 @@ fn config_rewrite_without_source_returns_no_config_file_error() {
 fn config_rewrite_writes_atomic_round_trip_file() {
     // Direct test of `atomic_write` + `to_toml_string` since the
     // handler short-circuits in the test binary (no source file).
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-config-rewrite-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("config-rewrite");
     let path = dir.join("kevy.toml");
 
     let mut cfg = Config::default();
@@ -245,4 +241,55 @@ fn config_unknown_subcommand_errors() {
     let s = String::from_utf8(out).unwrap();
     assert!(s.starts_with("-ERR"));
     assert!(s.contains("unknown CONFIG subcommand"));
+}
+
+/// The refusal `key = value` gets, as its `Debug` form.
+fn refusal(key: &[u8], value: &[u8]) -> String {
+    format!("{:?}", apply_hot_set(&mut Config::default(), key, value).unwrap_err())
+}
+
+#[test]
+fn apply_hot_set_refuses_bytes_that_are_not_utf8() {
+    assert_eq!(refusal(b"max\xffmemory", b"1"), "Unknown(\"max\u{fffd}memory\")");
+    assert_eq!(
+        refusal(b"maxmemory", b"\xff"),
+        "BadValue { key: \"maxmemory\", reason: \"value is not valid UTF-8\" }"
+    );
+}
+
+#[test]
+fn apply_hot_set_tiering_budget_takes_every_budget_form_and_names_a_bad_one() {
+    assert_eq!(
+        try_set("tiering-budget", "25%").unwrap().tiering.budget.unwrap().to_config_string(),
+        "25%"
+    );
+    let got = refusal(b"tiering-budget", b"lots");
+    assert!(
+        got.starts_with("BadValue { key: \"tiering-budget\", reason: \"tiering budget:"),
+        "{got}"
+    );
+}
+
+#[test]
+fn apply_hot_set_aof_rewrite_settings_parse_and_name_a_bad_value() {
+    let cfg = try_set("auto-aof-rewrite-bytes", "64mb").unwrap();
+    assert_eq!(cfg.persistence.auto_aof_rewrite_bytes, 64 << 20);
+    let cfg = try_set("auto-aof-rewrite-interval-secs", "300").unwrap();
+    assert_eq!(cfg.persistence.auto_aof_rewrite_interval_secs, 300);
+    for key in ["auto-aof-rewrite-percentage", "auto-aof-rewrite-interval-secs"] {
+        let want =
+            format!("BadValue {{ key: \"{key}\", reason: \"expected a non-negative integer\" }}");
+        assert_eq!(refusal(key.as_bytes(), b"soon"), want);
+    }
+    for key in ["auto-aof-rewrite-min-size", "auto-aof-rewrite-bytes"] {
+        let got = refusal(key.as_bytes(), b"big");
+        assert!(got.starts_with(&format!("BadValue {{ key: \"{key}\", reason: \"")), "{got}");
+        assert!(!got.ends_with("reason: \"\" }"), "{got}");
+    }
+}
+
+#[test]
+fn set_persistence_does_not_own_a_key_outside_its_section() {
+    let err = set_persistence(&mut Config::default(), "maxmemory", "1").unwrap_err();
+    assert_eq!(format!("{err:?}"), "Unknown(\"maxmemory\")");
 }

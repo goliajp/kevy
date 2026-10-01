@@ -36,7 +36,7 @@ index already has). The declaration buys you compiled access paths, a
 > **Declaration never panics.** `TABLE.DECLARE` / `Store::table_declare`
 > answer every invalid spec — unknown columns, colliding names, missing
 > PK, anything — with a named error, and a refused declare installs
-> nothing. This is a hard guarantee, enforced by `compile_table`
+> nothing. This is a hard guarantee, enforced by `TableSpec::compile`
 > validating for itself and fuzzed continuously (`table_spec`): a bad
 > spec on your boot path is a log line, not a restart loop.
 
@@ -58,7 +58,7 @@ dispatch oracle byte-compares the two faces in CI), and it is
 
 Everything a compiled index does is what a hand-declared `IDX.CREATE`
 does: same backfill behavior, same `-INDEXBUILDING` discipline, same
-sidecar persistence, same budget refusal
+catalog recording, same budget refusal
 ([indexes.md](indexes.md)). `TABLE.DROP` drops the table and every
 index it compiled.
 
@@ -326,14 +326,14 @@ SQL-to-kevy mapping for each of those lives in
 
 ## kevy-sql: compile a schema, don't send one
 
-`kevy-sql` (and its `kevy-cli sql` face) is a **declaration-time
+`kevy-sql` (and its `kevy-cli --kevy sql` face) is a **declaration-time
 compiler** — it reads a PG/MySQL-dialect schema file once, like a
 migration tool, and emits the explicit declarations:
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # what becomes of every query
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # what becomes of every query
 ```
 
 `compile` and `plan` read the same file and answer different questions.
@@ -344,7 +344,7 @@ what the other 6 need"* is what someone arriving with a schema is
 actually asking:
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders
@@ -406,7 +406,7 @@ match store.table_ensure(spec)? {    // the boot verb: validated,
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // named fresh counters
 assert_eq!(report.per_index[0].missing, 0);        //   + spot check
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 The wire form (`db.cmd("TABLE.DECLARE", …)`) works too and parses
@@ -433,6 +433,8 @@ one untaken branch.
 ## See also
 
 - [indexes.md](indexes.md) — the index engine tables compile into.
+- [relational-cli.md](relational-cli.md) — kevy-cli's tools for tables:
+  describe, query, dump and restore, CSV, `sql run`.
 - [tiering.md](tiering.md) — the companion feature: indexes hot,
   rows cold.
 - [rds-workloads.md](rds-workloads.md) — the full SQL-vocabulary

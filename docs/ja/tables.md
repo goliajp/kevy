@@ -17,7 +17,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **手書きインデックスからの移行なら**、まず [table-migration.md](table-migration.md) を読んでください——本番で対価を払って得た 8 つの教訓と、テーブルが存在する理由そのものである実測ドリフト（89 % が書かれず、76 % が消されず）が載っています。
 
-> **宣言はけっしてpanicしません。** `TABLE.DECLARE` / `Store::table_declare`は、不正なspec——未知のカラム、名前の衝突、PKの欠落、その他なんであれ——のすべてに名前つきのエラーで答え、拒否された宣言は何ひとつインストールしません。これは硬い保証であり、`compile_table`が自分自身で検証することによって強制され、継続的にfuzzされています（`table_spec`）：起動パス上の悪いspecは、再起動ループではなく1行のログです。
+> **宣言はけっしてpanicしません。** `TABLE.DECLARE` / `Store::table_declare`は、不正なspec——未知のカラム、名前の衝突、PKの欠落、その他なんであれ——のすべてに名前つきのエラーで答え、拒否された宣言は何ひとつインストールしません。これは硬い保証であり、`TableSpec::compile`が自分自身で検証することによって強制され、継続的にfuzzされています（`table_spec`）：起動パス上の悪いspecは、再起動ループではなく1行のログです。
 
 ## 宣言モデル
 
@@ -30,7 +30,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 コンパイルされた名前はひとつの名前空間を共有します——`<table>.<col>` と `<table>.<orderpath>`——ので、インデックス済みカラムと同名の ORDERPATH は宣言時に、名前つきで拒否されます。コンパイルはサーバーと組み込みストアが共有する単一の実装で（dispatch oracle が CI で両面をバイト比較します）、しかも**原子的**です。どんなエラーでも何もインストールされません——半分だけ宣言されたテーブルは存在しません。
 
-コンパイルされたインデックスがすることは、手書きの `IDX.CREATE` がすることと同じです。同じ埋め戻しの挙動、同じ `-INDEXBUILDING` の規律、同じサイドカー永続化、同じ予算による拒否（[indexes.md](indexes.md)）。`TABLE.DROP` はテーブルと、それがコンパイルしたすべてのインデックスを落とします。
+コンパイルされたインデックスがすることは、手書きの `IDX.CREATE` がすることと同じです。同じ埋め戻しの挙動、同じ `-INDEXBUILDING` の規律、同じカタログの記録、同じ予算による拒否（[indexes.md](indexes.md)）。`TABLE.DROP` はテーブルと、それがコンパイルしたすべてのインデックスを落とします。
 
 ## 文法
 
@@ -145,18 +145,18 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## kevy-sql——スキーマは送るのではなく、コンパイルする
 
-`kevy-sql`（とその `kevy-cli sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
+`kevy-sql`（とその `kevy-cli --kevy sql` の顔）は**宣言時コンパイラ**です——マイグレーションツールのように、PG/MySQL 方言のスキーマファイルを一度だけ読み、明示的な宣言を出力します。
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # 各クエリがどうなるか
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # 各クエリがどうなるか
 ```
 
 `compile` と `plan` は同じファイルを読み、別の問いに答えます。`compile` はビルド時——実行するコマンドを生み出すので、供給できないビューが一つあればそれはエラーで、そこで止まります。`plan` は移行の当日です。**すべての**クエリの行き先を報告します。*「40 本のうち 34 本は動く、残り 6 本には何が要る」*こそ、スキーマを携えて来た人が実際に訊いていることだからです：
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders
@@ -200,7 +200,7 @@ match store.table_ensure(spec)? {    // 起動の動詞：検証・コンパイ�
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // 名前つきの新鮮なカウンタ
 assert_eq!(report.per_index[0].missing, 0);        //   + 抜き取り検査
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 ワイヤ形式（`db.cmd("TABLE.DECLARE", …)`）も使え、同一の共有文法でパースされます——サーバーと組み込みのバイト一致は、CI の dispatch oracle が固定しています。
@@ -214,6 +214,7 @@ store.table_drop(b"user");
 ## 参照
 
 - [indexes.md](indexes.md)——テーブルのコンパイル先であるインデックスエンジン。
+- [relational-cli.md](relational-cli.md)——テーブルを扱う kevy-cli のツール。describe、クエリ、ダンプと復元、CSV、`sql run`。
 - [tiering.md](tiering.md)——一緒に設計されたもう半分。インデックスはホット、行はコールド。
 - [rds-workloads.md](rds-workloads.md)——SQL 語彙の完全な対応表(何がコンパイルでき、何がレシピで、何が拒否されるか)。
 - [cookbook.md](cookbook.md)——複合順序とスキーマ移植のレシピ。

@@ -2,7 +2,8 @@
 
 kevy runs in the browser as a real store, not a compile-time curiosity:
 the npm package [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)
-ships the engine (KV + TTL + counters + scans + pub/sub) compiled to
+ships the engine (KV + TTL + counters + scans + pub/sub, secondary
+indexes, streams with consumer groups, geo) compiled to
 `wasm32-unknown-unknown` behind a hand-written ES-module loader, with
 durable persistence over OPFS (IndexedDB fallback) and pub/sub that
 crosses tabs. The same crates also build for `wasm32-wasip1`, so the
@@ -45,9 +46,9 @@ the checksummed v2 record format (`KEVYAOF2` — see
 at replay instead of silently applied. A log stored by a pre-4.0 tab
 replays unchanged (v1, read forever) and upgrades to v2 at its first
 compaction; a log pumped out of a browser tab still replays in a
-native kevy unchanged, and vice versa. The package is six files
-(496 KB packed, 481 KB gzipped over the wire): the wasm module, the loader, the OPFS worker,
-hand-written TypeScript typings, and the usual README + manifest.
+native kevy unchanged, and vice versa. The package is seven files
+(653 KB packed, 639 KB gzipped over the wire): the wasm module, the loader, the OPFS worker,
+hand-written TypeScript typings, and the usual README, changelog and manifest.
 Zero dependencies on both sides of the boundary.
 
 ## The loader API
@@ -130,6 +131,22 @@ frames to storage once per microtask, so a synchronous burst of
 writes costs one storage append. `await db.flush()` is the durability
 barrier; a resolved `flush()` means the backend has flushed to disk.
 
+That holds for writes through `cmd` too. The engine hands the pump the
+frames a native AOF would hold for the command, not its argv: an
+`XADD *` is recorded with the id it chose, a group read with the
+deliveries it made, a relative expiry with its absolute deadline. A
+stream and its consumer groups come back after a reload with the same
+entries, pending lists and last-delivered ids. Up to 6.x, writes
+through `cmd` never reached the log and were lost at the next open
+unless a compaction had run.
+
+Declared indexes, views and tables come back too. Each `IDX.CREATE`,
+`VIEW.CREATE`, `TABLE.DECLARE` or drop records the whole catalog as one
+frame, and a compacted image carries the latest one; on the next open
+the catalog is installed and the indexes rebuild from the replayed
+keys, so a query after a reload answers as it did before. Until 7.0
+they were lost on every reload.
+
 **The log a browser tab writes replays in a native kevy unchanged** —
 same magic header, same frames. Copy the `.aof` out of OPFS and point
 a native embedded store (or the server) at it, and the keyspace comes
@@ -154,6 +171,32 @@ an AOF rewrite). `compact()` forces one before a snapshot or export.
 **localStorage is deliberately not a backend**: a ~5 MB quota, a
 synchronous API that blocks the main thread on every write, and
 UTF-16 string-only storage disqualify it as a write log.
+
+## Streams, geo, and blocking reads
+
+`cmd` reaches the stream commands (`XADD`, `XRANGE`, `XREAD`, `XGROUP`,
+`XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO`, …)
+and the geo commands (`GEOADD`, `GEOSEARCH`, `GEODIST`, …), the same
+implementation the server runs.
+
+Nothing in the browser waits. The module runs on the page's or a
+worker's one thread, and a call that parked it would freeze the tab
+without ever seeing the write that could wake it. So `XREAD … BLOCK`
+and `XREADGROUP … BLOCK` answer an error (`ERR the embedded engine
+cannot block; call without BLOCK`), the same answer every embedded
+store gives, and the blocking list pops (`BLPOP`, `BRPOP`, …) are not
+in the embedded surface at all. Read without `BLOCK` on a timer, or
+publish on a channel next to each `XADD` and read when the message
+arrives:
+
+```js
+db.subscribe("orders:new", () => {
+  const got = db.cmd("XREADGROUP", "GROUP", "workers", "tab-1", "COUNT", "10", "STREAMS", "orders", ">");
+  // … handle, then XACK
+});
+db.cmd("XADD", "orders", "*", "sku", "A-1");
+db.publish("orders:new", "");
+```
 
 ## Cross-tab pub/sub
 
@@ -269,24 +312,23 @@ kevy is the hot in-memory tier.
 
 **Does the full command surface work in the browser?** Most of it.
 The module is built with every feature a browser can host — `core`,
-`persist`, `index`, `text`, `vector` — so `cmd` reaches the KV, TTL,
-counter, scan and pub/sub surfaces *and* `IDX.*` (secondary indexes,
-full-text, vector search), `VIEW.*` and `TABLE.*`. It was the smaller
+`persist`, `index`, `text`, `vector`, `streams-geo` — so `cmd` reaches
+the KV, TTL, counter, scan and pub/sub surfaces, `IDX.*` (secondary
+indexes, full-text, vector search), `VIEW.*` and `TABLE.*`, and the
+stream and geo commands (7.0 and later). It was the smaller
 cut until 2026-08, which is how the project's own landing page came to
 demonstrate secondary indexes against a build compiled without them.
 
 **Which published version has it:** the npm package at 5.1.0 and earlier
 carries the smaller cut — `IDX.*`, `VIEW.*` and `TABLE.*` answer
-`unknown command` there. The wider build is on the main branch and on
-kevy.golia.jp; it reaches npm with the next published version. Build from
-the checkout to have it sooner (`cargo build -p kevy-wasm --target
-wasm32-unknown-unknown --release`).
+`unknown command` there. Streams and geo are in the package from 7.0.0;
+before that they answer `unknown command`.
 
 What is left out needs something a browser cannot provide rather than
 bytes saved: `replicate` a network peer, `listener` a TCP socket,
-`tier` a disk directory. Streams, transactions, geo and scripting are
-outside the embedded engine's verb surface on every platform — the
-boundary is the ESTORE_OPS manifest, not this build.
+`tier` a disk directory. Transactions and scripting are outside the
+embedded engine's verb surface on every platform, and blocking reads
+are refused (see above).
 
 The Rust API on wasm targets exposes the full `kevy-embedded` feature
 set of whichever features you compile in.

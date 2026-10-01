@@ -94,7 +94,7 @@ UDS vs TCP loopback on the same kevy binary:
 | Observability | `lsof` / `ss -xl` | `ss -tln`, `netstat`, `tcpdump` |
 | Client config | `unix:///path` or `-s /path` | `host:port` |
 
-The throughput gain is workload-shape dependent — small-payload low-connection cells gain the most (the loopback per-op tax dominated them); CPU-saturated cells gain less (the transport wasn't the floor). See [bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md) for measured numbers.
+The throughput gain is workload-shape dependent — small-payload low-connection cells gain the most (the loopback per-op tax dominated them); CPU-saturated cells gain less (the transport wasn't the floor). See [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) for measured numbers.
 
 ## FAQ
 

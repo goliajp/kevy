@@ -159,7 +159,7 @@ Range queries: `zrange`, `zrevrange`, `zrange_by_score`,
 ### Bitmaps
 
 ```rust
-use kevy_embedded::{Config, Store};
+use kevy_embedded::{BitOp, Config, Store};
 
 let store = Store::open(Config::default().without_aof())?;
 
@@ -170,7 +170,8 @@ assert_eq!(store.bitcount(b"bloom", None)?, 1);
 store.setbit(b"a", 0, 1)?;
 store.setbit(b"a", 7, 1)?;
 store.setbit(b"b", 0, 1)?;
-store.bitop("and", b"dest", &[&b"a"[..], &b"b"[..]])?;
+store.bitop(BitOp::And, b"dest", &[&b"a"[..], &b"b"[..]])?;
+assert_eq!(store.getbit(b"dest", 0)?, 1); // set in both `a` and `b`
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
@@ -200,16 +201,16 @@ let val = store.getex(b"session", Duration::from_secs(60))?;
 ### In-process pub/sub
 
 ```rust
-use kevy_embedded::{Config, PubsubFrame, Store};
+use kevy_embedded::{Config, PubsubEvent, Store};
 
 let store = Store::open(Config::default().without_aof())?;
 let publisher = store.clone();
-let mut sub = store.subscribe(&[&b"news"[..]]);
+let sub = store.subscribe(&[&b"news"[..]]);
 let _ack = sub.recv()?;                         // drain the SUBSCRIBE ack
 
 publisher.publish(b"news", b"hello");
 match sub.recv()? {
-    PubsubFrame::Message { channel, payload } => {
+    PubsubEvent::Message { channel, payload } => {
         assert_eq!(channel, b"news");
         assert_eq!(payload, b"hello");
     }
@@ -241,6 +242,8 @@ assert_eq!(user_keys.len(), 1_000);
 
 The `keys_iter`, `hash_iter`, and `zset_iter` wrappers turn the raw
 `SCAN` / `HSCAN` / `ZSCAN` cursors into ordinary Rust iterators.
+`keys_iter` holds one page of keys at a time, whatever the size of the
+keyspace.
 
 ## Three transaction shapes — which to pick
 
@@ -261,10 +264,10 @@ use kevy_embedded::{Config, Store};
 let store = Store::open(Config::default().without_aof())?;
 
 // Both keys share the {user:42} hashtag → same shard.
-let result = store.atomic(b"{user:42}:counter", |s| {
+let result = store.atomic(|s| {
     let n = s.incr(b"{user:42}:counter")?;
     if n == 1 {
-        s.set(b"{user:42}:seen", b"first")?;
+        s.set(b"{user:42}:seen", b"first");
     }
     Ok(n)
 })?;
@@ -281,9 +284,8 @@ let store = Store::open(Config::default().without_aof())?;
 
 store.atomic_all_shards(|s| {
     let count = s.incr(b"global:counter")?;
-    s.set(b"users:last_id", count.to_string().as_bytes())?;
-    s.hset(b"users:by_id", &[(count.to_string().as_bytes(),
-                              b"new")])?;
+    s.set(b"users:last_id", count.to_string().as_bytes());
+    s.hset(b"users:by_id", &[(count.to_string().as_bytes(), &b"new"[..])])?;
     Ok(())
 })?;
 # Ok::<(), kevy_embedded::KevyError>(())
@@ -302,15 +304,16 @@ let store = Store::open(Config::default().without_aof())?;
 
 let mut p = store.pipeline();
 for i in 0..1000 {
-    p.set(format!("k{i}").as_bytes(), b"v");
+    p = p.set(format!("k{i}").as_bytes(), b"v");
 }
-let replies = p.execute()?;        // one fsync, 1000 entries
-assert_eq!(replies.len(), 1000);
+assert_eq!(p.len(), 1000);
+p.commit()?;                       // one fsync per shard for all 1000
+assert_eq!(store.get(b"k999")?, Some(b"v".to_vec()));
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Each command commits independently, so a single command failing does
-not roll back its neighbours. One fsync at the end of `execute()`
+not roll back its neighbours. One fsync at the end of `commit()`
 amortises the cost across the batch.
 
 ## Persistence
@@ -319,7 +322,7 @@ amortises the cost across the batch.
 `Store::open` first loads the snapshot, then replays the AOF, so a
 fresh process resumes exactly where the previous one left off.
 
-```rust
+```rust,no_run
 use kevy_embedded::{AppendFsync, Config, Store};
 
 let store = Store::open(
@@ -333,8 +336,8 @@ let store = Store::open(
 | `AppendFsync` | Max data loss on crash | Throughput vs `EverySec` |
 |---|---|---|
 | `Always` | 0 bytes | ~50% |
-| `EverySec` (default) | ≤ 1 second | baseline |
-| `No` | up to ~30 s (kernel pagecache flush) | slightly faster |
+| `EverySec` (default) | power loss: about 1 s + one reaper tick + one fsync; killed process: at most one reaper tick (~100 ms) of writes | baseline |
+| `No` | killed process: at most one reaper tick (~100 ms) of writes; power loss: whatever the kernel had not written back (up to ~30 s) | slightly faster |
 
 Compaction:
 
@@ -396,7 +399,7 @@ Three deployment shapes, all backed by the same `Store` API.
 
 The default. Reads and writes hit the in-process keyspace.
 
-```rust
+```rust,no_run
 use kevy_embedded::{Config, Store};
 
 let store = Store::open(Config::default().with_persist("./data"))?;
@@ -407,7 +410,8 @@ store.set(b"k", b"v")?;
 ### Embed as a read replica
 
 Subscribe to a kevy server primary's replication stream. Every applied
-mutation flows into the in-process `Store` over RESP. Local reads pay
+mutation flows into the in-process `Store` over RESP, except stream and
+geo writes, which the embedded engine has no type for. Local reads pay
 zero network round-trip; local writes return `READONLY`.
 
 ```rust
@@ -453,13 +457,14 @@ for the server-side TOML and the `MOVE-SCOPE` migration protocol.
 `kevy-client` accepts both `mem://` (in-process via `kevy-embedded`)
 and `kevy://host:port` (TCP):
 
-```rust,no_run
+```rust
 use kevy_client::Connection;
 
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://app".into());
 let mut conn = Connection::connect(&url)?;
 conn.set(b"k", b"v")?;
+assert_eq!(conn.get(b"k")?, Some(b"v".to_vec()));
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 
@@ -482,12 +487,14 @@ never branches on transport.
 
 For very long-running embedded use:
 
-```rust,no_run
+```rust
 # use kevy_embedded::{Config, Store};
-# let store = Store::open(Config::default().without_aof())?;
+# let dir = kevy_tmpdir::TmpDir::new("embedded-maintenance");
+# let store = Store::open(Config::default().with_persist(dir.path()))?;
 store.tick();                  // active TTL reaper
 store.save_snapshot()?;        // RDB-style dump for restart speed
 store.rewrite_aof()?;          // compact AOF, drop redundant writes
+# assert!(dir.path().join("dump-0.rdb").exists());
 # Ok::<(), kevy_embedded::KevyError>(())
 ```
 

@@ -1,0 +1,82 @@
+//! The connection a kevy-cli tool talks through.
+//!
+//! A tool needs two things from a server: one request and its reply, and a
+//! pre-encoded batch with its replies. Both connections kevy-cli has
+//! provide them — [`RespClient`] (plain TCP, what the tools grew up on) and
+//! the redis-cli half's connection, which also authenticates, speaks unix
+//! sockets and URIs, and selects a database. Tools take `&mut dyn Link`, so
+//! `kevy-cli --kevy <tool>` runs them on the same connection every other
+//! command uses.
+//!
+//! ```
+//! use kevy_cli::link::Link;
+//! # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+//! let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+//! kevy_cli::doctor::run(&mut client, kevy_cli::doctor::OnWarning::Report)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
+use kevy_resp_client::{Reply, RespClient};
+use std::io;
+
+/// A request/reply connection to a RESP server.
+///
+/// Sealed: implemented by [`RespClient`] and by kevy-cli's own redis-cli
+/// connection, the two connections the tools are written against.
+///
+/// ```
+/// use kevy_cli::link::Link;
+/// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+/// let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+/// let link: &mut dyn Link = &mut client;
+/// let pong = link.request_borrowed(&[b"PING"])?;
+/// assert_eq!(pong, kevy_resp_client::Reply::Simple(b"PONG".to_vec()));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub trait Link: sealed::Sealed {
+    /// Send one command and read its reply.
+    ///
+    /// ```
+    /// # use kevy_cli::link::Link;
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// # let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// let link: &mut dyn Link = &mut client;
+    /// let set = link.request_borrowed(&[b"SET", b"k", b"v"])?;
+    /// assert_eq!(set, kevy_resp_client::Reply::Simple(b"OK".to_vec()));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn request_borrowed(&mut self, argv: &[&[u8]]) -> io::Result<Reply>;
+    /// Send `raw` (already-encoded commands) in one write and read `n`
+    /// replies, in order.
+    ///
+    /// ```
+    /// # use kevy_cli::link::Link;
+    /// # let port = include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/serve.rs"));
+    /// # let mut client = kevy_resp_client::RespClient::connect("127.0.0.1", port)?;
+    /// let mut batch = Vec::new();
+    /// for key in [&b"a"[..], b"b"] {
+    ///     kevy_resp::encode_command_borrowed(&mut batch, &[b"DEL", key]);
+    /// }
+    /// let link: &mut dyn Link = &mut client;
+    /// assert_eq!(link.pipeline_raw(&batch, 2)?.len(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> io::Result<Vec<Reply>>;
+}
+
+pub(crate) mod sealed {
+    /// The implementors [`super::Link`] admits.
+    pub trait Sealed {}
+    impl Sealed for kevy_resp_client::RespClient {}
+    impl Sealed for crate::rcli::conn::Conn {}
+}
+
+impl Link for RespClient {
+    fn request_borrowed(&mut self, argv: &[&[u8]]) -> io::Result<Reply> {
+        RespClient::request_borrowed(self, argv)
+    }
+
+    fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> io::Result<Vec<Reply>> {
+        RespClient::pipeline_raw(self, raw, n)
+    }
+}
