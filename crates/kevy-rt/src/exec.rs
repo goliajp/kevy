@@ -161,7 +161,11 @@ impl<C: Commands> Shard<C> {
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
-                let (shard, key_hash) = self.route_of(&args[idx]);
+                let key = &args[idx];
+                let (shard, key_hash) = match self.route_hint.take() {
+                    Some(h) if h.is(key) => (h.shard, h.hash),
+                    _ => self.route_of(key),
+                };
                 // Cluster conns own their shard's slots only: a wrong-shard
                 // key redirects (`-MOVED`) instead of forwarding, keeping a
                 // cluster client's topology honest. `cluster_conn` is only
