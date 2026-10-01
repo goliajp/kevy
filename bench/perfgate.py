@@ -104,6 +104,7 @@ def stop_all(procs):
 
 def observe(angle, binary, env, topo, rundir, windows, secs):
     """One side of one angle: fresh server, warm, load, windows."""
+    topo = ang.topology(angle, topo)
     srv = Server(binary, env, topo, ang.cluster(angle), rundir)
     gens = []
     try:
