@@ -167,6 +167,9 @@ fn accounting_round_trips_through_segmented_ops() {
     // the keyspace table is charged as a whole: allocate it first, so what
     // comes and goes below is the key alone
     st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
+    // and its side words, kept once the keyspace holds a collection whose
+    // weight is kept (a heap list; a small inline one would not do)
+    st.rpush(b"warm-list", &[[b'w'; 64].as_slice()]).unwrap();
     let baseline = st.used_memory();
     zadd_n(&mut st, b"z", Z_PROMOTE + 300);
     st.zincrby(b"z", 5.0, b"member-00000007").unwrap();

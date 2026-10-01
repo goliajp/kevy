@@ -111,17 +111,13 @@ fn demote_promote_preserves_value_ttl_lru_watch_and_fires_no_events() {
     let big = vec![b'z'; 4096];
     s.set(b"k", big.clone(), Some(Duration::from_secs(600)), crate::SetCondition::Always);
     let ttl_before = s.pttl(b"k");
-    let lru_before = s.map.get(b"k".as_slice()).unwrap().lru_clock();
+    let lru_before = s.clock_of(b"k").unwrap();
     let watch_v = s.record_watch(b"k");
     drop(s.take_notify_events()); // clear the `new` capture from SET
 
     assert!(s.debug_force_demote(b"k"));
     assert!(is_cold(&s, b"k"));
-    assert_eq!(
-        s.map.get(b"k".as_slice()).unwrap().lru_clock(),
-        lru_before,
-        "demote must preserve lru_clock"
-    );
+    assert_eq!(s.clock_of(b"k").unwrap(), lru_before, "demote must preserve lru_clock");
     assert_eq!(s.key_version(b"k"), watch_v, "demote must not bump WATCH");
     assert!(!s.has_notify_events(), "demote emits zero events");
     let ttl_cold = s.pttl(b"k");
@@ -243,9 +239,9 @@ fn demote_and_promote_accounting_is_exact() {
     let (mut s, _d) = tiered("tier-account", u64::MAX);
     s.set(b"k", vec![b'a'; 8192], None, crate::SetCondition::Always);
     let used_hot = s.used_memory();
-    let w_hot = s.map.get(b"k".as_slice()).unwrap().weight();
+    let w_hot = s.weight_of(b"k").unwrap();
     assert!(s.debug_force_demote(b"k"));
-    let w_cold = s.map.get(b"k".as_slice()).unwrap().weight();
+    let w_cold = s.weight_of(b"k").unwrap();
     assert_eq!(w_cold, 0, "short key + stub owns zero heap");
     assert_eq!(s.used_memory(), used_hot - w_hot, "demote reclaims exactly the value weight");
     assert_eq!(
@@ -257,7 +253,7 @@ fn demote_and_promote_accounting_is_exact() {
 
     s.promote_in_place(b"k");
     assert_eq!(s.used_memory(), used_hot, "promote restores the exact weight");
-    assert_eq!(s.map.get(b"k".as_slice()).unwrap().weight(), w_hot);
+    assert_eq!(s.weight_of(b"k").unwrap(), w_hot);
     assert_eq!(s.tier_stats().cold_bytes, 0);
 }
 

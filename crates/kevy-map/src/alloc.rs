@@ -91,10 +91,10 @@ impl<K, V> KevyMap<K, V> {
             // SAFETY: `base` plus a within-layout offset, so non-null for the same reason.
             metadata_ptr: unsafe { NonNull::new_unchecked(metadata_ptr) },
             cap,
-            mask: cap - 1,
             occupied: 0,
             deleted: 0,
             mmap_backed,
+            aux: None,
             _marker: PhantomData,
         }
     }
@@ -152,7 +152,12 @@ impl<K, V> KevyMap<K, V> {
         let size =
             (self.cap * (kv + 1) + GROUP_WIDTH).next_multiple_of(core::mem::align_of::<(K, V)>());
         debug_assert_eq!(size, table_layout::<(K, V)>(self.cap).0.size());
-        if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+        let table = if self.mmap_backed {
+            size.next_multiple_of(HUGE_PAGE)
+        } else {
+            malloc_footprint(size)
+        };
+        table + self.aux_footprint()
     }
 
     /// The bytes [`Self::footprint`] will read once the table has grown to
@@ -175,7 +180,8 @@ impl<K, V> KevyMap<K, V> {
         let size = table_layout::<(K, V)>(cap).0.size();
         // `alloc_table` maps a table this large directly wherever it can
         let mapped = size >= THP_BACKED_THRESHOLD && cfg!(target_os = "linux") && !cfg!(miri);
-        if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }
+        let lane = if self.aux.is_some() { crate::aux::lane_footprint(cap) } else { 0 };
+        (if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }) + lane
     }
 
     /// New keys the table takes before an insert grows it: 0 when the next
@@ -225,9 +231,9 @@ impl<K: kevy_hash::KevyHash + Eq, V> KevyMap<K, V> {
             let before = self.footprint();
             self.grow();
             let grown = self.footprint() as isize - before as isize;
-            return (self.insert_with_room(key, value), grown);
+            return (self.insert_with_room(key, value).1, grown);
         }
-        (self.insert_with_room(key, value), 0)
+        (self.insert_with_room(key, value).1, 0)
     }
 }
 

@@ -134,9 +134,14 @@ fn the_decomposition_row_weighs_1808() {
         (b"ts", b"1700000000"),
         (b"pad", &pad),
     ];
+    // a keyspace holding a collection whose weight is kept keeps a word
+    // per slot beside its table; another hash pays for that, so the row is
+    // measured alone
+    s.rpush(b"other", &[[b'v'; 64].as_slice()]).expect("a list");
     let (held, charged) = measure(&mut s, |s| {
         s.hset(b"row:00000001", &pairs).expect("a hash");
     });
+    eprintln!("held {held} charged {charged}");
     assert_eq!(held, 1808);
     assert_eq!(charged, 1808);
 }

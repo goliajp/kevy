@@ -246,12 +246,15 @@ impl Store {
         }
     }
 
-    /// Cached weight of `key` plus its share of the keyspace table (the
+    /// Weight of `key` plus its share of the keyspace table (the
     /// table's bytes over its keys). Returns `None` when the key is absent
     /// or expired (no implicit reap).
     pub fn estimate_key_bytes(&self, key: &[u8]) -> Option<u64> {
         let share = self.map.footprint().div_ceil(self.map.len().max(1)) as u64;
-        self.map.get(key).map(|e| e.weight() + share)
+        let slot = self.map.find_slot(key)?;
+        let (k, e) = self.map.slot(slot)?;
+        let value = crate::entry_weight::value_weight(&e.value, self.map.aux(slot));
+        Some(k.heap_bytes() as u64 + value + share)
     }
 
     /// O(1) precondition check the dispatch layer calls before every write

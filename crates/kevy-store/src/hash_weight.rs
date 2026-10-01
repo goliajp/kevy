@@ -15,7 +15,7 @@ use crate::value::{HashData, SmallBytes};
 
 /// Heap bytes `b` holds outside its slot, as the allocator holds them.
 #[inline]
-fn held(b: &SmallBytes) -> u64 {
+pub(crate) fn held(b: &SmallBytes) -> u64 {
     malloc_footprint(b.heap_bytes()) as u64
 }
 

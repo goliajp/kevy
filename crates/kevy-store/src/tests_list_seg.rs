@@ -146,6 +146,9 @@ fn accounting_round_trips_through_segged_ops() {
     // the keyspace table is charged as a whole: allocate it first, so what
     // comes and goes below is the key alone
     st.set(b"warm", b"1".to_vec(), None, crate::SetCondition::Always);
+    // and its side words, kept once the keyspace holds a collection whose
+    // weight is kept (a heap list; a small inline one would not do)
+    st.rpush(b"warm-list", &[[b'w'; 64].as_slice()]).unwrap();
     let baseline = st.used_memory();
     rpush_n(&mut st, b"l", SEG_PROMOTE + 200, 2);
     st.lset(b"l", 17, b"x").unwrap();

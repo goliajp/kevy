@@ -126,6 +126,7 @@ impl<K, V> KevyMap<K, V> {
     /// One full probe. The returned handle borrows `self` mutably; the
     /// borrow is released only when the handle is dropped (or consumed
     /// via [`RawOccupiedEntryMut::remove`] / [`RawOccupiedEntryMut::into_mut`]).
+    #[inline]
     pub fn raw_entry_mut<Q>(&mut self, key: &Q) -> RawEntryMut<'_, K, V>
     where
         K: Borrow<Q> + KevyHash + Eq,
@@ -168,6 +169,22 @@ impl<'a, K, V> RawOccupiedEntryMut<'a, K, V> {
         // caller's `&mut KevyMap<K, V>` borrow.
         let kv = unsafe { (*self.map.slots_ptr.as_ptr().add(self.slot)).assume_init_mut() };
         &mut kv.1
+    }
+
+    /// The entry's side word ([`KevyMap::enable_aux`]); `None` when the
+    /// map keeps none.
+    #[inline]
+    pub fn aux(&self) -> Option<u64> {
+        self.map.aux.as_ref().map(|lane| lane[self.slot])
+    }
+
+    /// The stored value and the entry's side word, both to change.
+    #[inline]
+    pub fn get_mut_with_aux(&mut self) -> (&mut V, Option<&mut u64>) {
+        // SAFETY: see [`get`]. The value lives in the slot array and the
+        // word in the side lane: two allocations, so the borrows are disjoint.
+        let kv = unsafe { (*self.map.slots_ptr.as_ptr().add(self.slot)).assume_init_mut() };
+        (&mut kv.1, self.map.aux.as_mut().map(|lane| &mut lane[self.slot]))
     }
 
     /// Shared access to the stored key.
@@ -224,6 +241,7 @@ where
                 unsafe {
                     (*self.map.slots_ptr.as_ptr().add(insert_at)).write((key, value));
                 }
+                self.map.reset_aux(insert_at);
                 self.map.occupied += 1;
                 if via_tombstone {
                     self.map.deleted -= 1;

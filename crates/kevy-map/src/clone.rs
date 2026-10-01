@@ -42,6 +42,7 @@ impl<K: Clone, V: Clone> Clone for KevyMap<K, V> {
         }
         new.occupied = self.occupied;
         new.deleted = self.deleted;
+        new.aux = self.aux.clone();
         new
     }
 }

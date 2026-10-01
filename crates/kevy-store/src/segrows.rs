@@ -323,16 +323,17 @@ impl Store {
     /// the segment). Preserves TTL/LRU (both None/irrelevant here by
     /// the eviction filter), fires no events, clears no field TTLs.
     pub(crate) fn demote_row_to_seg(&mut self, key: &[u8], seg_ix: u32) -> bool {
-        let Some(e) = self.map.get_mut_quiet(key) else { return false };
+        let Some(slot) = self.map.find_slot(key) else { return false };
+        let Some((e, word)) = self.map.entry_word_quiet(slot) else { return false };
         if !matches!(e.value, Value::Hash(_) | Value::SmallHashInline(_) | Value::PackedRow(_)) {
             return false;
         }
-        let key_heap = key_heap_bytes_for(key);
-        let old_w = e.weight();
-        let value_w = old_w.saturating_sub(key_heap);
+        let value_w = crate::entry_weight::value_weight(&e.value, word.as_deref().copied());
         let stub = ColdRef::seg(seg_ix, value_w.min(u64::from(u32::MAX)) as u32, COLD_TAG_HASH);
         let old_value = core::mem::replace(&mut e.value, Value::Cold(stub));
-        e.set_weight(key_heap);
+        if let Some(word) = word {
+            crate::entry_weight::stamp(word, false, 0);
+        }
         crate::apply_delta(&mut self.used_memory, -(value_w as i64));
         self.maybe_offload_drop(old_value);
         true
@@ -363,11 +364,13 @@ impl Store {
     pub(crate) fn insert_row_stub(&mut self, key: &[u8], seq: u32, value_weight: u64) {
         let stub = ColdRef::seg(seq, value_weight.min(u64::from(u32::MAX)) as u32, COLD_TAG_HASH);
         let key_heap = key_heap_bytes_for(key);
-        let mut e = crate::Entry::new(Value::Cold(stub), None);
-        e.set_weight(key_heap);
+        let e = crate::Entry::new(Value::Cold(stub), None);
         crate::apply_delta(&mut self.used_memory, key_heap as i64);
         let cap = self.map.capacity();
-        self.map.insert_quiet(crate::SmallBytes::from_slice(key), e);
+        let (slot, _) = self.map.insert_quiet(crate::SmallBytes::from_slice(key), e);
+        if let Some(word) = self.map.word_mut(slot) {
+            crate::entry_weight::stamp(word, false, 0);
+        }
         if self.map.capacity() != cap {
             self.charge_keyspace_growth();
         }
