@@ -31,12 +31,16 @@
 //! ```
 
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicUsize;
 
 use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
 use crate::segment::{self, SEGMENT_BYTES, Segment};
 use crate::spanlist::BINS;
+
+/// The next heap identity; `0` stays "not set", so it starts at 1.
+static NEXT_IDENTITY: AtomicUsize = AtomicUsize::new(1);
 
 /// Spans one class may hold at once, per heap — a runaway guard, not a
 /// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
@@ -207,20 +211,19 @@ impl Heap {
         }
     }
 
-    /// Adopt this heap's address as its identity, once.
-    ///
-    /// Segments record their owner so a free arriving on the wrong
-    /// thread can be routed home. The address of the heap itself is a
-    /// ready-made unique identifier — no counter, no registry, and it
-    /// cannot collide while the heap is alive. `0` means "not yet set",
-    /// which is why [`Heap::new`] can stay `const`.
+    /// Take a process-unique identity, once. Segments record their owner
+    /// so a free arriving on the wrong thread can be routed home. Drawn
+    /// from a counter, never reused: a thread's segments outlive it, and
+    /// an address-based identity let a new thread whose block landed at
+    /// the same address free a dead thread's slots as its own. `0` means
+    /// "not yet set", which is why [`Heap::new`] can stay `const`.
     ///
     /// # Examples
     ///
     /// ```
     /// # use kevy_alloc::Heap;
     /// let mut heap = Heap::new(0); // 0: identity not chosen yet
-    /// heap.ensure_identity(); // now the heap's own address, fixed while it lives
+    /// heap.ensure_identity(); // now an identity no other heap in the process has had
     /// let p = heap.alloc(64, 8).ok_or("no mapping")?;
     /// // SAFETY: `p` came from this heap with this size and alignment.
     /// unsafe { heap.dealloc(p, 64, 8) };
@@ -228,7 +231,7 @@ impl Heap {
     /// ```
     pub fn ensure_identity(&mut self) {
         if self.id == 0 {
-            self.id = core::ptr::from_mut(self) as usize;
+            self.id = NEXT_IDENTITY.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
     }
 

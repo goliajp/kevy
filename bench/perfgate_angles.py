@@ -21,6 +21,9 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 N_GEN = 2_000_000_000
+# Between starting one load generator and the next: long enough for its
+# connections to be made, so they are dealt before the next one's.
+CONNECT_GAP_SECS = 0.3
 N_HYBRID = 20_000
 
 PINNED = {
@@ -45,6 +48,11 @@ CALLGRIND = {
     "hset": (None, "HSET h __rand_int__ v"),
     "lpush": (None, "LPUSH l v"),
     "zadd": (None, "ZADD z __rand_int__ m__rand_int__"),
+    # two shards: half the commands are forwarded, so the cross-shard
+    # request and reply path is counted. The idle loop's instructions vary
+    # with scheduling, so read these per function, not by their total.
+    "xget": ("SET k:__rand_int__ v", "GET k:__rand_int__"),
+    "xset": (None, "SET k:__rand_int__ v"),
 }
 
 
