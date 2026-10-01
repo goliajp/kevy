@@ -470,14 +470,11 @@ impl<C: Commands> Shard<C> {
             // Cancel any cross-shard block this conn was the origin of, so
             // target shards drop their registrations.
             self.cancel_xshard_on_close(conn_id);
-            // If a cross-shard serve reply was buffered for this conn but its
-            // write never confirmed (the conn is dying — FIN or a failed
-            // write), the popped element never reached a live client. Restore
-            // it from the target's escrow.
+            // A buffered cross-shard serve reply whose write never confirmed
+            // never reached a client: restore it from the target's escrow.
             self.restore_serve_on_teardown(conn_id);
             self.unregister_subs(&conn.sub);
-            // H1.B: drop this conn from each channel's local subscriber
-            // index. Channels with no remaining subs lose their entry.
+            // Drop this conn from each channel's local subscriber index.
             for ch in &conn.sub {
                 if let Some(ids) = self.subs_by_channel.get_mut(ch) {
                     ids.retain(|&id| id != conn_id);
