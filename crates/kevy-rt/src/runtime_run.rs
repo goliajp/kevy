@@ -403,6 +403,7 @@ impl<C: Commands> Runtime<C> {
                 spin_limit: self.spin_limit,
                 arms_accept: self.accept_shards.is_none_or(|n| id < n),
                 balance: crate::accept_balance::AcceptBalance::new(&accept),
+                route_hint: None,
                 max_clients_per_shard: if self.max_clients == 0 {
                     0
                 } else {
