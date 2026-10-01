@@ -454,7 +454,10 @@ pub fn shard_of(key: &[u8], n: usize, routing: Routing) -> usize {
 /// [`shard_of`], with the key's keyspace hash when routing computed it:
 /// an untagged key under [`Routing::KevyHash`] routes by the very hash its
 /// shard's map files it under.
-#[inline]
+// every keyed command routes, and a call costs about as much as the
+// routing of an untagged key
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn route_of(key: &[u8], n: usize, routing: Routing) -> (usize, Option<u64>) {
     if n == 1 {
         return (0, None);
