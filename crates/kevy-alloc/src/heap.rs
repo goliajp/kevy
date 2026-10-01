@@ -211,17 +211,11 @@ impl Heap {
         }
     }
 
-    /// Take a process-unique identity, once.
-    ///
-    /// Segments record their owner so a free arriving on the wrong
-    /// thread can be routed home. The identity is drawn from a counter
-    /// and never reused. It used to be the heap's own address, which is
-    /// unique only while the heap lives — but a thread's segments
-    /// outlive it (they are leaked at exit, never unmapped), and a new
-    /// thread whose thread-local block landed at the same address took
-    /// the dead thread's identity. It then freed the dead thread's
-    /// slots as its own: its live-byte counter went below zero and it
-    /// rewrote span state in segments its lists never held. `0` means
+    /// Take a process-unique identity, once. Segments record their owner
+    /// so a free arriving on the wrong thread can be routed home. Drawn
+    /// from a counter, never reused: a thread's segments outlive it, and
+    /// an address-based identity let a new thread whose block landed at
+    /// the same address free a dead thread's slots as its own. `0` means
     /// "not yet set", which is why [`Heap::new`] can stay `const`.
     ///
     /// # Examples
