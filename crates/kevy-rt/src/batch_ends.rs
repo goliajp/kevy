@@ -50,7 +50,13 @@ impl<C: Commands> Shard<C> {
         loop {
             match parse_command_borrowed(&buf[off..]) {
                 Ok(Some((argv, consumed))) => {
-                    self.route_hint = argv.get(1).map(|k| self.prefetch_local(k));
+                    if let Some(key) = argv.get(1) {
+                        if self.nshards == 1 {
+                            self.store.prefetch_for_key(key);
+                        } else {
+                            self.route_hint = Some(self.prefetch_local(key));
+                        }
+                    }
                     self.handle_command(conn_id, &argv);
                     self.route_hint = None;
                     drop(argv);
