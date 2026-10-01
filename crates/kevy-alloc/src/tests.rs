@@ -777,3 +777,26 @@ fn the_page_size_check_agrees_with_the_system() {
     // than either value.
     assert_eq!(matches, crate::os::page_size_matches());
 }
+
+/// A heap that takes the place of a dead one — a new thread whose
+/// thread-local block landed at the same address — must not inherit its
+/// identity. The dead heap's segments live on, so a slot it handed out
+/// is still in a segment naming its owner; freed through the new heap
+/// it has to go the foreign way, not be taken for the new heap's own.
+#[test]
+fn a_heap_in_a_dead_heaps_place_does_not_take_its_identity() {
+    require_mapping!();
+    let mut slot = core::mem::ManuallyDrop::new(Heap::new(0));
+    slot.ensure_identity();
+    let p = slot.alloc(48, 8).expect("a slot");
+    // the thread exits: its heap is abandoned in place, segments and all
+    // (overwritten without running its drop, which would unmap them)
+    // SAFETY: `slot` is a valid, exclusively borrowed Heap.
+    unsafe { core::ptr::write(&raw mut *slot, Heap::new(0)) };
+    slot.ensure_identity();
+    let before = slot.snapshot().live;
+    // SAFETY: `p` was handed out with this size and alignment, by the heap
+    // that used to live here.
+    unsafe { slot.dealloc(p, 48, 8) };
+    assert_eq!(slot.snapshot().live, before, "a slot it never handed out was counted as its own");
+}
