@@ -84,7 +84,7 @@ impl<K, V> KevyMap<K, V> {
     }
 
     #[inline]
-    fn slot_is_full(&self, slot: usize) -> bool {
+    pub(crate) fn slot_is_full(&self, slot: usize) -> bool {
         // SAFETY: read only after the bound check; the metadata array holds
         // at least `cap` bytes.
         slot < self.cap && unsafe { *self.metadata_ptr.as_ptr().add(slot) } & 0x80 == 0

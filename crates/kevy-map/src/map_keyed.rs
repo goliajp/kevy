@@ -93,6 +93,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 unsafe {
                     (*self.slots_ptr.as_ptr().add(insert_at)).write((key, value));
                 }
+                self.reset_aux(insert_at);
                 self.occupied += 1;
                 if via_tombstone {
                     self.deleted -= 1;

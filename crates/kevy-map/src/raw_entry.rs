@@ -224,6 +224,7 @@ where
                 unsafe {
                     (*self.map.slots_ptr.as_ptr().add(insert_at)).write((key, value));
                 }
+                self.map.reset_aux(insert_at);
                 self.map.occupied += 1;
                 if via_tombstone {
                     self.map.deleted -= 1;
