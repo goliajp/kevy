@@ -2,6 +2,8 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod server_bin;
+
 use std::process::{Child, Command};
 
 use kevy_cli::bulk::DeleteMode;
@@ -21,19 +23,7 @@ impl Srv {
         // inline in start() rather than in a fn the sweep could see.
         let port = kevy_testnet::free_port();
         // the kevy server binary lives next to our own test artifacts
-        let bin =
-            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
-        if !bin.exists() {
-            // cargo doesn't know this test depends on the kevy bin;
-            // under full-workspace parallelism the build order races.
-            // Build it deterministically (no-op when fresh).
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let status = Command::new(cargo)
-                .args(["build", "-p", "kevy", "--bin", "kevy"])
-                .status()
-                .expect("spawn cargo build");
-            assert!(status.success(), "cargo build -p kevy --bin kevy failed");
-        }
+        let bin = server_bin::kevy_server();
         assert!(bin.exists(), "kevy server binary still missing at {bin:?}");
         // A data directory of its own: without one the server writes
         // into the test binary's cwd, which is this crate's source

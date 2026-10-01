@@ -5,6 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod server_bin;
+
 use std::process::{Child, Command, Stdio};
 
 use kevy_resp_client::RespClient;
@@ -49,18 +51,7 @@ struct Srv {
 impl Srv {
     fn start(tag: &str) -> Srv {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let bin =
-            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
-        if !bin.exists() {
-            // cargo doesn't know this test depends on the kevy bin;
-            // build it deterministically (no-op when fresh).
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let status = Command::new(cargo)
-                .args(["build", "-p", "kevy", "--bin", "kevy"])
-                .status()
-                .expect("spawn cargo build");
-            assert!(status.success(), "cargo build -p kevy --bin kevy failed");
-        }
+        let bin = server_bin::kevy_server();
         let dir =
             std::env::temp_dir().join(format!("kevy-sqlcli-srv-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

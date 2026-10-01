@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod server_bin;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -16,16 +18,7 @@ struct Srv {
 }
 
 fn kevy_bin() -> PathBuf {
-    let bin = Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
-    if !bin.exists() {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "-p", "kevy", "--bin", "kevy"])
-            .status()
-            .expect("spawn cargo build");
-        assert!(status.success(), "cargo build -p kevy --bin kevy failed");
-    }
-    bin
+    server_bin::kevy_server()
 }
 
 /// `kevy keygen <file>`: writes the private key, prints the public one.
