@@ -15,57 +15,12 @@
 use std::io;
 use std::sync::atomic::Ordering;
 
-use kevy_resp::parse_command_borrowed;
-
 use crate::Commands;
+use crate::batch_ends::PREFETCH_AHEAD;
 use crate::message::{Inbound, Part};
 use crate::shard::Shard;
 
-/// What [`Shard::dispatch_batch`] saw: how far the parse cursor got,
-/// whether it stopped on malformed input, and whether the conn was
-/// closed by one of its own commands (QUIT) mid-batch.
-pub(crate) struct BatchOutcome {
-    pub(crate) consumed: usize,
-    pub(crate) protocol_error: bool,
-    pub(crate) conn_gone: bool,
-}
-
 impl<C: Commands> Shard<C> {
-    /// Parse and dispatch every complete RESP command at the front of
-    /// `buf` (the borrowed-argv hot path shared by both reactors). The
-    /// caller owns buffer bookkeeping (tail retention) and the AOF
-    /// group-commit window around the batch.
-    pub(crate) fn dispatch_batch(&mut self, conn_id: u64, buf: &[u8]) -> BatchOutcome {
-        let mut off = 0usize;
-        loop {
-            match parse_command_borrowed(&buf[off..]) {
-                Ok(Some((argv, consumed))) => {
-                    if let Some(key) = argv.get(1) {
-                        self.store.prefetch_for_key(key);
-                    }
-                    self.handle_command(conn_id, &argv);
-                    drop(argv);
-                    off += consumed;
-                    if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
-                        .is_none()
-                    {
-                        return BatchOutcome {
-                            consumed: off,
-                            protocol_error: false,
-                            conn_gone: true,
-                        };
-                    }
-                }
-                Ok(None) => {
-                    return BatchOutcome { consumed: off, protocol_error: false, conn_gone: false };
-                }
-                Err(_) => {
-                    return BatchOutcome { consumed: off, protocol_error: true, conn_gone: false };
-                }
-            }
-        }
-    }
-
     /// Socket readable: read until WouldBlock, then parse out every full
     /// RESP command and dispatch it.
     ///
@@ -311,7 +266,18 @@ impl<C: Commands> Shard<C> {
                         // atomic would promise more than each origin did.
                         let w0 = self.always_hold_w0();
                         self.aof_begin_fsync_window();
-                        for (conn, seq, argv, proto, meta) in reqs.drain(..) {
+                        // a request's bucket is fetched while the ones
+                        // PREFETCH_AHEAD before it run, so its probe finds
+                        // the line in cache rather than waiting on memory
+                        for r in reqs.iter().take(PREFETCH_AHEAD) {
+                            self.prefetch_request(&r.2, r.4);
+                        }
+                        for i in 0..reqs.len() {
+                            if let Some(r) = reqs.get(i + PREFETCH_AHEAD) {
+                                self.prefetch_request(&r.2, r.4);
+                            }
+                            let (conn, seq, ref mut argv, proto, meta) = reqs[i];
+                            let argv = std::mem::take(argv);
                             let part = self.run_dispatch(&argv, proto, meta);
                             let Some(part) = self.part_unless_held(origin, w0, conn, seq, part)
                             else {
@@ -321,6 +287,7 @@ impl<C: Commands> Shard<C> {
                             // the origin pools it (see `RespBatch`).
                             resps.push((conn, seq, part, argv));
                         }
+                        reqs.clear();
                         // fsync the batch's forwarded writes before replying.
                         if DIRECT_FLUSH {
                             self.aof_end_group()?;

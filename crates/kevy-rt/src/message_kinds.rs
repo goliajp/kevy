@@ -188,4 +188,8 @@ pub(crate) struct DispatchMeta {
     /// The origin resolve()'s verb id, so the executing shard dispatches
     /// without matching the verb again.
     pub(crate) verb: crate::VerbId,
+    /// The keyspace hash of argv[key_idx] when routing already computed
+    /// it (an untagged key, which routes by that same hash), so the
+    /// owning shard can prefetch its bucket without hashing again.
+    pub(crate) key_hash: Option<u64>,
 }
