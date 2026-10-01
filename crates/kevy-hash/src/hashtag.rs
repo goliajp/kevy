@@ -50,7 +50,8 @@ fn find(bytes: &[u8], b: u8) -> Option<usize> {
 /// ```
 #[inline]
 pub fn hashtag(key: &[u8]) -> Option<&[u8]> {
-    let start = find(key, b'{')?;
+    // a cluster client's tag nearly always leads the key
+    let start = if key.first() == Some(&b'{') { 0 } else { find(key, b'{')? };
     let after = &key[start + 1..];
     match find(after, b'}')? {
         0 => None,

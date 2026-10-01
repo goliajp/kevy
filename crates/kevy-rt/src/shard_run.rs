@@ -65,7 +65,10 @@ impl<C: Commands> Shard<C> {
 
     /// The shard owning `key`, and its keyspace hash when routing computed
     /// it on the way.
-    #[inline]
+    // every keyed command routes, and a call costs about as much as the
+    // routing of an untagged key
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn route_of(&self, key: &[u8]) -> (usize, Option<u64>) {
         let routing = if self.cluster.is_some() { Routing::Slots } else { Routing::KevyHash };
         crate::reduce::route_of(key, self.nshards, routing)
