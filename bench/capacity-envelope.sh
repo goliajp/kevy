@@ -121,8 +121,12 @@ $LEFTOVER"
 if [ "$SCALE" = full ]; then
   [ "$(uname)" = Linux ] || refuse "full scale is the lx64 measurement — Linux only"
   # Instantaneous idle%, not loadavg (same rationale as perfgate).
-  read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
-  IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
+  # batch jobs step aside within ~15 s of a benchmark taking the lock
+  for _ in $(seq 60); do
+    read -r _ u1 n1 s1 i1 _ < /proc/stat; sleep 1; read -r _ u2 n2 s2 i2 _ < /proc/stat
+    IDLE=$(( (i2 - i1) * 100 / ( (u2-u1) + (n2-n1) + (s2-s1) + (i2-i1) ) ))
+    [ "$IDLE" -ge 80 ] && break
+  done
   [ "$IDLE" -ge 80 ] || refuse "box busy (idle ${IDLE}% < 80%)"
 fi
 
