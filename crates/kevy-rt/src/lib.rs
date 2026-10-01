@@ -161,6 +161,7 @@ mod persist_rewrite;
 mod persist_worker;
 pub mod propagation;
 mod reduce;
+mod reply_batch;
 mod repl_trace;
 mod replica_inbox;
 mod replication;

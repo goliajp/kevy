@@ -25,6 +25,10 @@ pub(crate) enum Part {
         next_offset: u64,
     },
     Reply(SmallReply),
+    /// A reply of `len` bytes written into the carrying
+    /// [`RespBatch`](crate::message::RespBatch)'s buffer, right after the
+    /// previous spanned reply's. Only valid inside that batch.
+    Spanned(u32),
     Int(i64),
     Ok,
     /// Per-key gathered payloads.
