@@ -100,6 +100,7 @@
 // can schedule it. rustc cannot learn a RUSTFLAGS-set cfg name, so silence
 // the lint rather than let it fail every normal build.
 #![allow(unexpected_cfgs)]
+mod accept_balance;
 mod bio;
 mod block_xshard;
 mod block_xshard_confirm;

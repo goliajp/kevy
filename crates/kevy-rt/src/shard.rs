@@ -335,6 +335,8 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) recv_buffers: u16,
     /// `false` = compute-only shard (no accept SQE).
     pub(crate) arms_accept: bool,
+    /// The turn that spreads shared-port connections over the accepting shards.
+    pub(crate) balance: crate::accept_balance::AcceptBalance,
     /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.
     pub(crate) max_clients_per_shard: usize,
     /// [`crate::CLIENT_INPUT_HARD_LIMIT`], after the debug-env override.

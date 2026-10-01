@@ -352,6 +352,12 @@ pub(crate) enum Inbound {
     /// per message. `Arc` so the same payload fanned to many shards is shared,
     /// not cloned per target.
     DeliverPublish(Vec<PubMsg>),
+    /// A shared-port connection the accepting shard passed here, its turn
+    /// being this shard's (see [`crate::accept_balance`]).
+    Adopt {
+        sock: kevy_sys::Socket,
+        unix: bool,
+    },
 
     // ── Cross-shard BLOCK arbiter (see [`crate::block_xshard`]) ──
     // A conn parks on its origin shard; watch registrations fan out to the
