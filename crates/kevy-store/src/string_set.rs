@@ -306,7 +306,8 @@ enum SetOutcome {
 /// bio thread AFTER the keyspace borrow is released rather than
 /// dropping inline (the Drop of a `Value::ArcBulk` over the heap-heavy
 /// threshold amplifies the large-value SET latency tail).
-#[inline]
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn overwrite_in_place(
     e: &mut Entry,
     word: Option<&mut u64>,
