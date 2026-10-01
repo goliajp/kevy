@@ -64,13 +64,29 @@ def _have_box():
     if platform.system() != "Linux" or (os_cpus() or 0) < 16:
         return False, "needs the 16-core Linux box (quiet, core-pinnable)"
     # A box gate measures; on a box other work is loading, it measures the
-    # neighbours. Busy is NOT-RUN, said with the load, never a number.
-    limit = float(os.environ.get("KEVY_SUITE_BOX_LOAD_MAX", "2.0"))
-    with open("/proc/loadavg") as f:
-        load = float(f.read().split()[0])
-    if load > limit:
-        return False, f"the box is busy (1-minute load {load:.1f} > {limit:.1f}); a measurement now would measure the other work"
+    # neighbours. Busy is NOT-RUN, said with the idle share, never a number.
+    # Instantaneous idle over one second, not the 1-minute load average:
+    # the average still carries the rows this tier ran just before, so it
+    # read a quiet box as busy and the perf rows never ran inside a tier.
+    floor = float(os.environ.get("KEVY_SUITE_BOX_IDLE_MIN", "0.80"))
+    idle = _idle_share(1.0)
+    if idle < floor:
+        return False, f"the box is busy ({idle:.0%} idle < {floor:.0%}); a measurement now would measure the other work"
     return True, ""
+
+
+def _idle_share(secs):
+    import time
+
+    def sample():
+        with open("/proc/stat") as f:
+            v = [int(x) for x in f.readline().split()[1:]]
+        return v[3] + v[4], sum(v)
+
+    i0, t0 = sample()
+    time.sleep(secs)
+    i1, t1 = sample()
+    return (i1 - i0) / (t1 - t0) if t1 > t0 else 0.0
 
 
 def os_cpus():

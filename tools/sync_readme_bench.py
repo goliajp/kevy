@@ -255,8 +255,9 @@ def write_site(rows, version, names, check):
     # a floor reads "at least" in each language; valkey is never load-bound here
     words = {
         "en": ("{r}× on {v}", "at least {r}× on {v}", r"(?:at least )?[\d.]+× on {v}"),
-        "zh": ("{v} 快 {r} 倍", "{v} 至少快 {r} 倍", r"{v} (?:至少)?快 [\d.]+ 倍"),
-        "ja": ("{v} は {r} 倍", "{v} は {r} 倍以上", r"{v} は [\d.]+ 倍(?:以上)?"),
+        # the optional words are escaped: no ASCII mark sits against CJK text
+        "zh": ("{v} 快 {r} 倍", "{v} 至少快 {r} 倍", r"{v} (?:\u81f3\u5c11)?\u5feb [\d.]+ 倍"),
+        "ja": ("{v} は {r} 倍", "{v} は {r} 倍以上", r"{v} は [\d.]+ \u500d(?:\u4ee5\u4e0a)?"),
     }
     new_text = text
     for plain, floor, pat in words.values():
