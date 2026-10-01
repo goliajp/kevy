@@ -63,10 +63,9 @@ impl<K, V> KevyMap<K, V> {
     /// slot is empty or no side words are kept.
     #[inline]
     pub fn aux_mut(&mut self, slot: usize) -> Option<&mut u64> {
-        if !self.slot_is_full(slot) {
-            return None;
-        }
-        self.aux.as_mut().map(|lane| &mut lane[slot])
+        // the lane first: most maps keep none, and then the slot is not read
+        let full = self.aux.is_some() && self.slot_is_full(slot);
+        self.aux.as_mut().filter(|_| full).map(|lane| &mut lane[slot])
     }
 
     /// The entry at `slot` and its side word, to change: the value from the
