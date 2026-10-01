@@ -40,7 +40,7 @@ impl<C: Commands> Shard<C> {
             // Same-shard: one atomic Op::Rename. Route to the owning
             // shard — exec_op runs store.rename + bumps WATCH versions
             // + AOF logs + emits keyspace notifications.
-            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.push_pending_single(conn_id, false);
             let op = Op::Rename { src, dst, nx };
             if src_shard == self.id {
                 self.exec_local(conn_id, seq, op);
