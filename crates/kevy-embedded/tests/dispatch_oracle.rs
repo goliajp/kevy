@@ -30,26 +30,42 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
 }
 
-/// `target/debug/kevy`, built once per test process.
+/// The server binary, built once per test process.
 fn server_binary() -> PathBuf {
     static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     BUILT.get_or_init(build_server).clone()
 }
 
+/// The target directory and profile this test binary was built into
+/// (`<target>/<profile>/deps/<test>`). The server goes to the same place:
+/// under a coverage run that is the instrumented tree, whose processes
+/// write their profiles where the run collects them. Built into the default
+/// `target/debug` instead, it was an instrumented server sitting where other
+/// checks run it, writing stray profiles into the repository root.
+fn this_build() -> (PathBuf, String) {
+    let exe = std::env::current_exe().expect("test binary path");
+    let profile_dir = exe.parent().and_then(std::path::Path::parent).expect("profile directory");
+    let target = profile_dir.parent().expect("target directory").to_path_buf();
+    let profile = profile_dir.file_name().expect("profile name").to_string_lossy().into_owned();
+    (target, profile)
+}
+
 fn build_server() -> PathBuf {
     let root = workspace_root();
+    let (target, profile) = this_build();
     // ALWAYS run the build — cargo is incremental, so a fresh binary
     // costs nothing and a stale one costs an afternoon: build-if-absent
     // served a cached pre-4.1 binary on CI (restored target/ cache) and
     // twice on a dev box, each time as a baffling oracle mismatch
     // against a server that "couldn't" be emitting that reply.
-    let status = Command::new("cargo")
-        .args(["build", "-p", "kevy"])
-        .current_dir(&root)
-        .status()
-        .expect("spawn cargo build -p kevy");
+    let mut build = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    build.args(["build", "-p", "kevy", "--bin", "kevy", "--target-dir"]).arg(&target);
+    if profile != "debug" {
+        build.args(["--profile", &profile]);
+    }
+    let status = build.current_dir(&root).status().expect("spawn cargo build -p kevy");
     assert!(status.success(), "cargo build -p kevy failed");
-    root.join("target/debug/kevy")
+    target.join(&profile).join("kevy")
 }
 
 fn spawn_server(dir: &std::path::Path) -> ServerGuard {
