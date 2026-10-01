@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>クラスタ · kevy</title>
+    <meta name="description" content="kevyのクラスタ機能には独立した2つのレイヤがあります。シングルノードのマルチシャード公開（1プロセスで、すべてのシャードがRedis Clusterを話す）と、マルチノードのレプリケーション+スコープ付きマルチライター（プライマリ、レプリカ、組み込み、クォーラムフェイルオーバー）です。片方だけ、両方、あるいはどちらも使わない、が選べます。">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/cluster/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/cluster/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/cluster/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/cluster/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/cluster/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/cluster/" hreflang="en">EN</a><a href="../../../zh/docs/cluster/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/cluster/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a class="on" href="../../../ja/docs/cluster/" aria-current="page">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#2レイヤの概観">2レイヤの概観</a></li><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#有効化">有効化</a></li><li class="l2"><a href="#rustからclusterclientを使う">RustからClusterClientを使う</a></li><li class="l3"><a href="#ルーティングがクロスシャードホップを消す仕組み">ルーティングがクロスシャードホップを消す仕組み</a></li><li class="l3"><a href="#クロススロットのマルチキーコマンド">クロススロットのマルチキー・コマンド</a></li><li class="l3"><a href="#クラスタポートでサポートされるclusterコマンド">クラスタポートでサポートされるCLUSTERコマンド</a></li><li class="l3"><a href="#生のルーティングヘルパーへのフォールバック">生のルーティングヘルパーへのフォールバック</a></li><li class="l2"><a href="#プライマリとレプリカ">プライマリとレプリカ</a></li><li class="l2"><a href="#レプリカとして組み込む">レプリカとして組み込む</a></li><li class="l2"><a href="#スコープ付きマルチライター">スコープ付きマルチライター</a></li><li class="l3"><a href="#スコープライターとして組み込む">スコープライターとして組み込む</a></li><li class="l2"><a href="#kevy-electクォーラムフェイルオーバー">kevy-electクォーラムフェイルオーバー</a></li><li class="l3"><a href="#手動でのrejoinリカバリ">手動でのrejoinリカバリ</a></li><li class="l2"><a href="#シングルノードクラスタモード">シングルノードクラスタモード</a></li><li class="l2"><a href="#レプリケーション">レプリケーション</a></li><li class="l2"><a href="#スコープ付きマルチライター--elect">スコープ付きマルチライター + elect</a></li></ul></details><div><h1 id="クラスタ">クラスタ</h1>
+<p>kevyのクラスタ機能には独立した2つのレイヤがあります。<b>シングルノードのマルチシャード公開</b>（1プロセスで、すべてのシャードがRedis Clusterを話す）と、<b>マルチノードのレプリケーション+スコープ付きマルチライター</b>（プライマリ、レプリカ、組み込み、クォーラムフェイルオーバー）です。片方だけ、両方、あるいはどちらも使わない、が選べます。</p>
+<h2 id="2レイヤの概観">2レイヤの概観</h2>
+<p><b>シングルノードクラスタモード。</b> 1つのkevyプロセスがキー空間をNシャードに分割し、各シャードを決定論的なシャード別ポート上の仮想クラスタノードとして公開します。<code>CLUSTER SLOTS / SHARDS / NODES</code>は本物のCRC16パーティションを報告します。キーを意識するクライアント（<code>redis-cli -c</code>、<code>redis-benchmark --cluster</code>、市販のクラスタ対応ライブラリ、同梱の<a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs"><code>ClusterClient</code></a>）は、各キーをハッシュして所有シャードに直接接続します。利得は機械的です。サーバー側のクロスシャードホップが消えれば、それがそのままスループットの向上とテール遅延の低下になります。</p>
+<p><b>マルチノードクラスタ。</b> kevyサーバーは<b>プライマリ</b>として、1つ以上の<b>レプリカ</b>（kevyサーバー、またはプロセス内の<a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded"><code>kevy-embedded</code></a>ストア）へ書き込みログをストリーミングできます。プライマリはさらに、<b>スコープ付き書き込み</b>をプレフィックス単位で委譲できます。<code>[cluster] scopes</code>が、<code>app:billing:*</code>の書き込みはどのノード、<code>app:auth:*</code>はどのノード、と宣言します。違うノードに着地した書き込みは<code>-MISDIRECTED writer is &lt;host:port&gt;</code>を受け取り、クライアントがそれに追従します。<a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-elect"><code>kevy-elect</code></a>はクォーラムのコントロールプレーンを提供します。死んだノードにDOWNのフラグを立て、レプリケーショントポロジのために交代プライマリを選出し（v3.15）、スコープの宣言済みフォールバックを昇格させます。オペレータが発行する<code>MOVE-SCOPE</code>は、quiesce窓のもとでプレフィックスを移行します。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<div class="tbl"><table><thead><tr><th>状況</th><th>使うもの</th></tr></thead><tbody><tr><td>1プロセス、キーを意識するクライアント、クロスシャードホップを消したい</td><td>シングルノードクラスタモード + <code>ClusterClient</code></td></tr><tr><td>1ホスト上で市販のRedis Clusterツールと互換にしたい</td><td>シングルノードクラスタモード</td></tr><tr><td>別マシンまたはプロセス内からホットな読み出しを返したい</td><td>マルチノード：プライマリ+レプリカ（またはレプリカとして組み込み）</td></tr><tr><td>キープレフィックスで分割された複数のライターを別々のホストで動かしたい</td><td>マルチノード：スコープ付きマルチライター</td></tr><tr><td>人手を介さずにライターのクラッシュを乗り切りたい</td><td>マルチノード：<code>kevy-elect</code>クォーラム選挙（プライマリ）/スコープフォールバック（スコープライター）</td></tr><tr><td>1プロセス、低負荷、普通のクライアント</td><td>どちらも不要。デフォルトのプロキシポートで十分</td></tr></tbody></table></div>
+<p>2つのレイヤは合成できます。クラスタモードのプライマリがNシャードを広告し、各レプリカもNシャードで動き、ルーティングクライアントが両者をつなぎます。</p>
+<hr>
+<h1 id="レイヤ1--シングルノードクラスタモード">レイヤ1 — シングルノードクラスタモード</h1>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p>普通のkevyプロセスは1つのポートで全コマンドを受け、所有シャードへミスルーティングされたキーを内部で転送します。この転送は正しく動くのですが、ホットパスではp99遅延を支配し、スループットの上限を作ってしまいます。クラスタモードは各シャードを独自のポートで公開します。キーを意識するクライアントはCRC16-XMODEMでキーをハッシュし、<code>CLUSTER SLOTS</code>から所有シャードを引き、そこへ直接接続します。転送も<code>-MOVED</code>も発生しません。</p>
+<figure class="code"><pre><code>                  ┌─────────────────────────────────────────┐
+                  │            kevy プロセス (1 ホスト)     │
+                  │                                         │
+  メインポート ─▶ │  6004  ── proxy: 転送 または -MOVED ──▶ │
+                  │                                         │
+  シャードポート▶ │  6005  ── shard 0   (slots     0– 4095) │
+                  │  6006  ── shard 1   (slots  4096– 8191) │
+                  │  6007  ── shard 2   (slots  8192–12287) │
+                  │  6008  ── shard 3   (slots 12288–16383) │
+                  └─────────────────────────────────────────┘</code></pre></figure>
+<p>シャード<code>i</code>は<code>port_base + i</code>にbindし、<code>port_base</code>の既定値は<code>port + 1</code>です（TOMLで上書きできます）。メインポートは、クラスタを話さないクライアント向けにプロキシとしての挙動を保ちます。シャード別ポートは、間違った所有者にキーが届くと<code>-MOVED &lt;slot&gt; &lt;host:port&gt;</code>を返します。プロキシやNATの後ろに置く場合は、<code>announce_ip</code>と<code>announce_port_base</code>で、これらの応答にクライアントが実際に到達できるアドレスを書かせます。<a href="../deploy-behind-a-proxy/">deploy-behind-a-proxy.md</a>を参照してください。</p>
+<p>キー空間全体を対象とするコマンド（<code>KEYS</code>、<code>SCAN</code>、<code>DBSIZE</code>、<code>FLUSHALL</code>）は、どのポートで実行してもキー空間全体を対象とし続けます。kevyが内部でファンアウトするので、クライアントが面倒を見る必要はありません。</p>
+<h2 id="有効化">有効化</h2>
+<figure class="code"><pre><code class="lang-toml"># kevy.toml
+[server]
+port = 6004
+
+[cluster]
+enabled   = true
+# port_base = 6005   # 最初のシャードのポート。既定は `port + 1`、シャード i は port_base + i</code></pre></figure>
+<p>CLI/環境変数での同等指定：</p>
+<figure class="code"><pre><code class="lang-sh">kevy --port 6004 --threads 8 --cluster      # シャードポート 6005..6012
+KEVY_CLUSTER=1 kevy --port 6004 --threads 8</code></pre></figure>
+<p>データディレクトリをクラスタモードに入れたり出したりすると、起動時に一度だけキーが再ホームされます。元のファイルは<code>*.premigration.&lt;ts&gt;</code>としてバックアップされます。</p>
+<h2 id="rustからclusterclientを使う">Rustから<code>ClusterClient</code>を使う</h2>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-client = "*"</code></pre></figure>
+<figure class="code"><pre><code class="lang-rust">use kevy_client::ClusterClient;
+
+// 任意のクラスタポートにシード接続。トポロジは CLUSTER SLOTS で発見し、
+// シャードあたり 1 本のコネクションを開く。
+let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;
+
+cc.set(b"user:42", b"alice")?;
+let v = cc.get(b"user:42")?;            // user:42 の所有シャードへルーティング
+let n = cc.incr(b"counter")?;
+
+// マルチキーの DEL/EXISTS — キーごとにルーティングして合算。
+let removed = cc.del(&amp;[b"a", b"b", b"c"])?;
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p>実行可能なシード例は<a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs"><code>crates/kevy-client/examples/cluster.rs</code></a>に、ベンチマークは<a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs"><code>crates/kevy-client/examples/cluster_bench.rs</code></a>にあります。</p>
+<h3 id="ルーティングがクロスシャードホップを消す仕組み">ルーティングがクロスシャードホップを消す仕組み</h3>
+<ol><li><b>発見。</b> <code>connect</code>はシードに<code>CLUSTER SLOTS</code>を送り、各シャードの<code>[start, end, host, port]</code>を読み、16384エントリの<code>slot → shard-index</code>テーブルを構築します。テーブルはサーバーが広告するレンジから作られるため、クライアントがパーティショニングの計算を再実装することはありません。</li><li><b>ルーティング。</b> すべてのシングルキー・コマンドは<code>key_hash_slot(key)</code>（<code>{hashtag}</code>があればその部分の、なければキー全体のCRC16-XMODEM）を計算し、そのスロット所有者へのコネクションに直接送ります。</li><li><b>必要なところだけファンアウト。</b> <code>dbsize</code>や<code>flushall</code>などクラスタ全体のコマンドはサーバー側で処理されます。クライアントは1回呼ぶだけです。</li></ol>
+<p>16コアのLinuxマシン上、並行数64のGETでクロスシャードホップを消したところ、実測スループットは333k ops/sから533k ops/s（1.6倍）に上がり、p99は3858µsから260µs（約15分の1のテール）に下がりました。<code>cargo run -p kevy-client --release --example cluster_bench</code>で再現できます。</p>
+<blockquote><p>ホップのコストが見えるのは、クリーンなマシンに負荷を掛けたときだけです。小さな同居型クラウドVMでは、差はスケジューリングノイズに埋もれて見えません。</p></blockquote>
+<h3 id="クロススロットのマルチキーコマンド">クロススロットのマルチキー・コマンド</h3>
+<p>Redis Clusterと違い、kevyはシングルノードクラスタでマルチキー・コマンド（<code>MGET</code>、<code>MSET</code>、<code>SUNION</code>、トランザクション、ブロッキングファンアウト）がシャードをまたいでも<code>-CROSSSLOT</code>を返<b>しません</b>。サーバーがシャードをまたいで要求を満たします。kevyは単一マシン上でRedis Clusterのスーパーセットです。どのRedis Clusterクライアントもそのまま動き、さらに<code>-CROSSSLOT</code>に当たっていたはずの操作も動きます。アトミック性のためにデータを同居させたい場合は<code>{hashtag}</code>の共有が依然として正しい道具ですが、正しさのための必須要件ではなくなっています。</p>
+<h3 id="クラスタポートでサポートされるclusterコマンド">クラスタポートでサポートされる<code>CLUSTER</code>コマンド</h3>
+<div class="tbl"><table><thead><tr><th>コマンド</th><th>挙動</th></tr></thead><tbody><tr><td><code>CLUSTER SLOTS</code></td><td>本物のパーティション。シャードごとに<code>[start, end, host, port]</code>1行。</td></tr><tr><td><code>CLUSTER SHARDS</code></td><td>同じデータの新しい形式。プライマリノードのみ。</td></tr><tr><td><code>CLUSTER NODES</code></td><td>フラットなテキストのマニフェスト。シャードごとに1行、IDはシャードインデックスから派生。</td></tr><tr><td><code>CLUSTER MYID</code></td><td>呼び出しに答えたシャードの決定論的なID。</td></tr><tr><td><code>CLUSTER KEYSLOT &lt;key&gt;</code></td><td><code>{hashtag}</code>またはキー全体のCRC16-XMODEM。</td></tr><tr><td><code>CLUSTER COUNTKEYSINSLOT &lt;slot&gt;</code></td><td>所有シャードのインデックスを歩いた生のカウント。</td></tr><tr><td><code>CLUSTER COUNT-FAILURE-REPORTS &lt;id&gt;</code></td><td>常に0。このレイヤに故障検出器はない。</td></tr><tr><td><code>CLUSTER INFO</code></td><td><code>cluster_enabled:1</code>、<code>cluster_state:ok</code>、スロットカバレッジを返す。</td></tr><tr><td><code>CLUSTER RESET</code>、<code>CLUSTER FORGET</code>、<code>CLUSTER MEET</code>、<code>CLUSTER FAILOVER</code>、<code>MIGRATE</code>、<code>ASK</code></td><td>未実装。*設計上のスコープ外*節を参照。</td></tr></tbody></table></div>
+<h3 id="生のルーティングヘルパーへのフォールバック">生のルーティングヘルパーへのフォールバック</h3>
+<figure class="code"><pre><code class="lang-rust">// 任意のシングルキー・コマンドを所有シャードへルーティング。
+let reply = cc.request_keyed(b"mykey", &amp;[b"STRLEN".to_vec(), b"mykey".to_vec()])?;
+// キーなしコマンドは任意のシャードへ。
+let reply = cc.request_unkeyed(&amp;[b"PING".to_vec()])?;
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p><code>ClusterClient</code>は、文字列、ハッシュ、リスト、セット、ソート済みセット、pub/sub、マルチキーの<code>DEL</code>/<code>EXISTS</code>の共通verbをラップします。pub/subはプロセス全体に届きます。どのポートの<code>Subscriber</code>も、どのシャードが<code>PUBLISH</code>を受けたかに関係なく、発行されたすべてのメッセージを見ます。</p>
+<hr>
+<h1 id="レイヤ2--マルチノードクラスタ">レイヤ2 — マルチノードクラスタ</h1>
+<h2 id="プライマリとレプリカ">プライマリとレプリカ</h2>
+<p>kevyサーバーは、自分の書き込みログをストリーミングするプライマリにも、それをミラーするレプリカにもなれます（デフォルトのロールは<code>standalone</code>で、レプリケーションは休眠しています）。プライマリはシャードごとに専用のレプリケーションリスナーをbindします。レプリカは接続し、最後に適用したオフセットを渡し、ストリーミングされてくるフレームをローカルシャードに適用します。チェーンレプリケーション（レプリカのレプリカ）はサポートされません。</p>
+<figure class="code"><pre><code class="lang-toml"># primary.toml
+[server]
+port = 6004
+
+[replication]
+role             = "primary"
+listen_port_base = 16004    # 任意。デフォルトは port + 10000</code></pre></figure>
+<figure class="code"><pre><code class="lang-toml"># replica.toml
+[server]
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "primary.local:16004"</code></pre></figure>
+<p>サーバー側の完全なセマンティクス（バックログのサイジング、スナップショットの取り込み、ハートビートとACK）は<a href="../replication/"><code>docs/replication.md</code></a>に、フェイルオーバー（計画的な<code>FAILOVER</code>とクラッシュ選挙）と整合性ラダーは<a href="../availability/"><code>docs/availability.md</code></a>にあります。本書にとって重要な事実は、同じワイヤプロトコルがクラスタモードのレプリケーションも運ぶことです。<code>[cluster] enabled = true</code>で動くプライマリはNシャード分の書き込みをストリーミングし、同じシャード数で動くレプリカがシャード対シャードで適用します。</p>
+<h2 id="レプリカとして組み込む">レプリカとして組み込む</h2>
+<p><a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded"><code>kevy-embedded</code></a>のストアはプライマリに直接subscribeして、ネットワークホップなしのプロセス内読み出しを返せます。書き込みは<code>READONLY</code>でローカルに拒否されます。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::Store;
+
+// インメモリレプリカ、AOF off、デフォルト再接続(100 ms → 5 s)。
+let replica = Store::open_replica("primary.local:16004")?;
+
+let v = replica.get(b"hello")?;
+assert!(replica.set(b"k", b"v").is_err());      // KevyError::ReadOnly
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<p>チューニングする場合：</p>
+<figure class="code"><pre><code class="lang-rust">use std::time::Duration;
+use kevy_embedded::{Config, Store};
+
+let cfg = Config::default()
+    .with_replica_upstream("primary.local:16004")
+    .with_replica_id("backup-svc-region-a")
+    .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
+let replica = Store::open(cfg)?;
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<p>ハンドシェイクは<code>REPLICATE FROM &lt;generation&gt; &lt;last-applied-offset&gt; ID &lt;replica_id&gt;</code>を送ります。プライマリは世代とオフセットをackし、フレームをストリーミングします。最後の<code>Store</code>クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での<code>PUBLISH</code>はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。</p>
+<h2 id="スコープ付きマルチライター">スコープ付きマルチライター</h2>
+<p>スコープ付きマルチライターは、キープレフィックスごとに書き込みをノードに振り分けます。各ノードは静的なconfigから所有テーブル全体を知っています。非所有者に着地した書き込みは<code>-MISDIRECTED writer is &lt;host:port&gt;</code>を返し、クライアントは正しいノードに再試行します。</p>
+<figure class="code"><pre><code class="lang-toml"># 同じ config ブロックを全メンバに置く。
+[cluster]
+node_id = "embed-billing-1"
+peers   = "embed-billing-1@10.0.0.1:6004,server-eu-1@10.0.0.2:6004,reader-1@10.0.0.3:6004"
+
+# prefix=writer[|fallback]、カンマ区切り。
+# 最初の `=` がプレフィックスと所有者指定を分けるので、`app:billing:`(`:` 含む)でも OK。
+scopes  = "app:billing:=embed-billing-1|server-eu-1, app:auth:=embed-auth-1"
+
+elect_port_base = 16100    # kevy-elect がここで listen</code></pre></figure>
+<p><code>peers</code>は<code>&lt;node_id&gt;@&lt;host&gt;:&lt;port&gt;</code>エントリのフラットな文字列です。ネスト構造がないので、テンプレート化が容易です。<code>scopes</code>は<code>prefix=writer[|fallback]</code>のカンマ区切りとしてパースされます。スコープを所有しないノードは単に書き込みを転送し、スコープを所有するノードは自分のスコープの書き込みを受け、それ以外を拒否します。</p>
+<p>読み出しはスコープの所有とは独立です。データを持つどのノード（典型的には読み取りレプリカ）でも返せます。スコープの仕組みは、書き込みの帰属だけのためにあります。</p>
+<h3 id="スコープライターとして組み込む">スコープライターとして組み込む</h3>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Store};
+
+let writer = Store::open(
+    Config::default().with_embed_writer("0.0.0.0:6105")
+)?;
+
+// ローカル書き込みは組み込みのレプリケーションソースのバックログに流れる;
+// リーダーは kevy_replicate::ReplicaClient で 0.0.0.0:6105 に接続する。
+writer.set(b"app:billing:invoice:42", b"...")?;
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<p>組み込み側は、<code>with_embed_writer</code>に渡したアドレスでレプリケーションリスナーを公開します。ほかのノードは、サーバープライマリから引くのとまったく同じ方法でそこからログを引きます。</p>
+<h2 id="kevy-electクォーラムフェイルオーバー"><code>kevy-elect</code>クォーラムフェイルオーバー</h2>
+<p><code>kevy-elect</code>は、<code>[cluster] node_id</code>と<code>peers</code>の両方が設定されたときにクラスタの全メンバーが走らせる、プロセス内のクォーラムコントロールプレーンです。各ノードは<code>elect_port_base</code>（デフォルト：クライアントポート+200）に1本のTCPコントロールリスナーをbindし、全ピアにハートビートを送ります。<code>down_after</code>（5秒）を超えて沈黙したピアにはDOWNのフラグが立ちます。メンバーシップは<b>静的</b>（オペレータが宣言した<code>peers</code>テーブル）で、ロールは<b>動的</b>です。選挙はそのテーブルの内側でプライマリを動かします。選挙のタイミング（<code>hb_interval</code> 200ms、<code>down_after</code> 5秒、<code>election_timeout</code> 3秒）は本リリースでは固定定数であり、configキーではありません。</p>
+<p>これが2つのフェイルオーバー面を駆動します。</p>
+<p><b>レプリケーションプライマリの選挙（v3.15）。</b> 現プライマリがDOWNのとき、資格のあるレプリカ（生存ピアの中で適用済みレプリケーションオフセットが最大のもの。同点は最小の<code>node_id</code>が破る）が立候補し、<code>election_timeout</code>以内にクォーラム（<code>N/2 + 1</code>）のACCEPTを集める必要があります。エポックと投票は、どの応答もノードを出る*前に*<code>&lt;data_dir&gt;/elect.meta</code>へ永続化されるため、クラッシュ再起動しても二重投票はあり得ません。勝者は書き込みを開き、敗者は自動でレプリケーションのupstreamを再ターゲットします。これを3つのクランプが支えます。既知のプライマリがない<b>コールドスタート</b>は、<code>down_after</code>の猶予窓を1回待ってから選挙します。<b>再起動</b>したクォーラムメンバーは、選挙が落ち着くまで書き込みを保留します（configの<code>role = "primary"</code>は希望にすぎません）。厳密な過半数が見えないプライマリは、1リースウィンドウ以内に<b>自分の書き込みをフェンス</b>します（<code>-NOREPLICAS primary lost quorum; writes fenced</code>）。運用のウォークスルーは<a href="../availability/"><code>docs/availability.md</code></a>にあります。</p>
+<p><b>スコープフォールバック。</b> スコープの宣言済みフォールバックは、書き込みを受けるたびにDOWN集合を参照します。ライターがDOWNなら、フォールバックは自分をアクティブな所有者として扱って書き込みを受領し、以降ほかのノードへの書き込みはフォールバックへMISDIRECTされます。元ライターのハートビートが戻るとDOWN集合を抜け、次回の判断でフォールバックは暗黙に退きます。</p>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>意味</th><th>デフォルト</th></tr></thead><tbody><tr><td><code>node_id</code></td><td>このノードの安定識別子（32BまでのASCII。スコープ所有者と選挙が参照する）</td><td>必須</td></tr><tr><td><code>peers</code></td><td>全クラスタメンバーの<code>&lt;node_id&gt;@&lt;host&gt;:&lt;elect_port&gt;:&lt;client_port&gt;[:&lt;repl_port_base&gt;]</code>リスト</td><td>必須</td></tr><tr><td><code>elect_port_base</code></td><td>選挙コントロールプレーンがbindするTCPポート（ノードごとに1リスナー）</td><td><code>0</code> = クライアントポート + 200</td></tr><tr><td><code>secure</code></td><td>選挙リンクを暗号化・認証する（<a href="../encrypted-links/"><code>docs/encrypted-links.md</code></a>）</td><td><code>false</code></td></tr><tr><td><code>peer_keys</code></td><td>各ノードの公開鍵、<code>["id=&lt;鍵&gt;", …]</code></td><td>空</td></tr></tbody></table></div>
+<h3 id="手動でのrejoinリカバリ">手動でのrejoinリカバリ</h3>
+<p>元ライターのDOWN期間が長く、その間フォールバックが書き込みを受領していた場合、それらの書き込みはフォールバック上にしかありません。そのスコープの元ライターを再有効化する前に、ライターを止め、フォールバックのデータディレクトリをライター側へコピーし、再起動してください。これでコンセンサスなしの契約を守れます。シャドウ書き込みも二重受領も起こりません。</p>
+<hr>
+<h1 id="move-scope"><code>MOVE-SCOPE</code></h1>
+<p><code>MOVE-SCOPE</code>は、有界なquiesce窓のもとで、あるライターから別のライターへプレフィックスを移行します。オペレータが発行し、現ライター上で走ります。</p>
+<figure class="code"><pre><code>MOVE-SCOPE &lt;prefix&gt; from &lt;from-node-id&gt; to &lt;to-node-id&gt;</code></pre></figure>
+<p>手順は次のとおりです：</p>
+<ol><li>現ライターは<code>&lt;prefix&gt;</code>のローカル状態をMIGRATINGに切り替えます。以降、そのプレフィックス配下のキーへの書き込みは<code>-QUIESCED migrating to &lt;to-host:port&gt;</code>を返します。クライアントは少し待って再試行します。</li><li>ライターはプレフィックスのキー空間スライスをシリアライズし、<code>MOVE-SCOPE-INGEST &lt;prefix&gt; &lt;bulk&gt;</code>でターゲットのデータポートへ送ります。あらゆる値型が完全な忠実度で移動します——ストリームも含めてです。エントリ、<code>last_id</code>の帳簿、コンシューマグループ、コンシューマ、生きているpending（PEL）行が移動をまたいで運ばれます（削除済みエントリのtombstone PEL行だけは落とされます。あれを再現できるRESP verbは存在しないからです）。</li><li>ターゲットから<code>+OK</code>を受け取ると、ライターは移行をローカルにコミットします。以降、ソース側でのそのプレフィックスへの書き込みは<code>-MISDIRECTED writer is &lt;to-host:port&gt;</code>を返します。</li><li>ほかのクラスタメンバーは、オペレータが新しいconfigをpushして再起動するまで、静的な<code>scopes</code>どおりにルーティングを続けます。</li></ol>
+<p>移動中に見える2つのワイヤ応答：</p>
+<div class="tbl"><table><thead><tr><th>応答</th><th>意味</th></tr></thead><tbody><tr><td><code>-MISDIRECTED writer is &lt;host:port&gt;</code></td><td>書き込みが非所有者に着地した。指定されたホストに再試行する。</td></tr><tr><td><code>-QUIESCED migrating to &lt;host:port&gt;</code></td><td>MOVE-SCOPE窓中の一時的なもの。少し待って再試行する。</td></tr></tbody></table></div>
+<p>クラスタ対応クライアントは<code>-MISDIRECTED</code>でキーごとのターゲットをキャッシュして透過的に再試行します。<code>-QUIESCED</code>では数百ミリ秒ほど眠ってから再試行するのが適切です。</p>
+<p>移動を途中で中断するとソースライターに復元され、ターゲットに部分適用の状態が残ることはありません。</p>
+<hr>
+<h1 id="設定リファレンス">設定リファレンス</h1>
+<h2 id="シングルノードクラスタモード">シングルノードクラスタモード</h2>
+<div class="tbl"><table><thead><tr><th>TOML</th><th>CLI</th><th>環境変数</th><th>デフォルト</th><th>意味</th></tr></thead><tbody><tr><td><code>[cluster] enabled</code></td><td><code>--cluster</code></td><td><code>KEVY_CLUSTER=1</code></td><td><code>false</code></td><td>各シャードをシャード別ポートで公開する。</td></tr><tr><td><code>[cluster] port_base</code></td><td>—</td><td>—</td><td><code>port</code>の値</td><td>シャード<code>i</code>は<code>port_base + 1 + i</code>をbindする。TOMLのみ。</td></tr></tbody></table></div>
+<h2 id="レプリケーション">レプリケーション</h2>
+<p>TOMLのみです。レプリケーションのCLIフラグや環境変数はありません：</p>
+<div class="tbl"><table><thead><tr><th>TOML</th><th>デフォルト</th><th>意味</th></tr></thead><tbody><tr><td><code>[replication] role</code></td><td><code>"standalone"</code></td><td><code>"primary"</code>はレプリカへストリーミング。<code>"replica"</code>は<code>upstream</code>から引く。<code>"standalone"</code>=サブシステム休眠。</td></tr><tr><td><code>[replication] listen_port_base</code></td><td><code>0</code>（= <code>port</code> + 10000）</td><td>シャード<code>i</code>はbase + <code>i</code>でレプリケーションをbindする。レプリカもbindする（v3.15の昇格対称性）。</td></tr><tr><td><code>[replication] upstream</code></td><td>未設定</td><td>レプリカ専用。プライマリのレプリケーションポートベースの<code>host:port</code>。</td></tr></tbody></table></div>
+<p>完全なキー一覧（バックログのサイジング、<code>replica_read_only</code>、<code>replica_max_staleness_ms</code>、<code>min_replicas_to_write</code>、<code>single_source</code>）は<a href="../replication/"><code>docs/replication.md</code></a>にあります。</p>
+<h2 id="スコープ付きマルチライター--elect">スコープ付きマルチライター + elect</h2>
+<div class="tbl"><table><thead><tr><th>TOML</th><th>意味</th></tr></thead><tbody><tr><td><code>[cluster] node_id</code></td><td>このノードの安定識別子（32BまでのASCII）。</td></tr><tr><td><code>[cluster] peers</code></td><td>全クラスタメンバーの<code>&lt;node_id&gt;@&lt;host&gt;:&lt;elect_port&gt;:&lt;client_port&gt;[:&lt;repl_port_base&gt;]</code>リスト（レガシーの2フィールド形式では両ポートが等しいとみなす）。</td></tr><tr><td><code>[cluster] scopes</code></td><td>`prefix=writer[\</td><td>fallback]`エントリ、カンマ区切り。</td></tr><tr><td><code>[cluster] elect_port_base</code></td><td>選挙コントロールプレーンがbindするTCPポート。<code>0</code>（デフォルト）= <code>port</code> + 200。</td></tr><tr><td><code>[cluster] secure</code></td><td>選挙リンクを暗号化・認証する。<code>false</code>（既定）は平文。</td></tr><tr><td><code>[cluster] peer_keys</code></td><td>他の全ノードの <code>["id=&lt;公開鍵&gt;", …]</code>。<code>kevy keygen</code> が出力する。</td></tr></tbody></table></div>
+<p>選挙のタイミング（ハートビート200ms、5秒の沈黙でDOWN、選挙タイムアウト3秒）は固定定数であり、configキーではありません。</p>
+<hr>
+<h1 id="トレードオフと限界">トレードオフと限界</h1>
+<ul><li><b>シングルノードクラスタモードは1プロセスです。</b> 買えるのはクライアント側のキー・ルーティングであって、ホストレベルの耐障害性ではありません。そちらが必要ならレプリカを追加してください。</li><li><b>プロキシポートは生き続けます。</b> クラスタを話さないクライアントは引き続き正しく動作します。ただしクロスシャードホップ付きです。</li><li><b>メンバーシップは静的、ロールは動的です。</b> <code>peers</code>と<code>scopes</code>は起動時にconfigから読まれます。メンバーシップの変更は「新しいconfigをpushして再起動」であり、設計上ゴシップはありません。その静的テーブルの内側で、選挙が実行中にプライマリロールを動かします（v3.15）。故障ノードが自動で置き換えられることはありません。</li><li><b><code>MOVE-SCOPE</code>はプレフィックスの書き込みをquiesceします。</b> 窓はスライス送出時間で有界です。LAN経由のGBクラスのスコープなら1桁秒です。それより大幅に大きいプレフィックスは、メンテナンス窓に合わせて実施してください。</li><li><b>スコープライターとしての組み込みはサービス形状のワークロード</b>（請求サービス、認証サービスなど）を想定しており、マルチTBのデータセットは想定していません。</li><li><b>フォールバック受領後は手動のrejoinリカバリが必要です。</b> 再有効化の前にフォールバックのデータディレクトリをライターへコピーしてください。自動のコンセンサスキャッチアップはありません。</li></ul>
+<hr>
+<h1 id="設計上のスコープ外">設計上のスコープ外</h1>
+<ul><li>AUTHとTLS — デプロイのエッジ（サイドカー、メッシュ、LB）で扱うものであり、kevyでは扱いません。</li><li>マルチDCのアクティブ・アクティブとCRDT。</li><li>Raft、Paxos、その他キー空間の下に置くコンセンサスログ。</li><li>ゴシップベースの発見 — <code>peers</code>は静的です。</li><li>オンラインリシャーディング、<code>MIGRATE</code>、<code>ASK</code>リダイレクト。</li><li>所有が重なるマルチマスター — 各プレフィックスのライターは常にちょうど1つです。</li></ul>
+<p>これらが追加されることはありません。シンプルさこそが機能です。</p>
+<hr>
+<h1 id="faq">FAQ</h1>
+<p><b>レプリケーションを使うのにクラスタモードは必要ですか？</b> いいえ。シングルノードクラスタモードと、レプリケーション/マルチノードのレイヤは独立です。非クラスタのプライマリは非クラスタのレプリカを持てますし、クラスタのプライマリはクラスタのレプリカを持てます。合成は可能ですが、どちらかがもう一方を必須とすることはありません。</p>
+<p><b>クラスタモードのkevyに対して標準のクラスタ対応クライアント（Lettuce、ioredis、redis-py-cluster）は使えますか？</b> はい。<code>CLUSTER SLOTS / SHARDS / NODES</code>は本物のパーティションを広告し、間違ったシャードに当たれば<code>-MOVED</code>が出ます。これらのライブラリが依存している面はまさにそれだけです。クライアントのルーティングがシャードに届くよう、メインのプロキシポートではなくシャード別ポートに向けてください。</p>
+<p><b>シングルノードクラスタモードでシャードをまたぐマルチキー・コマンドはどうなりますか？</b> 成功します。kevyはクロススロットの<code>MGET</code>、<code>MSET</code>、<code>SUNION</code>、トランザクション、ブロッキングファンアウトを、<code>-CROSSSLOT</code>を返さずにサーバー側で実行します。アトミック性が重要なケースでは<code>{hashtag}</code>による同居は依然として有用ですが、もはや正しさのための要件ではありません。</p>
+<p><b>オペレータなしでライターのクラッシュを乗り切るには？</b> レプリケーションプライマリの場合：全ノードに<code>[cluster]</code>ブロック（<code>node_id</code>、<code>elect_port_base</code>、<code>peers</code>）を構成します。死んだプライマリは<code>down_after</code>（5秒）後に検出され、最も進んだレプリカがその座に選出されます。再合流した旧プライマリは自動で降格して再同期します（<a href="../availability/"><code>docs/availability.md</code></a>を参照）。スコープライターの場合：フォールバックを宣言します（<code>prefix=writer|fallback</code>）。ライターのハートビートが<code>down_after</code>を超えて途切れると、フォールバックがそのプレフィックスの書き込みを受け始めます。クライアントは<code>-MISDIRECTED writer is &lt;fallback&gt;</code>を受けて追従し、元ライターが復帰したら手動のrejoinリカバリを実行します。</p>
+<p><b>なぜゴシップ/Raftは恒久的にスコープ外なのですか？</b> 全書き込みの下にコンセンサスログを置くコストは、kevyを選ぶ理由になっているスループットとテール遅延の優位を打ち消してしまいます。静的config+クォーラムハートビートの設計なら、ホットパス上でステートマシンレプリケーションの代金を払うことなく、フェイルオーバーの分岐が手に入ります。本当にコンセンサスバックのkey-valueストアが必要なワークロードには、kevyは適さない道具です。</p></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

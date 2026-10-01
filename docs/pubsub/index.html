@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pub/sub · kevy</title>
+    <meta name="description" content="How publishers fan messages out to many subscribers in kevy — over the wire with PUBLISH / SUBSCRIBE, in-process via the embedded Store, and through the same URL facade that the re">
+    <link rel="canonical" href="https://kevy.golia.jp/docs/pubsub/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/pubsub/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/pubsub/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/pubsub/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/pubsub/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../kevy-logo.svg"/><link rel="preload" as="image" href="../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../"><img src="../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../">Home</a><a href="../../docs/" class="on" aria-current="page">Docs</a><a href="../../docs/commands/" class="hide-sm">Commands</a><div class="langswitch" role="group" aria-label="language"><a class="on" href="../../docs/pubsub/" hreflang="en">EN</a><a href="../../zh/docs/pubsub/" hreflang="zh-CN">中文</a><a href="../../ja/docs/pubsub/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">Getting started</div><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a><a href="../../docs/persistence/">Persistence</a><a href="../../docs/tuning/">Tuning kevy</a></div><div><div class="group">Running it</div><a href="../../docs/upgrading-6.4-to-7.0/">Upgrading from 6.4 to 7.0</a><a href="../../docs/rust-api-7.0/">Rust API changes in 7.0</a><a href="../../docs/upgrading-6.3-to-6.4/">Upgrading from 6.3 to 6.4</a><a href="../../docs/upgrading-6.2-to-6.3/">Upgrading from 6.2 to 6.3</a><a href="../../docs/upgrading-6.2.0-to-6.2.1/">Upgrading from 6.2.0 to 6.2.1</a><a href="../../docs/upgrading-5.1-to-5.2/">Upgrading from 5.1 to 5.2</a><a href="../../docs/upgrading-5.0-to-5.1/">Upgrading from 5.0 to 5.1</a><a href="../../docs/upgrading-4-to-5/">Upgrading from 4.x to 5.0</a><a href="../../docs/UPGRADING/">Upgrading across the older majors</a><a href="../../docs/replication/">Replication</a><a href="../../docs/availability/">Availability</a><a href="../../docs/cluster/">Cluster</a><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget*)</a><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a><a href="../../docs/alloc/">kevy-alloc — the server&#x27;s allocator</a><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a><a href="../../docs/async/">Async client</a></div><div><div class="group">Working with data</div><a href="../../docs/indexes/">Secondary indexes (IDX.* / idx_*)</a><a href="../../docs/tables/">Tables (TABLE.* / table_*)</a><a href="../../docs/relational-cli/">Relational commands in kevy-cli</a><a href="../../docs/table-migration/">Migrating hand-maintained indexes to tables</a><a href="../../docs/vector-search/">Vector search (KIND ann)</a><a href="../../docs/text-search/">Full-text search (KIND text)</a><a href="../../docs/views/">Views (VIEW.* / view_*)</a><a href="../../docs/cdc/">CDC — the change feed (FEED.* / changes_since)</a><a class="on" href="../../docs/pubsub/" aria-current="page">Pub/sub</a><a href="../../docs/lua/">Lua scripting</a><a href="../../docs/packed-rows/">packed-rows — store a declared row as one allocation</a></div><div><div class="group">Embedding it</div><a href="../../docs/wasm/">kevy on WebAssembly</a><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a><a href="../../docs/electron/">kevy in Electron</a><a href="../../docs/tauri/">kevy in a Tauri app</a><a href="../../docs/iot/">kevy on IoT devices</a></div><div><div class="group">Clients</div><a href="../../docs/clients/">Bring your redis client</a><a href="../../docs/bindings/">Use kevy from your language</a><a href="../../docs/client-contract/">kevy Client Contract (language-agnostic)</a></div><div><div class="group">Reference</div><a href="../../docs/boundaries/">What kevy will not do</a><a href="../../docs/error-replies/">Error reply catalog</a><a href="../../docs/rds-workloads/">RDS workloads on kevy</a><a href="../../docs/deploy-behind-a-proxy/">Deploying kevy behind a proxy</a><a href="../../docs/encrypted-links/">Encrypted links</a><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></div></nav><main class="docmain"><details class="toc"><summary>On this page</summary><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-examples">Worked examples</a></li><li class="l3"><a href="#smoke-test-with-redis-cli">Smoke-test with redis-cli</a></li><li class="l3"><a href="#rust-over-the-url-facade--kevy-client">Rust over the URL facade — kevy-client</a></li><li class="l3"><a href="#in-process-via-kevy-embedded">In-process via kevy-embedded</a></li><li class="l3"><a href="#pattern-subscriptions">Pattern subscriptions</a></li><li class="l2"><a href="#keyspace-notifications">Keyspace notifications</a></li><li class="l2"><a href="#url-backend-table">URL backend table</a></li><li class="l2"><a href="#trade-offs-and-limits">Trade-offs and limits</a></li><li class="l2"><a href="#operational-introspection">Operational introspection</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></details><div><h1 id="pubsub">Pub/sub</h1>
+<p>How publishers fan messages out to many subscribers in kevy — over the wire with <code>PUBLISH</code> / <code>SUBSCRIBE</code>, in-process via the embedded <code>Store</code>, and through the same URL facade that the rest of <code>kevy-client</code> uses.</p>
+<h2 id="when-you-need-this">When you need this</h2>
+<p>Reach for pub/sub when one writer needs to notify zero-or-more readers <i>right now</i>, and you do not care about messages that arrive while a reader is offline:</p>
+<ul><li>"Tell every web worker to refresh its config cache."</li><li>"Stream just-written rows from one shard to whoever is tailing."</li><li>"Wake a worker pool when a job lands; the job itself is in a list."</li><li>"Dev loop: a producer thread and a consumer thread in the same binary, no Redis box required."</li></ul>
+<p>If you need durable hand-off (job queue with retries, fan-out over restarts, message replay), use a list or stream instead — see <a href="https://github.com/goliajp/kevy/blob/develop/docs/persistence.md"><code>docs/persistence.md</code></a> for what gets written to disk.</p>
+<h2 id="core-idea">Core idea</h2>
+<p>A pub/sub channel is a name. Subscribers register interest in that name (or a glob pattern); a publish on the same name walks the subscriber index and enqueues one copy of the body per matching subscriber. There is no broker queue, no offline buffer, no ack — if nobody is listening the moment you publish, the message is gone.</p>
+<figure class="code"><pre><code>                   publish("news", body)
+                          |
+                          v
+             +-----------------------+
+             |  channel "news"       |   &lt;- per-channel subscriber index
+             |  subscribers: [A,B,C] |
+             +-----------------------+
+                  |       |       |
+                  v       v       v
+               sub A   sub B   sub C    &lt;- each gets its own copy</code></pre></figure>
+<p>Internally each publish builds the wire frame once, wraps the body in an <code>Arc</code>, and uses <code>writev</code> to scatter-gather it to every matching TCP subscriber — so the body bytes are copied <b>zero</b> extra times no matter how wide the fan-out. The same per-channel index handles both server connections and in-process <code>Subscription</code> handles.</p>
+<h2 id="worked-examples">Worked examples</h2>
+<h3 id="smoke-test-with-redis-cli">Smoke-test with <code>redis-cli</code></h3>
+<p>Open two shells against a running kevy server:</p>
+<figure class="code"><pre><code class="lang-sh"># shell 1 — subscriber
+$ redis-cli -p 6379 SUBSCRIBE news
+Reading messages... (press Ctrl-C to quit)
+1) "subscribe"
+2) "news"
+3) (integer) 1</code></pre></figure>
+<figure class="code"><pre><code class="lang-sh"># shell 2 — publisher
+$ redis-cli -p 6379 PUBLISH news "hello"
+(integer) 1   # one subscriber received it</code></pre></figure>
+<p>Back in shell 1:</p>
+<figure class="code"><pre><code>1) "message"
+2) "news"
+3) "hello"</code></pre></figure>
+<p>A <code>PUBLISH</code> to a channel with no subscribers returns <code>(integer) 0</code> and the message is dropped on the floor. That is the contract — you do not get a "we tried to deliver this" signal.</p>
+<h3 id="rust-over-the-url-facade--kevy-client">Rust over the URL facade — <code>kevy-client</code></h3>
+<p>The same call shape targets a TCP server, a named in-process bus, or a persistent in-process store; flip the URL and recompile, no <code>match scheme { … }</code> at call sites.</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+fn run(url: &amp;str) -&gt; kevy_client::KevyResult&lt;()&gt; {
+    // Open a subscriber against `news`. The first frame the bus
+    // hands back is the subscribe ack; drain it before asserting
+    // on bodies.
+    let mut sub = Subscriber::connect_channels(url, &amp;[b"news"])?;
+    let _ack = sub.recv()?;
+
+    let mut conn = Connection::connect(url)?;
+    let received = conn.publish(b"news", b"hello")?;
+    assert_eq!(received, 1);
+
+    match sub.recv()? {
+        PubsubEvent::Message { channel, payload } =&gt; {
+            assert_eq!(channel, b"news");
+            assert_eq!(payload, b"hello");
+        }
+        other =&gt; panic!("unexpected frame: {other:?}"),
+    }
+    Ok(())
+}
+
+// Dev:  in-process shared bus by name.
+run("mem://app")?;
+// Prod: real TCP server.
+run("kevy://prod-cache:6379")?;
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p>Cross-thread is the same code with one <code>Subscriber</code> and one <code>Connection</code> opened against the same URL from different threads — the <code>mem://&lt;name&gt;</code> registry hands both ends the same backing bus, so the producer thread can <code>Connection::publish</code> and the consumer thread blocks in <code>sub.recv()</code>.</p>
+<h3 id="in-process-via-kevy-embedded">In-process via <code>kevy-embedded</code></h3>
+<p>When the embedding code already has a <code>Store</code>, skip the URL indirection and talk to the bus directly:</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, PubsubEvent, Store};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// Subscriber owns the receive queue.
+let sub = store.subscribe(&amp;[b"jobs"]);
+let _ack = sub.recv()?; // PubsubEvent::Subscribe
+
+// Any clone of `store` reaches the same bus.
+let writer = store.clone();
+assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
+
+match sub.recv()? {
+    PubsubEvent::Message { channel, payload } =&gt; {
+        assert_eq!(channel, b"jobs");
+        assert_eq!(payload, b"compute-pi");
+    }
+    other =&gt; panic!("unexpected frame: {other:?}"),
+}
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<p><code>Store::clone</code> is cheap (it's an <code>Arc</code> bump), so the common shape is "hand each thread a <code>store.clone()</code> and let it <code>publish</code> or <code>subscribe</code> whenever it needs to." Subscribers drop unregisters atomically; a panicking consumer thread does not leave a zombie entry in the index.</p>
+<h3 id="pattern-subscriptions">Pattern subscriptions</h3>
+<p><code>PSUBSCRIBE</code> registers a glob and receives messages on every channel that matches it. The glob syntax — <code>*</code>, <code>?</code>, <code>[abc]</code> — is the same matcher <code>KEYS</code> and <code>SCAN</code> use.</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+let mut sub = Subscriber::connect("mem://signals")?;
+sub.psubscribe(&amp;[b"news.*"])?;
+let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
+
+let mut conn = Connection::connect("mem://signals")?;
+conn.publish(b"news.tech", b"breaking")?; // matches
+conn.publish(b"weather",   b"sunny")?;    // does NOT match
+
+match sub.recv()? {
+    PubsubEvent::Pmessage { pattern, channel, payload } =&gt; {
+        assert_eq!(pattern, b"news.*");
+        assert_eq!(channel, b"news.tech");
+        assert_eq!(payload, b"breaking");
+    }
+    other =&gt; panic!("unexpected frame: {other:?}"),
+}
+# Ok::&lt;(), kevy_client::KevyError&gt;(())</code></pre></figure>
+<p>A subscriber that holds both a channel subscription <b>and</b> a matching pattern subscription receives <b>two</b> copies — one <code>Message</code>, one <code>Pmessage</code>. Per-publish dedup only suppresses the "same <code>Subscription</code> listed twice in the same channel index" duplicate, not channel-vs-pattern overlap.</p>
+<h2 id="keyspace-notifications">Keyspace notifications</h2>
+<p>kevy can announce keyspace changes over pub/sub, Redis-style: a write to <code>user:42</code> fires <code>__keyspace@0__:user:42</code> (payload = the event name, e.g. <code>set</code>) and/or <code>__keyevent@0__:set</code> (payload = the key). kevy serves DB 0 only, so the channel names always carry <code>@0</code>.</p>
+<p>Off by default — with the flag string empty, every write pays one atomic load and skips. Enable it in the config file:</p>
+<figure class="code"><pre><code class="lang-toml">[notification]
+notify_keyspace_events = "KEA"   # everything, both channels</code></pre></figure>
+<p>The flag string follows the Redis convention — channels first, then event classes:</p>
+<div class="tbl"><table><thead><tr><th>flag</th><th>meaning</th></tr></thead><tbody><tr><td><code>K</code></td><td>publish on the <code>__keyspace@0__:&lt;key&gt;</code> channel</td></tr><tr><td><code>E</code></td><td>publish on the <code>__keyevent@0__:&lt;event&gt;</code> channel</td></tr><tr><td><code>g</code></td><td>generic commands — <code>DEL</code>, <code>EXPIRE</code>, <code>PERSIST</code>, <code>RENAME</code>, …</td></tr><tr><td><code>$</code></td><td>string commands — <code>SET</code>, <code>INCR</code>, <code>APPEND</code>, <code>MSET</code>, …</td></tr><tr><td><code>l</code></td><td>list commands</td></tr><tr><td><code>s</code></td><td>set commands</td></tr><tr><td><code>h</code></td><td>hash commands</td></tr><tr><td><code>z</code></td><td>sorted-set commands</td></tr><tr><td><code>t</code></td><td>stream commands — <code>XADD</code>, <code>XTRIM</code>, <code>XGROUP</code>, …</td></tr><tr><td><code>x</code></td><td><code>expired</code> events — a TTL'd key removed (lazily on access or by the reaper)</td></tr><tr><td><code>e</code></td><td><code>evicted</code> events — a key removed by <code>maxmemory</code> pressure</td></tr><tr><td><code>n</code></td><td><code>new</code> events — a key added to the keyspace</td></tr><tr><td><code>A</code></td><td>alias for <code>g$lshztxe</code> (every class except <code>n</code>, matching Redis)</td></tr></tbody></table></div>
+<p>At least one of <code>K</code>/<code>E</code> plus at least one event class must be set for anything to fire. An unknown character in the string is a <b>config error at startup</b> — a typo'd flag string refuses admission instead of silently dropping events. Subscribe with an ordinary pattern subscription:</p>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'</code></pre></figure>
+<p>Notification delivery rides the same at-most-once pub/sub bus as everything else on this page: no subscriber at publish time means the event is gone. Consumers that must not miss changes belong on the CDC feed (<a href="https://github.com/goliajp/kevy/blob/develop/docs/cdc.md"><code>docs/cdc.md</code></a>), which is cursored and replayable — keyspace notifications are the "wake up" signal, not the ledger.</p>
+<h2 id="url-backend-table">URL backend table</h2>
+<div class="tbl"><table><thead><tr><th>URL</th><th>Backing store</th><th>Shared across opens?</th><th>Cross-process visible?</th></tr></thead><tbody><tr><td><code>mem://</code></td><td>in-process, anonymous</td><td><b>No</b> — each open gets a fresh <code>Store</code></td><td>No</td></tr><tr><td><code>mem://&lt;name&gt;</code></td><td>in-process, named registry</td><td><b>Yes</b> — same <code>&lt;name&gt;</code> ⇒ same <code>Store</code></td><td>No</td></tr><tr><td><code>file:///abs/path</code></td><td>in-process + AOF/snapshot</td><td><b>Yes</b> — same path ⇒ same <code>Store</code>, persists</td><td>No</td></tr><tr><td><code>kevy://host[:port][/db]</code></td><td>TCP kevy server</td><td>One socket per open; server-side fan-out</td><td><b>Yes</b></td></tr><tr><td><code>redis://host[:port][/db]</code></td><td>TCP — alias of <code>kevy://</code></td><td>same</td><td><b>Yes</b></td></tr><tr><td><code>tcp://host[:port]</code></td><td>TCP — raw, no leading <code>SELECT</code></td><td>same</td><td><b>Yes</b></td></tr></tbody></table></div>
+<p>Anonymous <code>mem://</code> cannot receive published messages — nothing else can reach the same backing <code>Store</code>, so <code>Subscriber::connect_channels</code> rejects it with <code>KevyError::Unsupported</code>. Use <code>mem://&lt;some-name&gt;</code> whenever you intend to publish.</p>
+<p><code>rediss://</code> and <code>redis://user:pass@…</code> are rejected too: kevy ships without TLS or <code>AUTH</code>. Front the socket with stunnel + IP allowlist at the network boundary if you need either. <code>kevys://</code> subscribes over the server's encrypted client port (<a href="../encrypted-links/">encrypted-links.md</a>).</p>
+<p>The <code>mem://&lt;name&gt;</code> and <code>file:///</code> registries are <b>per-process</b>: two unrelated OS processes that open the same name see two independent buses. Cross-process delivery means running a kevy server and opening <code>kevy://host:port</code> from both sides.</p>
+<h2 id="trade-offs-and-limits">Trade-offs and limits</h2>
+<ul><li><b>At-most-once delivery.</b> A subscriber that disconnects mid-frame loses that frame. There is no per-subscriber durable cursor and no redelivery. If a frame matters, persist it in a list or stream and use pub/sub only as the "wake up" signal.</li><li><b>No offline backlog.</b> A publish that finds zero subscribers returns <code>0</code> and the body is discarded. There is no buffer that catches a subscriber up on what it missed while disconnected.</li><li><b>Subscriber back-pressure is per-subscriber, not global.</b> Each subscriber owns its own bounded queue. A slow consumer fills its own queue and then drops frames or, on TCP, gets closed by the server's client-output-buffer policy. The publish path drops the bus mutex before sending, so one slow listener cannot stall publishes on unrelated channels — but it also cannot exert back-pressure on the publisher.</li><li><b>Linux <code>writev</code> cap.</b> On Linux, <code>writev</code> hands the kernel at most <code>IOV_MAX = 1024</code> iovec entries per call. The server batches the per-subscriber frame headers and the shared body Arc into iovecs; for fan-outs wider than ~340 subscribers per channel (each takes three iovec slots) the server splits into multiple <code>writev</code> calls automatically. The cap shows up only as a soft performance ceiling, never as a delivery failure.</li><li><b>Subscribed clients are restricted.</b> A <code>Subscriber</code> connection rejects non-pub/sub commands; that is why <code>kevy-client</code> exposes publisher and subscriber as <b>two separate types</b> sharing the same URL.</li></ul>
+<h2 id="operational-introspection">Operational introspection</h2>
+<p>The standard <code>PUBSUB</code> admin subcommand works on both the TCP server and the URL facade — open a normal <code>Connection</code>, not a <code>Subscriber</code>, to call them.</p>
+<div class="tbl"><table><thead><tr><th>Subcommand</th><th>Returns</th></tr></thead><tbody><tr><td><code>PUBSUB CHANNELS [pat]</code></td><td>Array of channels with at least one subscriber, optionally glob-filtered.</td></tr><tr><td><code>PUBSUB NUMSUB [ch …]</code></td><td>Interleaved <code>channel, count</code> pairs for each named channel (0 if absent).</td></tr><tr><td><code>PUBSUB NUMPAT</code></td><td>Integer: number of distinct <code>PSUBSCRIBE</code> patterns registered, across clients.</td></tr></tbody></table></div>
+<figure class="code"><pre><code class="lang-sh">$ redis-cli -p 6379 PUBSUB CHANNELS '*'
+1) "news"
+2) "jobs"
+$ redis-cli -p 6379 PUBSUB NUMSUB news jobs missing
+1) "news"
+2) (integer) 3
+3) "jobs"
+4) (integer) 1
+5) "missing"
+6) (integer) 0
+$ redis-cli -p 6379 PUBSUB NUMPAT
+(integer) 2</code></pre></figure>
+<p>All three are O(channels) or O(args) point lookups against the per-shard pub/sub registry; safe to poll from monitoring agents.</p>
+<h2 id="faq">FAQ</h2>
+<p><b>Will a message arrive if the subscriber connected after the publish?</b>  No. Pub/sub has no replay. The subscriber index is consulted at publish time; later subscribers see only frames published <i>after</i> their subscribe ack lands.</p>
+<p><b>Does <code>PUBLISH</code> block the publisher until subscribers drain?</b>  No. The publisher's <code>publish</code> call returns once the body has been queued onto every matching subscriber's per-subscriber queue (and, for TCP subscribers, scheduled onto their socket's write queue). A slow subscriber holds up its own queue, not yours.</p>
+<p><b>Can I share one <code>Subscriber</code> between async tasks?</b>  Yes — wrap it in an <code>Arc</code> and <code>spawn_blocking</code> the <code>recv</code> call. The receive mutex serialises blocking waits, so each frame is delivered to <b>exactly one</b> task. For real broadcast fan-out (every task sees every frame), open one <code>Subscriber</code> per task — they are cheap. See <a href="https://github.com/goliajp/kevy/blob/develop/docs/async.md"><code>docs/async.md</code></a> for the full async pattern.</p>
+<p><b>Why does my test see the subscribe ack before any messages?</b>  The bus is ordered, but every <code>SUBSCRIBE</code> / <code>PSUBSCRIBE</code> enqueues an ack frame <i>before</i> the first body frame for that channel arrives. Drain the ack with one <code>sub.recv()?</code> before asserting on payloads — this matches the redis-cli wire shape.</p>
+<p><b>Do I need cluster routing for pub/sub?</b>  No. Pub/sub fan-out is process-level, not slot-routed: publishing on any shard's port reaches every subscriber on every shard's port in the same process. A plain <code>Connection::connect("kevy://host:port")</code> against any shard port works. See <a href="https://github.com/goliajp/kevy/blob/develop/docs/cluster.md"><code>docs/cluster.md</code></a> for the slot routing that <i>keyspace</i> commands use.</p></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

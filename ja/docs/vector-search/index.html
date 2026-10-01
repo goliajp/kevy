@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ベクトル検索（KIND ann） · kevy</title>
+    <meta name="description" content="ANNはインデックスエンジンの4番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がf32ベクトルとしてパースされ、シャードごとのHNSWグラフにインデックスされます。グラフはすべての書き込みと同期して維持されます。サイドカーのベクトルデータベースも、取り込みジョブもありません。埋め込みはレコードの残りと同じハッシュ行の中に">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/vector-search/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/vector-search/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/vector-search/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/vector-search/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/vector-search/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/vector-search/" hreflang="en">EN</a><a href="../../../zh/docs/vector-search/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/vector-search/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a class="on" href="../../../ja/docs/vector-search/" aria-current="page">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#クイックスタート組み込み">クイックスタート（組み込み）</a></li><li class="l2"><a href="#ワイヤ形式">ワイヤ形式</a></li><li class="l2"><a href="#距離と結果">距離と結果</a></li><li class="l2"><a href="#再現率efというノブ">再現率：EFというノブ</a></li><li class="l2"><a href="#パラメータ削除再構築">パラメータ、削除、再構築</a></li><li class="l2"><a href="#フィルタリングとハイブリッド検索">フィルタリングと、ハイブリッド検索</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#サイジング">サイジング</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></details><div><h1 id="ベクトル検索kind-ann">ベクトル検索（<code>KIND ann</code>）</h1>
+<p>ANNはインデックスエンジンの4番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がf32ベクトルとしてパースされ、シャードごとのHNSWグラフにインデックスされます。グラフはすべての書き込みと同期して維持されます。サイドカーのベクトルデータベースも、取り込みジョブもありません。埋め込みはレコードの残りと同じハッシュ行の中に住み、グラフがデータからドリフトすることは原理的にあり得ません。</p>
+<figure class="code"><pre><code>IDX.CREATE embs ON PREFIX doc: FIELD v TYPE vector KIND ann DIM 768
+    [DISTANCE cosine|l2|ip] [M 16] [EF 200]
+IDX.QUERY embs KNN &lt;f32-le-blob&gt; LIMIT 10 [EF 400] [FIELDS title]
+IDX.REBUILD embs</code></pre></figure>
+<h2 id="クイックスタートサーバー">クイックスタート（サーバー）</h2>
+<p>行は宣言したプレフィックス配下のハッシュキーであり、インデックス対象の値は、生のベクトルバイト列を保持する宣言された1つのフィールドです。</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE embs ON PREFIX doc: FIELD v TYPE vector KIND ann DIM 4
+kevy-cli -p 6004 HSET doc:1 title "intro" v "csv:0.1,0.2,0.3,0.4"
+kevy-cli -p 6004 HSET doc:2 title "search" v "csv:0.4,0.3,0.2,0.1"
+kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title</code></pre></figure>
+<p>応答は<code>key, distance</code>の組の昇順です（最も近いものが先）。<code>FIELDS</code>は、各ヒットを所有するシャード上で、同じ呼び出しの中でハッシュフィールドをhydrateします。本番では、ベクトルの値はクライアントライブラリが書くバイナリのblob（リトルエンディアンf32の<code>dim × 4</code>バイト）です。上の<code>csv:</code>形式はデバッグ用の便宜です。</p>
+<p>補助verbは、ほかのどのkindとも同じように効きます。<code>IDX.EXPLAIN embs KNN …</code>（実行を伴わないパースとプラン）、<code>IDX.VERIFY</code> / <code>IDX.LIST</code>（ライブの統計）、<code>IDX.DROP</code>。ANNインデックスでは<code>IDX.REBUILD</code>がグラフを詰め直します——「削除と再構築」を参照してください。</p>
+<h2 id="クイックスタート組み込み">クイックスタート（組み込み）</h2>
+<p>ANNのkindは<code>vector</code> cargoフィーチャの背後にあります（デフォルトで有効。コンパイルから外すと<code>KevyError::Unsupported</code>を返します）。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{AnnSpec, Config, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+
+    // AnnSpec::new starts at M 16 / EF 200;
+    // distance: 0 = cosine, 1 = l2, 2 = ip.
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
+
+    let v1: Vec&lt;u8&gt; = [0.1f32, 0.2, 0.3, 0.4]
+        .iter().flat_map(|f| f.to_le_bytes()).collect();
+    store.hset(b"doc:1", &amp;[
+        (b"title".as_slice(), b"intro".as_slice()),
+        (b"v".as_slice(), v1.as_slice()),
+    ])?;
+
+    // Nearest neighbors ascending: Vec&lt;(key, distance)&gt;.
+    // ef = 0 takes the engine default beam width.
+    let hits = store.idx_knn(b"embs", &amp;[0.1, 0.2, 0.3, 0.4], 10, 0)?;
+    for (key, dist) in &amp;hits {
+        println!("{} {dist}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<p><code>idx_knn</code>は<code>KevyResult&lt;Vec&lt;(Vec&lt;u8&gt;, f32)&gt;&gt;</code>を返します（<code>k</code>は1..=1000にclampされます）。インデックスが見つからなければ<code>KevyError::NotFound</code>が、<code>AnnSpec</code>が不正（次元が0、未知の距離タグ）なら<code>KevyError::InvalidInput</code>がそれを名指しします。組み込みのビルドは同期的です——<code>idx_create_ann</code>はインデックスが提供可能になった時点で返ります。プロセス内に<code>FIELDS</code>のhydrationはありません。フィールドは<code>hget</code>で読んでください。</p>
+<h2 id="ワイヤ形式">ワイヤ形式</h2>
+<p>ベクトルフィールドは、リトルエンディアンf32の<code>dim × 4</code>バイトを保持します（RediSearchの慣習です）。長さが違う値や非有限の値を含む行は除外されます（数えられ、VERIFYで可視になります）——スカラーの型強制失敗と同じ規律です。クエリベクトルも同じ形式を使います。デバッグ用に<code>csv:1.0,2.5,…</code>も受け付けます。</p>
+<h2 id="距離と結果">距離と結果</h2>
+<p><code>cosine</code>（デフォルト。ベクトルは挿入時に正規化され、保存されるコピーは単位長です）、<code>l2</code>（二乗ユークリッド距離）、<code>ip</code>（内積の符号反転）。どの指標も「小さいほど近い」向きに揃えてあるので、シャードをまたぐ結果は昇順ソート1回でマージできます。<code>LIMIT</code>は1000で頭打ちです。カーソルはありません（ANNの深いページングはアンチパターンです）。</p>
+<p>シャードごとのグラフは独立です（インデックスはキーに従い、シャードをまたぐ書き込み調整はゼロです）。クエリはファンアウトし、各シャードのtop-kを取り、マージします。</p>
+<h2 id="再現率efというノブ">再現率：EFというノブ</h2>
+<p><code>EF</code>（16〜4096、デフォルトはmax(4·LIMIT, 100)）はクエリ時のビーム幅であり、HNSWにおける再現率とレイテンシの正統なノブです。近い重複が密に固まった領域には、より広いビームが要ります（128次元・2万件のクラスタでの実測：EF 64 → recall@10は0.67、100 → 0.77、400 → ゲートラインの0.90以上）。組み込みでは<code>idx_knn(…, ef)</code>です（0でデフォルト）。</p>
+<p>再現率は、厳密な総当たりの正解に対して、EF 400で0.90以上であることを<a href="https://github.com/goliajp/kevy/blob/develop/bench/vectorgate.sh"><code>bench/vectorgate.sh</code></a>がゲートしています——現実的なコーパス幾何のうえで、です（128次元空間に埋め込まれた内在次元20の多様体。周囲空間で一様ランダムなベクトルは距離の集中を起こし、何も代表しません）。再現率が重要なら、ゲートがやっているのとまったく同じやり方で、総当たりのサンプルを使って<b>あなたの</b>コーパス上で計測し、インデックス単位ではなくクエリ単位でEFを調整してください。</p>
+<h2 id="パラメータ削除再構築">パラメータ、削除、再構築</h2>
+<p><code>M</code>（ノードあたり・層あたりのリンク数、4〜64）と<code>EF</code>（構築時のビーム、16〜1024）は、<b>いったん作ったら不変</b>です。変えたければDROPして再CREATEすることになります。近傍選択には多様性ヒューリスティック（Malkov Alg. 4）を使い、外れた領域への橋渡しリンクを保存します。</p>
+<p>削除はグラフのノードにtombstoneを立てます（ルーティングには使われ続け、マッチはしなくなります）。更新はtombstone + 再挿入です。<code>IDX.VERIFY</code>はvectors / bytes / tombstonesを報告し、死んだノードが30%を超えると<code>rebuild_recommended</code>のフラグを立てます。<code>IDX.REBUILD</code>は、シャードごとに生きているものを再挿入します（O(n · ef_construction · M · dim)で有界の仕事です——生きているキーはすべてHNSWの完全な挿入を通り直すので、近傍上限のMと次元数の両方が掛かってきます。答えは保存されます——e2eで表明済みです）。グラフは派生状態です。永続化されることは決してなく、再起動後にデータから再構築されます。サーバーではその再起動時の再構築はバックグラウンドのバックフィルであり、完了するまでクエリは<code>-INDEXBUILDING</code>を返します（<a href="../indexes/">indexes.md</a>）。組み込みの再構築は同期的です。</p>
+<h2 id="フィルタリングとハイブリッド検索">フィルタリングと、ハイブリッド検索</h2>
+<p>検索中のフィルタリングはありません（グラフの探索の内側に分割述語を持ち込むのは、クエリエンジンへの坂道です）。まずKNNし、それから<code>FIELDS</code>でhydrateして、クライアント側でフィルタしてください。</p>
+<p>サーバーサイドで組み込まれている唯一の合成がこれです。同じコーパス上のANNインデックスとtextインデックスは、reciprocal-rank fusionで融合します。</p>
+<figure class="code"><pre><code>IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN &lt;f32-le-blob&gt;
+    [LIMIT n] [RRFK k] [EF ef] [FIELDS f…]</code></pre></figure>
+<p>——順位ベース（<code>Σ 1/(k + rank_i)</code>、<code>RRFK</code>のデフォルトは60）なので、BM25のスコアとベクトルの距離を互いに較正する必要はありません。MATCH側は<a href="../text-search/">text-search.md</a>を参照してください。組み込みの呼び出し側は<code>idx_knn</code>と<code>idx_match</code>を走らせ、プロセス内で融合します。</p>
+<p><b>マルチモーダルの注意点。</b> 遠く隔たったモードからなるコーパス（モード間の隔たりがモード内の距離をはるかに上回る場合。たとえば、互いに素な2テナントの埋め込みを1つのインデックスに入れるなど）では、ナビゲーショングラフは劣化します——一方のモードへの遅い挿入がもう一方を発見できず、グラフが橋渡しに飢えるからです。現実の埋め込みコーパスは連続的な多様体なので、これは起きません。データが強くマルチモーダルなら、モードを別々にインデックスしてください（プレフィックスごとに1インデックス——安価で、互いに独立です）。</p>
+<h2 id="整合性">整合性</h2>
+<p>どのインデックスkindとも同じ包絡線です（<a href="../indexes/">indexes.md</a>）。書き込みとそのグラフ更新は所有シャードの内側でアトミックです。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとのtop-kをマージします（SCANクラス）。カタログはログと各スナップショットに記録され、レプリケーションで配られます。グラフの<b>内容</b>は派生状態であり、再起動後に再構築されます。</p>
+<h2 id="パフォーマンス">パフォーマンス</h2>
+<p>計測された包絡線です（領収書はbenchツリーにあります）。</p>
+<ul><li><a href="https://github.com/goliajp/kevy/blob/develop/bench/vectorgate.sh"><code>bench/vectorgate.sh</code></a>は、実サーバーに対して1M × 128次元でKNN LIMIT 10のp95 &lt; 30msをゲートし、同時にEF 400で再現率0.90以上が成立していることもゲートします（2つのclampを同時に——速いが間違った答えは通りません）。あわせて、メモリの式を実RSSの増分に対して（0.5〜1.5倍で）ゲートします。</li><li><a href="https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md"><code>PERFORMANCE.md</code></a>が比較対決を記録しています。再現率を1.000に揃えたうえで、KNNは0.48 msで答えます（redis-stack 7.4.7のRediSearchのHNSWは同一コーパス上で0.79 ms）——<b>1.64倍の優位</b>です。</li></ul>
+<p>書き込み側のコストは標準的なインデックス税です（マッチするインデックス1つにつき、書き込みごとにフィールドのパース1回とグラフ挿入1回）。構築コストは<code>EF</code>（構築時のビーム）に比例して増えます。だからこそ、これは宣言時のパラメータなのです。</p>
+<h2 id="サイジング">サイジング</h2>
+<p><code>bytes ≈ vectors × (dim×4 + 40) + links × 8 + vectors × 32</code>。<code>IDX.VERIFY</code>/<code>IDX.LIST</code>がライブで報告します。cosineは正規化されたコピーだけを保持します（単一のコピー——生のフィールドバイト列は行そのものの中に残ります）。1M × 1024次元でおよそ4.1 GiB、加えてリンク分です。ゲートはこの式を実RSSの増分に対して（0.5〜1.5倍で）検査します。</p>
+<h2 id="関連項目">関連項目</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — このkindが差し込まれるインデックスエンジン（宣言の文法、バックフィルの契約、整合性の包絡線）。</li><li><a href="../text-search/">text-search.md</a> — BM25のkindと、<code>HYBRID</code>のもう半分。</li><li><a href="https://github.com/goliajp/kevy/blob/develop/docs/verb-reference.md">verb-reference.md</a> — すべての<code>IDX.*</code>形式の、生成された文法。</li><li><a href="../cookbook/">cookbook.md</a> — 文脈の中の検索レシピ。</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>把 kevy 放在代理后面部署 · kevy</title>
+    <meta name="description" content="kevy 没有 AUTH，也没有 TLS。认证和加密都在进程前面做。 这一章就是做法，照抄即可，不需要自己改编。（Rust 客户端也可以改用 kevy 自己的加密客户端端口，走 kevys://，见 [encrypted-links.md](encrypted-links.md)。）">
+    <link rel="canonical" href="https://kevy.golia.jp/zh/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../zh/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../zh/">首页</a><a href="../../../zh/docs/" class="on" aria-current="page">文档</a><a href="../../../zh/docs/commands/" class="hide-sm">命令</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/deploy-behind-a-proxy/" hreflang="en">EN</a><a class="on" href="../../../zh/docs/deploy-behind-a-proxy/" hreflang="zh-CN">中文</a><a href="../../../ja/docs/deploy-behind-a-proxy/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">上手</div><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a><a href="../../../zh/docs/persistence/">持久化</a><a href="../../../zh/docs/tuning/">调优 kevy</a></div><div><div class="group">运行</div><a href="../../../zh/docs/upgrading-6.4-to-7.0/">从 6.4 升级到 7.0</a><a href="../../../zh/docs/upgrading-6.3-to-6.4/">从 6.3 升级到 6.4</a><a href="../../../zh/docs/upgrading-6.2-to-6.3/">从 6.2 升级到 6.3</a><a href="../../../zh/docs/upgrading-6.2.0-to-6.2.1/">从 6.2.0 升级到 6.2.1</a><a href="../../../zh/docs/upgrading-5.1-to-5.2/">从 5.1 升级到 5.2</a><a href="../../../zh/docs/upgrading-5.0-to-5.1/">从 5.0 升级到 5.1</a><a href="../../../zh/docs/upgrading-4-to-5/">从 4.x 升级到 5.0</a><a href="../../../zh/docs/UPGRADING/">更早的大版本升级</a><a href="../../../zh/docs/replication/">复制</a><a href="../../../zh/docs/availability/">可用性</a><a href="../../../zh/docs/cluster/">集群</a><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget*）</a><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a><a href="../../../zh/docs/alloc/">kevy-alloc——服务端的分配器</a><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a><a href="../../../zh/docs/async/">异步客户端</a></div><div><div class="group">数据</div><a href="../../../zh/docs/indexes/">二级索引（IDX.* / idx_*）</a><a href="../../../zh/docs/tables/">表（TABLE.* / table_*）</a><a href="../../../zh/docs/relational-cli/">kevy-cli 的关系命令</a><a href="../../../zh/docs/table-migration/">从手工维护的索引迁移到表</a><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a><a href="../../../zh/docs/views/">视图（VIEW.* / view_*）</a><a href="../../../zh/docs/cdc/">CDC——变更流（FEED.* / changes_since）</a><a href="../../../zh/docs/pubsub/">Pub/sub</a><a href="../../../zh/docs/lua/">Lua 脚本</a><a href="../../../zh/docs/packed-rows/">packed-rows——把声明过的行存成一次分配</a></div><div><div class="group">嵌入</div><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a><a href="../../../zh/docs/electron/">在 Electron 里用 kevy</a><a href="../../../zh/docs/tauri/">在 Tauri 应用里用 kevy</a><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></div><div><div class="group">客户端</div><a href="../../../zh/docs/bindings/">在你的语言里使用 kevy</a></div><div><div class="group">参考</div><a href="../../../zh/docs/boundaries/">kevy 不做什么</a><a href="../../../zh/docs/error-replies/">错误回复目录</a><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a><a class="on" href="../../../zh/docs/deploy-behind-a-proxy/" aria-current="page">把 kevy 放在代理后面部署</a><a href="../../../zh/docs/encrypted-links/">加密链路</a><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></div></nav><main class="docmain"><details class="toc"><summary>本页内容</summary><ul><li class="l2"><a href="#kevy-会开什么">kevy 会开什么</a></li><li class="l2"><a href="#形状">形状</a></li><li class="l2"><a href="#resp-不是-http">RESP 不是 HTTP</a></li><li class="l3"><a href="#stunnel--回环端口">stunnel → 回环端口</a></li><li class="l3"><a href="#haproxy--unix-socket">HAProxy → unix socket</a></li><li class="l3"><a href="#nginx-stream--unix-socket">nginx stream → unix socket</a></li><li class="l2"><a href="#客户端证书">客户端证书</a></li><li class="l2"><a href="#客户端这一侧">客户端这一侧</a></li><li class="l2"><a href="#只暴露必要的东西">只暴露必要的东西</a></li><li class="l2"><a href="#在代理后面用集群模式">在代理后面用集群模式</a></li><li class="l2"><a href="#跨主机的复制与选举">跨主机的复制与选举</a></li><li class="l2"><a href="#哪些实测过哪些没有">哪些实测过，哪些没有</a></li><li class="l2"><a href="#参见">参见</a></li></ul></details><div><h1 id="把-kevy-放在代理后面部署">把 kevy 放在代理后面部署</h1>
+<p>kevy 没有 AUTH，也没有 TLS。<b>认证和加密都在进程前面做。</b> 这一章就是做法，照抄即可，不需要自己改编。（Rust 客户端也可以改用 kevy 自己的加密客户端端口，走 <code>kevys://</code>，见 <a href="../encrypted-links/">encrypted-links.md</a>。）</p>
+<h2 id="kevy-会开什么">kevy 会开什么</h2>
+<div class="tbl"><table><thead><tr><th></th><th>端口</th><th>说明</th></tr></thead><tbody><tr><td>默认</td><td><b>一个</b>（<code>6004</code>）</td><td><code>--threads N</code> 是在<b>同一个</b>端口上开 N 个 <code>SO_REUSEPORT</code> 监听，不是 N 个端口</td></tr><tr><td><code>--cluster</code></td><td><b>1 + N</b></td><td>主端口，外加每个 shard 一个 <code>port+1+i</code></td></tr><tr><td><code>KEVY_UNIX_SOCKET=&lt;path&gt;</code></td><td>不变</td><td>unix socket 是<b>额外加的</b>，TCP 监听照旧在</td></tr></tbody></table></div>
+<p>默认绑定是 <code>127.0.0.1</code>，这正是本章要的形状：引擎只在本机能访问的地方监听，唯一有公网地址的是前面的终止器。</p>
+<h2 id="形状">形状</h2>
+<figure class="code"><pre><code>   client ──TLS──▶  terminator  ──plain──▶  kevy
+  (rediss://)     (stunnel / HAProxy /     127.0.0.1:6004
+   + 客户端证书      nginx stream)           或 /run/kevy/kevy.sock</code></pre></figure>
+<p>kevy 这边什么都不用改。RESP 里没有主机名、没有 SNI、也没有绝对 URL，前面放一个字节代理，两边都感觉不到。</p>
+<h2 id="resp-不是-http">RESP 不是 HTTP</h2>
+<p>HTTP 反向代理转发不了 RESP，<b>原版 Caddy 也不行</b>：它的核心没有四层模块，Caddyfile 怎么写都没法单靠 <code>caddy</code> 给 kevy 加上 TLS。需要一个 TCP 层的终止器：</p>
+<ul><li><b>stunnel</b>：最小，各发行版都有包，只干这一件事；</li><li><b>HAProxy</b> 的 <code>mode tcp</code>：已经在用 HAProxy，或者想把健康检查和故障转移放在一处时选它；</li><li><b>nginx</b> 的 <code>stream</code> 模块：同理，已经有 nginx 时选它。</li></ul>
+<p>下面每一段配置都既加密，<b>又要求客户端出示由你的 CA 签发的证书</b>。去掉客户端证书那几行，代理就会给任何连上来的人加密。kevy 本身没有 AUTH，这等于谁都能读写所有 key。</p>
+<h3 id="stunnel--回环端口">stunnel → 回环端口</h3>
+<figure class="code"><pre><code class="lang-ini">[kevy]
+accept      = 0.0.0.0:6379
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes</code></pre></figure>
+<h3 id="haproxy--unix-socket">HAProxy → unix socket</h3>
+<p>socket 文件可以用文件系统权限圈起来：kevy 创建的 socket 对所有人可写，所以要把它放进只有终止器所在组能进入的目录，比如权限为 <code>0750</code> 的 <code>/run/kevy</code>（见 <a href="../uds/">uds.md</a>）。但这并不意味着终止器成了唯一的入口：下面说的回环 TCP 监听一直开着，在多人共用的主机上，任何本地用户仍然能连 <code>127.0.0.1:6004</code>。</p>
+<figure class="code"><pre><code>listen kevy
+    bind :6379 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    timeout client 0
+    timeout server 0
+    server kevy unix@/run/kevy/kevy.sock</code></pre></figure>
+<p><code>server.pem</code> 是证书后面接上私钥合成的一个文件。</p>
+<p>带 socket 启动 kevy：</p>
+<figure class="code"><pre><code class="lang-console">KEVY_UNIX_SOCKET=/run/kevy/kevy.sock kevy --dir /var/lib/kevy</code></pre></figure>
+<p>这个路径有两点要注意。<b>路径已经存在时 kevy 拒绝启动</b>，它不会覆盖一个不是自己创建的路径，所以重启时要先清掉，或者每次用不同的路径。另外 <code>127.0.0.1</code> 上的 TCP 监听照旧在，socket 是加上去的，不是替换。</p>
+<h3 id="nginx-stream--unix-socket">nginx stream → unix socket</h3>
+<figure class="code"><pre><code class="lang-nginx">stream {
+    upstream kevy { server unix:/run/kevy/kevy.sock; }
+    server {
+        listen 6379 ssl;
+        ssl_certificate        /etc/kevy/tls/server.crt;
+        ssl_certificate_key    /etc/kevy/tls/server.key;
+        ssl_client_certificate /etc/kevy/tls/ca.crt;
+        ssl_verify_client      on;
+        proxy_pass kevy;
+        proxy_timeout 1h;
+    }
+}</code></pre></figure>
+<p>注意三段配置里的超时：阻塞中的 <code>BLPOP</code> 或者空闲的 Pub/Sub 订阅者，会让连接一直开着但一个字节都不传，应用想开多久就开多久。代理如果会回收空闲连接，看上去就<b>和 kevy 在丢订阅者一模一样</b>。nginx 的 <code>proxy_timeout</code> 关不掉，要设得比预期最长的空闲时间还长。</p>
+<h2 id="客户端证书">客户端证书</h2>
+<p>CA 只需要终止器信任，自建一个就够了。用 OpenSSL：</p>
+<figure class="code"><pre><code class="lang-console"># CA：ca.key 离线保存
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=kevy-ca" \
+  -keyout ca.key -out ca.crt
+
+# 终止器的证书，写客户端连接时用的名字
+openssl req -newkey rsa:2048 -nodes -subj "/CN=kevy.internal" -keyout server.key -out server.csr
+printf 'subjectAltName=DNS:kevy.internal\n' &gt; san.ext
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -extfile san.ext -out server.crt
+cat server.crt server.key &gt; server.pem      # HAProxy 用的格式
+
+# 每个应用一张证书
+openssl req -newkey rsa:2048 -nodes -subj "/CN=billing-app" -keyout billing.key -out billing.csr
+openssl x509 -req -in billing.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -out billing.crt</code></pre></figure>
+<p>要吊销某个应用，就换一个新 CA 重新签发，或者给终止器加上 CRL。kevy 本身完全看不到证书。</p>
+<h2 id="客户端这一侧">客户端这一侧</h2>
+<p>任何开了 TLS 的标准 Redis 客户端，都能原样连上终止器后面的 kevy。它需要用 CA 来信任终止器，再出示自己的证书才能进来：</p>
+<figure class="code"><pre><code class="lang-console">redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.internal -p 6379 PING</code></pre></figure>
+<p><b><code>kevy-cli</code> 不行。</b> 它对 <code>rediss://</code> 直接报 <code>Unsupported</code>：kevy 出厂就没有 TLS，CLI 也没有 TLS 实现可用。这个运维上的后果最好提前安排，别等到用的时候才发现：要么在主机上直接管理，要么经 kevy 自己的加密客户端端口（<code>kevy-cli -u kevys://…</code>，见 <a href="../encrypted-links/">encrypted-links.md</a>），要么走 SSH 隧道：</p>
+<figure class="code"><pre><code class="lang-console">ssh -N -L 6004:127.0.0.1:6004 you@host   # 然后：kevy-cli -p 6004</code></pre></figure>
+<h2 id="只暴露必要的东西">只暴露必要的东西</h2>
+<p>用默认绑定时，<b>kevy 一条防火墙规则都不需要</b>，它本来就没法从主机外访问。要开放的端口只有终止器那一个。如果一定要把 kevy 绑到真实网卡上，防火墙就得接手原本由回环绑定免费完成的工作，而且它会是网络和一个<b>没有认证的数据库</b>之间唯一的一道防线。</p>
+<h2 id="在代理后面用集群模式">在代理后面用集群模式</h2>
+<p>按 key 路由的客户端从 <code>CLUSTER SLOTS</code> 得知每个 slot 在哪，并跟随 <code>-MOVED</code> 重定向，所以 kevy 必须对外公布<b>代理</b>监听的地址，而不是自己的。两个配置项负责这件事：</p>
+<figure class="code"><pre><code class="lang-toml">[cluster]
+enabled            = true
+announce_ip        = "203.0.113.7"   # 客户端访问代理用的地址
+announce_port_base = 7001            # 代理上 shard 0 的端口</code></pre></figure>
+<p>然后按同样的顺序一一映射每个 shard 的端口：代理的 <code>7001 + i</code> 对应 kevy 的 <code>port + 1 + i</code>。两个 shard 放在 HAProxy 后面：</p>
+<figure class="code"><pre><code>listen kevy-main
+    bind :7000 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6004
+listen kevy-shard0
+    bind :7001 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6005
+listen kevy-shard1
+    bind :7002 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6006</code></pre></figure>
+<p>这样 <code>CLUSTER SLOTS</code>、<code>CLUSTER NODES</code>、<code>CLUSTER SHARDS</code> 和所有 <code>-MOVED</code> 里写的都是 <code>203.0.113.7:7001</code> 和 <code>203.0.113.7:7002</code>。不设 <code>announce_ip</code> 时，kevy 公布的是自己的绑定地址，<code>0.0.0.0</code> 绑定时公布 <code>127.0.0.1</code>：同一台主机上的客户端没问题，从别处就连不上。</p>
+<h2 id="跨主机的复制与选举">跨主机的复制与选举</h2>
+<p>复制和选举控制面各有自己的端口。kevy 自己就能给这两条链路加密和认证，不需要隧道，见 <a href="../encrypted-links/">encrypted-links.md</a>。不开启时，两者都不加密，也不认证。跨主机部署时，让每个节点只在回环地址上监听，并为它的每个对端各准备一个本地隧道入口。每个节点需要：</p>
+<ul><li>入站：自己对外提供的每个本地端口各一个 TLS 服务，包括客户端端口（给 <code>FAILOVER</code> 探测用）、选举端口，以及<b>每个 shard 一个</b>复制端口；</li><li>出站：对每个对端的上述每个端口，各开一个客户端模式的服务，本地端口自己挑；</li><li><code>peers</code> 列表里用<b>本地</b>隧道端口来写每个对端，复制端口写在第四段。这样跟随新主的节点连的是隧道，而不是直接连对端。</li></ul>
+<p>以三节点中的 <code>n2</code> 为例，每个节点一个 shard，对端 <code>n1</code> 和 <code>n3</code> 分别映射到本地端口 <code>8010-8012</code> 和 <code>8030-8032</code>：</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"</code></pre></figure>
+<figure class="code"><pre><code class="lang-ini">foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -&gt; 6204 and [in-repl] 17004 -&gt; 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -&gt; n1.internal:7204, [to-n1-repl] 8012 -&gt; n1.internal:17004,
+; and the same three for n3 on 8030-8032</code></pre></figure>
+<p>TLS 相关选项要像上面这样写在每个服务里。stunnel 5.76 在全局段里放这些选项、同一个文件又有客户端模式服务时，启动就会崩溃。</p>
+<p>实测过的：三个节点、每节点一个 shard，所有链路都经 stunnel 并要求客户端证书。主节点上的写入到达了两个 replica；主机之间网络上的抓包里，写入了 200 次的标记值一次都没出现，而同一时间在主节点回环上的抓包里出现了 600 次；杀掉主节点后，<code>n2</code> 在 6 秒内当选，<code>n3</code> 经本地隧道跟随它，并收到了切换之后的写入。没有实测的：每个节点多于一个 shard 的情况。</p>
+<h2 id="哪些实测过哪些没有">哪些实测过，哪些没有</h2>
+<p>在当前代码上实测，终止器用 HAProxy 3.4.5、nginx 1.30.5 和 stunnel 5.76，客户端是 redis-cli 8.0.2，证书由 OpenSSL 3.5.7 签发：</p>
+<ul><li>上表的端口情况，包括 <code>--cluster</code> 为每个 shard 开 <code>port+1+i</code>；</li><li>上面三种客户端证书配置，都转发到 kevy 的 TCP 端口：持有该 CA 签发证书的客户端能读写；不带证书的客户端、以及证书来自另一个 CA 的客户端，在发出命令之前就被断开，它们试图写入的 key 事后查不到；</li><li>HAProxy 和 nginx 两段转发到 kevy 的 unix socket，接受和拒绝的结果同上；kevy 创建的 socket 权限是 <code>srwxrwxrwx</code>，所以要靠目录来圈住它。</li><li>按上面的超时设置，经三种终止器各挂一个 <code>BLPOP</code>，空闲 10 分钟后再推入元素放行：三个都拿到了推入的元素；</li><li>集群模式配合 <code>announce_ip</code> 和 <code>announce_port_base</code> 放在 HAProxy 后面：<code>-MOVED</code> 写的是代理上的 shard 端口，<code>redis-cli -c</code> 经一个 shard 端口写入的 key，从主端口全部读得回来；</li><li>原版 Caddy（2.11.4）不带四层模块；</li><li><code>kevy-cli</code> 拒绝 <code>rediss://</code>。</li></ul>
+<p>没有测过的：用 CRL 吊销客户端，以及客户端证书过期。</p>
+<h2 id="参见">参见</h2>
+<ul><li><a href="../uds/">uds.md</a>：unix socket 的细节</li><li><a href="../cluster/">cluster.md</a>：单机集群模式是做什么用的</li><li><a href="../tuning/">tuning.md</a>：<code>--threads</code>，以及为什么线程少反而可能更快</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>以 MIT OR Apache-2.0 双许可发布</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

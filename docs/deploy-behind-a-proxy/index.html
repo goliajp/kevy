@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deploying kevy behind a proxy · kevy</title>
+    <meta name="description" content="kevy has no AUTH and no TLS. Everything that authenticates or encrypts happens in front of the process. This chapter is the recipe for that, and it is meant to be copied rather tha">
+    <link rel="canonical" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../kevy-logo.svg"/><link rel="preload" as="image" href="../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../"><img src="../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../">Home</a><a href="../../docs/" class="on" aria-current="page">Docs</a><a href="../../docs/commands/" class="hide-sm">Commands</a><div class="langswitch" role="group" aria-label="language"><a class="on" href="../../docs/deploy-behind-a-proxy/" hreflang="en">EN</a><a href="../../zh/docs/deploy-behind-a-proxy/" hreflang="zh-CN">中文</a><a href="../../ja/docs/deploy-behind-a-proxy/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">Getting started</div><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a><a href="../../docs/persistence/">Persistence</a><a href="../../docs/tuning/">Tuning kevy</a></div><div><div class="group">Running it</div><a href="../../docs/upgrading-6.4-to-7.0/">Upgrading from 6.4 to 7.0</a><a href="../../docs/rust-api-7.0/">Rust API changes in 7.0</a><a href="../../docs/upgrading-6.3-to-6.4/">Upgrading from 6.3 to 6.4</a><a href="../../docs/upgrading-6.2-to-6.3/">Upgrading from 6.2 to 6.3</a><a href="../../docs/upgrading-6.2.0-to-6.2.1/">Upgrading from 6.2.0 to 6.2.1</a><a href="../../docs/upgrading-5.1-to-5.2/">Upgrading from 5.1 to 5.2</a><a href="../../docs/upgrading-5.0-to-5.1/">Upgrading from 5.0 to 5.1</a><a href="../../docs/upgrading-4-to-5/">Upgrading from 4.x to 5.0</a><a href="../../docs/UPGRADING/">Upgrading across the older majors</a><a href="../../docs/replication/">Replication</a><a href="../../docs/availability/">Availability</a><a href="../../docs/cluster/">Cluster</a><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget*)</a><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a><a href="../../docs/alloc/">kevy-alloc — the server&#x27;s allocator</a><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a><a href="../../docs/async/">Async client</a></div><div><div class="group">Working with data</div><a href="../../docs/indexes/">Secondary indexes (IDX.* / idx_*)</a><a href="../../docs/tables/">Tables (TABLE.* / table_*)</a><a href="../../docs/relational-cli/">Relational commands in kevy-cli</a><a href="../../docs/table-migration/">Migrating hand-maintained indexes to tables</a><a href="../../docs/vector-search/">Vector search (KIND ann)</a><a href="../../docs/text-search/">Full-text search (KIND text)</a><a href="../../docs/views/">Views (VIEW.* / view_*)</a><a href="../../docs/cdc/">CDC — the change feed (FEED.* / changes_since)</a><a href="../../docs/pubsub/">Pub/sub</a><a href="../../docs/lua/">Lua scripting</a><a href="../../docs/packed-rows/">packed-rows — store a declared row as one allocation</a></div><div><div class="group">Embedding it</div><a href="../../docs/wasm/">kevy on WebAssembly</a><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a><a href="../../docs/electron/">kevy in Electron</a><a href="../../docs/tauri/">kevy in a Tauri app</a><a href="../../docs/iot/">kevy on IoT devices</a></div><div><div class="group">Clients</div><a href="../../docs/clients/">Bring your redis client</a><a href="../../docs/bindings/">Use kevy from your language</a><a href="../../docs/client-contract/">kevy Client Contract (language-agnostic)</a></div><div><div class="group">Reference</div><a href="../../docs/boundaries/">What kevy will not do</a><a href="../../docs/error-replies/">Error reply catalog</a><a href="../../docs/rds-workloads/">RDS workloads on kevy</a><a class="on" href="../../docs/deploy-behind-a-proxy/" aria-current="page">Deploying kevy behind a proxy</a><a href="../../docs/encrypted-links/">Encrypted links</a><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></div></nav><main class="docmain"><details class="toc"><summary>On this page</summary><ul><li class="l2"><a href="#what-kevy-exposes">What kevy exposes</a></li><li class="l2"><a href="#the-shape">The shape</a></li><li class="l2"><a href="#resp-is-not-http">RESP is not HTTP</a></li><li class="l3"><a href="#stunnel--loopback-port">stunnel → loopback port</a></li><li class="l3"><a href="#haproxy--unix-socket">HAProxy → unix socket</a></li><li class="l3"><a href="#nginx-stream--unix-socket">nginx stream → unix socket</a></li><li class="l2"><a href="#client-certificates">Client certificates</a></li><li class="l2"><a href="#the-client-side">The client side</a></li><li class="l2"><a href="#only-expose-what-is-necessary">Only expose what is necessary</a></li><li class="l2"><a href="#cluster-mode-behind-a-proxy">Cluster mode behind a proxy</a></li><li class="l2"><a href="#replication-and-election-between-hosts">Replication and election between hosts</a></li><li class="l2"><a href="#what-was-verified-and-what-was-not">What was verified, and what was not</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></details><div><h1 id="deploying-kevy-behind-a-proxy">Deploying kevy behind a proxy</h1>
+<p>kevy has no AUTH and no TLS. Everything that authenticates or encrypts happens <b>in front of</b> the process. This chapter is the recipe for that, and it is meant to be copied rather than adapted. (Rust clients can instead use kevy's own encrypted client port over <code>kevys://</code>; see <a href="../encrypted-links/">encrypted-links.md</a>.)</p>
+<h2 id="what-kevy-exposes">What kevy exposes</h2>
+<div class="tbl"><table><thead><tr><th></th><th>Ports</th><th>Notes</th></tr></thead><tbody><tr><td>Default</td><td><b>one</b> (<code>6004</code>)</td><td><code>--threads N</code> opens N listeners on that <i>same</i> port via <code>SO_REUSEPORT</code>, not N ports</td></tr><tr><td><code>--cluster</code></td><td><b>1 + N</b></td><td>main port, plus <code>port+1+i</code> per shard</td></tr><tr><td><code>KEVY_UNIX_SOCKET=&lt;path&gt;</code></td><td>unchanged</td><td>a unix socket is <b>added</b>; the TCP listener stays up</td></tr></tbody></table></div>
+<p>The default bind is <code>127.0.0.1</code>. That is already the shape this chapter wants: the engine listens where only this host can reach it, and the only thing with a public address is the terminator.</p>
+<h2 id="the-shape">The shape</h2>
+<figure class="code"><pre><code>   client ──TLS──▶  terminator  ──plain──▶  kevy
+  (rediss://)     (stunnel / HAProxy /     127.0.0.1:6004
+   + client cert   nginx stream)           or /run/kevy/kevy.sock</code></pre></figure>
+<p>Nothing about kevy changes. RESP carries no host name, no SNI, no absolute URLs — a byte proxy in front of it is invisible to both sides.</p>
+<h2 id="resp-is-not-http">RESP is not HTTP</h2>
+<p>An HTTP reverse proxy cannot carry RESP, and that includes <b>stock Caddy</b>: its core has no layer-4 module, so <code>caddy</code> alone cannot put TLS in front of kevy no matter how the Caddyfile is written. You need a TCP-level terminator:</p>
+<ul><li><b>stunnel</b> — smallest, packaged everywhere, does exactly this one job;</li><li><b>HAProxy</b> in <code>mode tcp</code> — reach for it if you already run HAProxy or want health checks and failover in the same place;</li><li><b>nginx</b> with the <code>stream</code> module — same, if nginx is already there.</li></ul>
+<p>Every block below both encrypts <b>and requires a client certificate</b> signed by your CA. Leave the client-certificate lines out and the proxy encrypts traffic for anyone who connects, which for a database with no AUTH means anyone can still read and write every key.</p>
+<h3 id="stunnel--loopback-port">stunnel → loopback port</h3>
+<figure class="code"><pre><code class="lang-ini">[kevy]
+accept      = 0.0.0.0:6379
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes</code></pre></figure>
+<h3 id="haproxy--unix-socket">HAProxy → unix socket</h3>
+<p>The socket file can be fenced with filesystem permissions: kevy creates it world-writable, so put it in a directory only the terminator's group can enter, such as <code>/run/kevy</code> with mode <code>0750</code> (see <a href="../uds/">uds.md</a>). That does not make the terminator the only way in — the loopback TCP listener below stays up, and on a shared host any local user can still reach <code>127.0.0.1:6004</code>.</p>
+<figure class="code"><pre><code>listen kevy
+    bind :6379 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    timeout client 0
+    timeout server 0
+    server kevy unix@/run/kevy/kevy.sock</code></pre></figure>
+<p><code>server.pem</code> is the certificate followed by its key in one file.</p>
+<p>Start kevy with the socket:</p>
+<figure class="code"><pre><code class="lang-console">KEVY_UNIX_SOCKET=/run/kevy/kevy.sock kevy --dir /var/lib/kevy</code></pre></figure>
+<p>Two things about that path. kevy <b>refuses to start</b> if it already exists — it will not clobber a path it did not create — so clean it up on restart or use a per-run path. And the TCP listener on <code>127.0.0.1</code> stays up regardless; the socket is an addition, not a replacement.</p>
+<h3 id="nginx-stream--unix-socket">nginx stream → unix socket</h3>
+<figure class="code"><pre><code class="lang-nginx">stream {
+    upstream kevy { server unix:/run/kevy/kevy.sock; }
+    server {
+        listen 6379 ssl;
+        ssl_certificate        /etc/kevy/tls/server.crt;
+        ssl_certificate_key    /etc/kevy/tls/server.key;
+        ssl_client_certificate /etc/kevy/tls/ca.crt;
+        ssl_verify_client      on;
+        proxy_pass kevy;
+        proxy_timeout 1h;
+    }
+}</code></pre></figure>
+<p>Note the timeouts in all three: a blocking <code>BLPOP</code> or an idle Pub/Sub subscriber holds a connection open with no bytes on it for as long as the application wants. A proxy that reaps idle connections will look exactly like kevy dropping subscribers. nginx's <code>proxy_timeout</code> cannot be switched off; set it above the longest idle period you expect.</p>
+<h2 id="client-certificates">Client certificates</h2>
+<p>The CA only has to be trusted by the terminator, so a private one is enough. With OpenSSL:</p>
+<figure class="code"><pre><code class="lang-console"># the CA — keep ca.key offline
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=kevy-ca" \
+  -keyout ca.key -out ca.crt
+
+# the terminator's certificate, for the name clients connect to
+openssl req -newkey rsa:2048 -nodes -subj "/CN=kevy.internal" -keyout server.key -out server.csr
+printf 'subjectAltName=DNS:kevy.internal\n' &gt; san.ext
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -extfile san.ext -out server.crt
+cat server.crt server.key &gt; server.pem      # the HAProxy form
+
+# one certificate per application
+openssl req -newkey rsa:2048 -nodes -subj "/CN=billing-app" -keyout billing.key -out billing.csr
+openssl x509 -req -in billing.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -out billing.crt</code></pre></figure>
+<p>Revoking one application means reissuing from a new CA or adding a CRL to the terminator; kevy itself never sees the certificate.</p>
+<h2 id="the-client-side">The client side</h2>
+<p>Any stock Redis client with TLS enabled talks to a terminated kevy unchanged. It needs the CA to trust the terminator and its own certificate to be let in:</p>
+<figure class="code"><pre><code class="lang-console">redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.internal -p 6379 PING</code></pre></figure>
+<p><b><code>kevy-cli</code> cannot.</b> It rejects <code>rediss://</code> with <code>Unsupported</code>, because kevy ships without TLS and the CLI has no TLS stack to lend it. That is an operational consequence worth planning for rather than discovering: administer from the host itself, over kevy's own encrypted client port (<code>kevy-cli -u kevys://…</code>, see <a href="../encrypted-links/">encrypted-links.md</a>), or over an SSH tunnel:</p>
+<figure class="code"><pre><code class="lang-console">ssh -N -L 6004:127.0.0.1:6004 you@host   # then: kevy-cli -p 6004</code></pre></figure>
+<h2 id="only-expose-what-is-necessary">Only expose what is necessary</h2>
+<p>With the default bind, <b>kevy needs no firewall rule at all</b> — it is not reachable off-host. The terminator's port is the only one to open. If you must bind kevy to a real interface, then the firewall is doing the job the loopback bind was doing for free, and it is the only thing between the network and an unauthenticated database.</p>
+<h2 id="cluster-mode-behind-a-proxy">Cluster mode behind a proxy</h2>
+<p>A key-aware client learns where each slot lives from <code>CLUSTER SLOTS</code> and follows <code>-MOVED</code> redirects, so kevy must advertise the addresses the <b>proxy</b> listens on, not its own. Two settings do that:</p>
+<figure class="code"><pre><code class="lang-toml">[cluster]
+enabled            = true
+announce_ip        = "203.0.113.7"   # the address clients reach the proxy at
+announce_port_base = 7001            # the proxy's port for shard 0</code></pre></figure>
+<p>Then map the per-shard ports one to one, in the same order: proxy <code>7001 + i</code> in front of kevy's <code>port + 1 + i</code>. With two shards behind HAProxy:</p>
+<figure class="code"><pre><code>listen kevy-main
+    bind :7000 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6004
+listen kevy-shard0
+    bind :7001 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6005
+listen kevy-shard1
+    bind :7002 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6006</code></pre></figure>
+<p><code>CLUSTER SLOTS</code>, <code>CLUSTER NODES</code>, <code>CLUSTER SHARDS</code> and every <code>-MOVED</code> now name <code>203.0.113.7:7001</code> and <code>203.0.113.7:7002</code>. Without <code>announce_ip</code> kevy advertises its bind address, and <code>127.0.0.1</code> for a <code>0.0.0.0</code> bind — correct for clients on the same host, unreachable from anywhere else.</p>
+<h2 id="replication-and-election-between-hosts">Replication and election between hosts</h2>
+<p>Replication and the election control plane have their own ports. kevy can encrypt and authenticate both itself — see <a href="../encrypted-links/">encrypted-links.md</a>, which needs no tunnels. Without that, neither is encrypted or authenticated. Across hosts, give every node a local tunnel endpoint for each of its peers and let every node listen only on loopback. Each node then needs:</p>
+<ul><li>inbound, one TLS service per local port it serves: the client port (for <code>FAILOVER</code> probes), the election port, and one replication port <b>per shard</b>;</li><li>outbound, one client-mode service per peer for each of those ports, on a local port of your choosing;</li><li>a <code>peers</code> list that names every peer by its <b>local</b> tunnel ports, using the fourth field for the replication port, so a node following a newly elected primary dials the tunnel rather than the peer.</li></ul>
+<p>For node <code>n2</code> of three, one shard each, peers <code>n1</code> and <code>n3</code> reached on local ports <code>8010-8012</code> and <code>8030-8032</code>:</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"</code></pre></figure>
+<figure class="code"><pre><code class="lang-ini">foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -&gt; 6204 and [in-repl] 17004 -&gt; 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -&gt; n1.internal:7204, [to-n1-repl] 8012 -&gt; n1.internal:17004,
+; and the same three for n3 on 8030-8032</code></pre></figure>
+<p>Put the TLS options in every service, as above. stunnel 5.76 crashed on start when they sat in the global section of a file that also had client-mode services.</p>
+<p>Verified: three nodes, one shard each, every link through stunnel with client certificates. Writes on the primary reached both replicas; a capture on the network between the hosts never contained a marker value written 200 times, while a capture on the primary's loopback, taken at the same time, contained it 600 times; after the primary was killed, <code>n2</code> was elected in 6 s and <code>n3</code> followed it through its local tunnel and received writes made after the failover. Not verified: more than one shard per node.</p>
+<h2 id="what-was-verified-and-what-was-not">What was verified, and what was not</h2>
+<p>Measured against this tree, with HAProxy 3.4.5, nginx 1.30.5 and stunnel 5.76 in front of kevy, redis-cli 8.0.2 as the client and OpenSSL 3.5.7 issuing the certificates:</p>
+<ul><li>the port surface in the table above, including <code>--cluster</code> opening <code>port+1+i</code> per shard;</li><li>the three client-certificate configurations above, each forwarding to kevy's TCP port: a client with a certificate from the CA reads and writes; a client with no certificate, and one with a certificate from a different CA, are disconnected before sending a command — keys they tried to write are absent afterwards;</li><li>the HAProxy and nginx blocks forwarding to kevy's unix socket, with the same accept and reject results; the socket kevy created was <code>srwxrwxrwx</code>, which is why the directory has to do the fencing.</li><li>a <code>BLPOP</code> held idle for 10 minutes through each of the three terminators with the timeouts above, then released by a push: all three returned the pushed element;</li><li>cluster mode through HAProxy with <code>announce_ip</code> and <code>announce_port_base</code>: <code>-MOVED</code> names the proxy's shard port, and <code>redis-cli -c</code> writes keys through one shard port and reads every one of them back through the main port;</li><li>stock Caddy (2.11.4) ships no layer-4 module;</li><li><code>kevy-cli</code> rejecting <code>rediss://</code>.</li></ul>
+<p>Not tested: revoking a client with a CRL, and an expired client certificate.</p>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="../uds/">uds.md</a> — the unix socket in detail</li><li><a href="../cluster/">cluster.md</a> — what single-node cluster mode is for</li><li><a href="../tuning/">tuning.md</a> — <code>--threads</code>, and why fewer can be faster</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

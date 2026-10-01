@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>非同期クライアント · kevy</title>
+    <meta name="description" content="kevy-client-asyncは、ブロッキング版[kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client)の非同期ミラーです。API面もURLファサードも同じで、各呼び出しに.awaitが付くだけです。">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/async/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/async/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/async/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/async/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/async/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/async/" hreflang="en">EN</a><a href="../../../zh/docs/async/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/async/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a class="on" href="../../../ja/docs/async/" aria-current="page">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l3"><a href="#tokio">Tokio</a></li><li class="l3"><a href="#smol">Smol</a></li><li class="l3"><a href="#pipelineビルダー">Pipelineビルダー</a></li><li class="l2"><a href="#ランタイムフィーチャ">ランタイムフィーチャ</a></li><li class="l2"><a href="#urlバックエンド">URLバックエンド</a></li><li class="l2"><a href="#トレードオフ">トレードオフ</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l2"><a href="#リポジトリ内のサンプル">リポジトリ内のサンプル</a></li></ul></details><div><h1 id="非同期クライアント">非同期クライアント</h1>
+<p><code>kevy-client-async</code>は、ブロッキング版<a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-client"><code>kevy-client</code></a>の非同期ミラーです。API面もURLファサードも同じで、各呼び出しに<code>.await</code>が付くだけです。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>アプリがすでに<code>tokio</code>、<code>smol</code>、<code>async-std</code>のいずれかのランタイム上で動いていて、<code>await</code>のフローを端から端まで通したい（ブロッキングスレッドプールへのホップ、<code>spawn_blocking</code>によるラップ、コネクションごとのスレッドをなくしたい）場合に、非同期クライアントを使ってください。コードパスが通常スレッド上のリクエスト・レスポンスであれば、ブロッキングクライアントのほうがシンプルかつ低遅延です。同期でいることに非同期税はかかりません。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p>Cargoフィーチャでランタイム（<code>tokio</code>、<code>smol</code>、<code>async-std</code>）をちょうど1つ選びます。クレートはそのランタイムの<code>TcpStream</code>アダプタだけにコンパイルされ、ほかは一切含まれません。公開APIはブロッキングクライアントを1:1でミラーしているため（<code>AsyncConnection::connect(url).await?</code>、<code>conn.set(k, v).await?</code>、<code>conn.get(k).await?</code>）、ブロッキングからの移植は<code>Connection</code>を<code>AsyncConnection</code>に替えて各呼び出しに<code>.await</code>を付けるだけで済みます。レイテンシが問題になる場面では、pipelineビルダーがNコマンドを1回のTCP往復にまとめます。</p>
+<h2 id="動かしてみる例">動かしてみる例</h2>
+<h3 id="tokio">Tokio</h3>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-client-async = { version = "1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }</code></pre></figure>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+#[tokio::main]
+async fn main() -&gt; std::io::Result&lt;()&gt; {
+    let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+    conn.set(b"k", b"v").await?;
+    let v = conn.get(b"k").await?;
+    assert_eq!(v.as_deref(), Some(&amp;b"v"[..]));
+    Ok(())
+}</code></pre></figure>
+<h3 id="smol">Smol</h3>
+<p>コードは同じで、ランタイムのフィーチャだけ入れ替えます。</p>
+<figure class="code"><pre><code class="lang-toml">[dependencies]
+kevy-client-async = { version = "1", features = ["smol"] }
+smol = "2"</code></pre></figure>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+fn main() -&gt; std::io::Result&lt;()&gt; {
+    smol::block_on(async {
+        let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+        conn.set(b"k", b"v").await?;
+        let v = conn.get(b"k").await?;
+        assert_eq!(v.as_deref(), Some(&amp;b"v"[..]));
+        Ok(())
+    })
+}</code></pre></figure>
+<h3 id="pipelineビルダー">Pipelineビルダー</h3>
+<p>バッチ全体を1往復で送ります。応答はキューに入れた順に返り、コマンド単位の失敗はバッチを壊さず、<code>Vec</code>の中に<code>Reply::Error(_)</code>として現れます。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_client_async::AsyncConnection;
+
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
+let replies = conn
+    .pipeline()
+    .set(b"a", b"1")
+    .get(b"a")
+    .incr(b"hits")
+    .run(&amp;mut conn)
+    .await?;
+// replies.len() == 3; キューしたコマンドごとに1つのReply、順序どおり。</code></pre></figure>
+<h2 id="ランタイムフィーチャ">ランタイムフィーチャ</h2>
+<p>以下のうちちょうど1つを有効にする必要があります。フィーチャなし、あるいは2つ以上の同時有効はコンパイルエラーになります。暗黙のデフォルトはありません。</p>
+<div class="tbl"><table><thead><tr><th>フィーチャ</th><th>トランスポートアダプタ</th><th>取り込まれるランタイムクレート</th></tr></thead><tbody><tr><td><code>tokio</code></td><td><code>tokio::net::TcpStream</code></td><td><code>tokio</code></td></tr><tr><td><code>smol</code></td><td><code>smol::net::TcpStream</code></td><td><code>smol</code></td></tr><tr><td><code>async-std</code></td><td><code>async_std::net::TcpStream</code></td><td><code>async-std</code></td></tr></tbody></table></div>
+<p>各ランタイムクレートは<code>default-features = false</code>に、アダプタに必要な最小限のフィーチャだけを足して取り込まれます。kevyワークスペースのcrates.io依存はこれらだけです。純Rust・ゼロ依存ルールに対する意図的な例外であり、Rustのasyncエコシステムにはstdだけで成立する基盤が存在しないための措置です。</p>
+<h2 id="urlバックエンド">URLバックエンド</h2>
+<p><code>AsyncConnection::connect</code>はブロッキングクライアントと同じURLファサードを受け取ります。TCP系のスキームはランタイムの非同期ソケットを通り、プロセス内スキームは拒否されます（プロセス内アクセスはブロッキングクライアントのほうが厳密に速く、エグゼキュータを経由させる意味がないためです）。</p>
+<div class="tbl"><table><thead><tr><th>スキーム</th><th>接続先</th><th>非同期クライアントの対応</th></tr></thead><tbody><tr><td><code>tcp://</code></td><td>kevyまたはRedis互換サーバー</td><td>対応</td></tr><tr><td><code>kevy://</code></td><td>kevyサーバー（<code>tcp://</code>のエイリアス）</td><td>対応</td></tr><tr><td><code>redis://</code></td><td>RedisまたはRedis互換サーバー</td><td>対応</td></tr><tr><td><code>mem://</code></td><td>プロセス内組み込みストア</td><td>非対応（ブロッキング版を使用）</td></tr><tr><td><code>file:///</code></td><td>オンディスク組み込みストア</td><td>非対応（ブロッキング版を使用）</td></tr></tbody></table></div>
+<p><code>mem://</code>や<code>file:///</code>のURLを<code>AsyncConnection::connect</code>で開くと<code>ErrorKind::Unsupported</code>が返ります。</p>
+<h2 id="トレードオフ">トレードオフ</h2>
+<p>ブロッキングクライアントがデフォルトであり、今後もデフォルトであり続けるのには理由があります：</p>
+<ul><li><b>同期コードパス</b>：ランタイムをまだ持っていないなら、クライアントのためだけに立ち上げるべきではありません。<code>kevy-client</code>は純Rust・ゼロ依存で、コマンドごとにエグゼキュータのスケジューリングオーバーヘッドを払うこともありません。</li><li><b>組み込みバックエンド</b>：<code>mem://</code>と<code>file:///</code>は同期のプロセス内ストアです。ブロッキングクライアントは直接話せますが、非同期クライアントからは使えません。</li><li><b>単発コマンド</b>：一般的なマルチスレッドエグゼキュータでは、コマンドごとの<code>.await</code>1回でも、直接のsyscallと比べれば計測できる程度のオーバーヘッドになります。非同期の利得が見えるのは、並行性（タスクをまたいだ多数のin-flightコマンド）やバッチング（pipelineによる往復の集約）がある場面です。</li></ul>
+<p>周囲のアプリがすでにasyncならasyncを使う。独立したコマンドのバッチがあって往復がボトルネックならpipelineビルダーを使う。それ以外はブロッキングのままにしておいてください。</p>
+<h2 id="faq">FAQ</h2>
+<p><b>なぜランタイムをちょうど1つ選ぶ必要があるのですか？</b> クレートは単一の<code>TcpStream</code>アダプタとしてコンパイルされます。1つのバイナリにアダプタを2つ入れると、I/Oごとにランタイム非依存の間接層を挟む（オーバーヘッド）か、誰にも保守できない巨大なcfgマトリクスを抱えるかのどちらかになります。アダプタ0個では公開型が未実装のまま残ります。フィーチャ数をコンパイル時に検査することで、設定ミスを早い段階ではっきり検出できます。</p>
+<p><b>同期と非同期のkevyクライアントを1つのプロセスに混在させられますか？</b> はい。<code>kevy-client</code>（ブロッキング）と<code>kevy-client-async</code>は独立したクレートで、自由に共存できます。たとえば同じバイナリの中で、組み込みの<code>file:///</code>ストアにはブロッキング版を、ネットワークシャードにはasync版を、という使い分けが可能です。コネクションは共有されません。</p>
+<p><b>pub/subはどうなりますか？</b> <code>AsyncSubscriber</code>がブロッキングの<code>Subscriber</code>をミラーします。購読状態のRESPコネクションは通常のコマンドを送れないため、<code>AsyncConnection</code>とは別の型になっています。メッセージ単位のタイムアウトには、ソケットレベルのreadタイムアウトではなく、使っているランタイム自身のプリミティブ（<code>tokio::time::timeout</code>、<code>async_io::Timer</code>など）を使ってください。</p>
+<p><b>pipelineビルダーは送信側のバッファリングを強制しますか？</b> はい。それこそが狙いです。<code>pipeline().…run(&amp;mut conn).await</code>はバッチ全体を1回のwriteにシリアライズし、N個の応答を順に読み取ります。コマンド単位のバックプレッシャが必要なら、pipelineを組まずに<code>set</code>/<code>get</code>を直接呼んでください。</p>
+<h2 id="リポジトリ内のサンプル">リポジトリ内のサンプル</h2>
+<ul><li><a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs"><code>tokio_hello</code></a> — オープン、ping、set/get、del。</li><li><a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs"><code>pipeline</code></a> — 混在バッチを1往復で。</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

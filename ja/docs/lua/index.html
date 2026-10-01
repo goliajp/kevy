@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luaスクリプティング · kevy</title>
+    <meta name="description" content="kevyにおけるサーバーサイドのLuaスクリプティングです。EVAL / EVALSHAでアトミックなスクリプトを走らせる方法、どんなバインディングがあるか、そして5.1より新しいLua方言をどうオプトインするかを扱います。">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/lua/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/lua/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/lua/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/lua/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/lua/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/lua/" hreflang="en">EN</a><a href="../../../zh/docs/lua/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/lua/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a class="on" href="../../../ja/docs/lua/" aria-current="page">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例上限つきカウンタ">動かしてみる例：上限つきカウンタ</a></li><li class="l3"><a href="#evalによるインライン実行">EVALによるインライン実行</a></li><li class="l3"><a href="#script-load--evalshaによるキャッシュ実行">SCRIPT LOAD + EVALSHAによるキャッシュ実行</a></li><li class="l3"><a href="#shebangによるlua-54方言">shebangによるLua 5.4方言</a></li><li class="l2"><a href="#バインディング">バインディング</a></li><li class="l2"><a href="#方言の選択">方言の選択</a></li><li class="l2"><a href="#トレードオフと限界">トレードオフと限界</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></details><div><h1 id="luaスクリプティング">Luaスクリプティング</h1>
+<p>kevyにおけるサーバーサイドのLuaスクリプティングです。<code>EVAL</code> / <code>EVALSHA</code>でアトミックなスクリプトを走らせる方法、どんなバインディングがあるか、そして5.1より新しいLua方言をどうオプトインするかを扱います。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>次のようなことをしたいときに、Luaスクリプティングに手を伸ばしてください。</p>
+<ul><li>1つのキーに対して、小さなマルチコマンドの列をアトミックに実行する（check-then-set、条件つきカウンタ、分散ロック）。</li><li>単一のコマンドでは表現できないread-modify-writeのロジックをサーバーへ押し込み、往復を消す。</li><li>エコシステムのライブラリ（BullMQ、Sidekiq、Bee Queue、Redlock、スライディングウィンドウのレートリミッタ）が公開しているスクリプトを、無改造で走らせる。</li></ul>
+<p>ふつうの単一コマンドのアクセスや、明示的な楽観ロックを伴う多数キーにまたがるトランザクションには、素のコマンドか<code>MULTI</code> / <code>EXEC</code>を使ってください。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p><code>EVAL</code>はLuaのソース文字列をサーバーへ送り、コンパイルし、<code>KEYS[1]</code>を所有するシャード上で実行します。スクリプトが走っているあいだ、そのシャード上のほかのコマンドが割り込むことはありません——スクリプト全体が1つのアトミックな単位です。スクリプトの内側では、<code>redis.call("CMD", ...)</code>が通常のコマンドパスを通ってディスパッチし直され、<code>KEYS</code>と<code>ARGV</code>が入力への1始まり・バイナリセーフなアクセスを与え、スクリプトの戻り値はRESPへマーシャルされます。ロード済みのスクリプトはSHA1でキャッシュされるため、<code>SCRIPT LOAD</code> + <code>EVALSHA</code>により、クライアントは呼び出しのたびに本体ではなくハッシュを送れます。Luaランタイムは<a href="https://github.com/goliajp/luna">luna</a>——純Rustの5.1〜5.5インタプリタです。デフォルトの方言はLua 5.1（Redisエコシステムのスクリプトが例外なく前提とするもの）であり、1行のshebangで、個々のスクリプトを5.2、5.3、5.4、5.5へオプトインさせられます。</p>
+<h2 id="動かしてみる例上限つきカウンタ">動かしてみる例：上限つきカウンタ</h2>
+<p>カウンタを1つ増やしますが、増やした値が上限以下にとどまる場合に限ります。新しい値を返し、上限を超えてしまう場合は<code>nil</code>を返します。</p>
+<figure class="code"><pre><code class="lang-lua">-- KEYS[1] = counter key
+-- ARGV[1] = cap (integer)
+local cur = tonumber(redis.call("GET", KEYS[1]) or "0")
+local cap = tonumber(ARGV[1])
+if cur + 1 &gt; cap then
+  return nil
+end
+return redis.call("INCR", KEYS[1])</code></pre></figure>
+<h3 id="evalによるインライン実行"><code>EVAL</code>によるインライン実行</h3>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 EVAL \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])" \
+  1 quota:user:42 5
+# (integer) 1
+# … four more calls …
+# (integer) 5
+# next call:
+# (nil)</code></pre></figure>
+<h3 id="script-load--evalshaによるキャッシュ実行"><code>SCRIPT LOAD</code> + <code>EVALSHA</code>によるキャッシュ実行</h3>
+<figure class="code"><pre><code class="lang-sh">SHA=$(redis-cli -p 6004 SCRIPT LOAD \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])")
+echo "$SHA"
+# e.g. 7c3e0a9b1d4f...
+
+redis-cli -p 6004 EVALSHA "$SHA" 1 quota:user:42 5
+# (integer) 1
+
+redis-cli -p 6004 SCRIPT EXISTS "$SHA"
+# 1) (integer) 1</code></pre></figure>
+<p>サーバーが一度も見たことのないハッシュで<code>EVALSHA</code>が送られてくると（コールドスタート、<code>SCRIPT FLUSH</code>のあとなど）、kevyは<code>-NOSCRIPT</code>を返すので、クライアントは<code>EVAL</code>にフォールバックすべきです。SHA1でキャッシュされるスクリプト本体にはshebang行も含まれるため、同じソースの5.1版と5.4版は、別々のキャッシュエントリになります。</p>
+<h3 id="shebangによるlua-54方言">shebangによるLua 5.4方言</h3>
+<figure class="code"><pre><code class="lang-lua">#!lua version=5.4
+-- ARGV[1] = max retries before giving up
+local tries = tonumber(ARGV[1])
+local i = 0
+::again::
+i = i + 1
+local ok = redis.call("SET", KEYS[1], "owned", "NX", "PX", 3000)
+if type(ok) == "table" and ok.ok == "OK" then
+  return i
+end
+if i &lt; tries then goto again end
+return redis.error_reply("LOCK_FAILED")</code></pre></figure>
+<p><code>goto</code>とラベル、それに整数型の算術は5.3以降の機能です。shebangは、このスクリプト1本だけを5.4のVMプールへ回し、ほかのスクリプトは5.1の上で走り続けます。</p>
+<h2 id="バインディング">バインディング</h2>
+<div class="tbl"><table><thead><tr><th>シンボル</th><th>振る舞い</th></tr></thead><tbody><tr><td><code>redis.call(cmd, ...)</code></td><td>kevyのコマンドをディスパッチします。RESPのエラーはLuaのエラーを送出し、<code>pcall</code>で捕まえない限りスクリプトを中断します。</td></tr><tr><td><code>redis.pcall(cmd, ...)</code></td><td>同じディスパッチですが、RESPのエラーは送出せず<code>{err = "msg"}</code>として返ります。</td></tr><tr><td><code>redis.error_reply(msg)</code></td><td><code>{err = msg}</code>を作ります。スクリプトから返すと<code>-msg\r\n</code>にマーシャルされます。</td></tr><tr><td><code>redis.status_reply(msg)</code></td><td><code>{ok = msg}</code>を作ります。<code>+msg\r\n</code>（simple string）にマーシャルされます。</td></tr><tr><td><code>redis.sha1hex(s)</code></td><td>入力バイト列の、40文字・小文字16進のSHA-1。</td></tr><tr><td><code>redis.replicate_commands()</code></td><td>何もしません。すべてのスクリプトは、すでに1単位としてアトミックにレプリケートされます。</td></tr><tr><td><code>KEYS</code></td><td><code>EVAL</code>呼び出しで宣言された<code>numkeys</code>個のバイト文字列の、1始まりのテーブル。バイナリセーフ。</td></tr><tr><td><code>ARGV</code></td><td>残りの引数の、1始まりのテーブル。バイナリセーフ。</td></tr><tr><td><code>cjson.encode(v)</code> / <code>cjson.decode(s)</code></td><td>純RustのJSONコーデック。Redisの<code>cjson</code>ライブラリと同じ面。</td></tr><tr><td><code>cmsgpack.pack(v)</code> / <code>cmsgpack.unpack(s)</code></td><td>純RustのMessagePackコーデック。Redisの<code>cmsgpack</code>ライブラリと同じ面。</td></tr></tbody></table></div>
+<p>Luaの戻り値は、Redis標準の規則でRESPへマーシャルされます。<code>nil</code>と<code>false</code>はnil-bulkに、<code>true</code>は<code>:1</code>に、整数と誤差なく整数に落ちる浮動小数点数は整数応答に、それ以外の浮動小数点数と文字列はbulk stringに、<code>{ok=...}</code>はsimple stringに、<code>{err=...}</code>はエラー応答に、そして素の配列はmulti-bulk応答になります（最初のnilで打ち切る規則つき）。</p>
+<h2 id="方言の選択">方言の選択</h2>
+<div class="tbl"><table><thead><tr><th>スクリプトの1行目</th><th>使われる方言</th></tr></thead><tbody><tr><td>（shebangなし）</td><td>Lua 5.1（デフォルト。BullMQ、Sidekiq、Redlock、そして公開されているRedis-Luaスニペットの大半が前提とするもの）</td></tr><tr><td><code>#!lua version=5.1</code>（または<code>51</code>）</td><td>Lua 5.1、明示</td></tr><tr><td><code>#!lua version=5.2</code>（または<code>52</code>）</td><td>Lua 5.2 —— <code>goto</code>、<code>_ENV</code>、ephemeronテーブル</td></tr><tr><td><code>#!lua version=5.3</code>（または<code>53</code>）</td><td>Lua 5.3 —— 整数サブタイプ、ビット演算子、<code>//</code>、<code>string.pack</code> / <code>string.unpack</code></td></tr><tr><td><code>#!lua version=5.4</code>（または<code>54</code>）</td><td>Lua 5.4 —— to-be-closed変数、整数<code>for</code>のセマンティクス、新しいビット演算の細部</td></tr><tr><td><code>#!lua version=5.5</code>（または<code>55</code>）</td><td>Lua 5.5 —— 公開されている最新の方言</td></tr><tr><td><code>#!lua version=&lt;other&gt;</code></td><td><code>-ERR unknown lua version: &lt;X&gt;</code></td></tr></tbody></table></div>
+<p>shebang行に載るRedis 7.0 Functionsのメタデータ（<code>flags=</code>、<code>name=</code>）はパースされたうえで無視されるため、Functionsの面向けに書かれたスクリプトも<code>EVAL</code>のもとで問題なくロードされます。</p>
+<p>Redisエコシステムとの純粋な互換性だけを求めるデプロイでは、受け入れる方言をconfigで固定できます。<code>[lua] allow_dialects = "5.1"</code>は、shebangがそれより新しいVMを要求するスクリプトをすべて拒否します。複数を許すならカンマで区切ってください（<code>allow_dialects = "5.1,5.4"</code>）。デフォルト（空）はすべての方言を受け入れます。</p>
+<h2 id="トレードオフと限界">トレードオフと限界</h2>
+<ul><li><b>ファイルシステム、ネットワーク、OSへのアクセスはありません。</b> <code>io</code>、<code>os</code>、<code>package</code>、<code>debug</code>、<code>coroutine</code>はロードされません。スクリプトはファイルを開くことも、ソケットを作ることも、プロセスを起こすことも、環境変数を読むこともできません。</li><li><b>バイトコードのロードはできません。</b> <code>load(bytecode)</code>と<code>string.dump</code>はブロックされます。VMに入れるのはLuaのソースだけであり、これが、歴史的にLuaのサンドボックスを破ってきたバイトコード検証器の抜け道を塞ぎます。</li><li><b>標準ライブラリは方言に従います。</b> 各方言はその方言が実際に持つ関数だけを受け取るので、ここで動くスクリプトは同じバージョンの本家 Lua でも動きます。既定の 5.1 では <code>table.setn</code> が存在し（PUC と同じく「'setn' is obsolete」を送出）、<code>table.unpack</code> / <code>table.create</code> は存在しません——5.1 の綴りはグローバルの <code>unpack</code> です。必要なら <code>#!lua version=5.4</code> でそれらを持つ方言を指定してください。luna-core 3.0.0 より前は、どの方言でも五つの版の和集合が見えており、対象バージョンにない名前をスクリプトが使えてしまっていました。</li><li><b>標準ライブラリはホワイトリスト制です。</b> <code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>cjson</code>、<code>cmsgpack</code>が使えます。ほかの標準モジュールは存在しません。</li><li><b>スクリプトごとの時間予算。</b> 各<code>EVAL</code>は、<code>[lua] time_limit_ms</code>（デフォルト5000 ms ≈ 2億命令——Redisのデフォルトの<code>lua-time-limit</code>と同じ天井です。<code>0</code>で上限が外れます）から導かれた命令予算のもとで走ります。これを超えると、捕捉可能なLuaエラーを返してスクリプトを中断します。</li><li><b>スクリプトごとのメモリ予算。</b> 各スクリプトは、方言ごとのVMプールから種を取った、まっさらなインタプリタ状態の中で走ります。呼び出し中に作られたテーブルや文字列は、呼び出しが返るときに回収されます。呼び出しをまたいで共有される可変のLua状態は存在しません——何かを永続させたければkevyのキーを使ってください。</li><li><b><code>EVAL</code>のネストはできません。</b> <code>redis.call("EVAL", ...)</code>を呼ぶスクリプトはエラーを返します。Redisの挙動と同じです。</li><li><b>スクリプト1本につき1シャード。</b> すべての<code>KEYS</code>が同じスロットにハッシュされなければなりません。シャードをまたぐ複数キーに触れるスクリプトは、ディスパッチの時点で<code>-CROSSSLOT</code>を受け取ります。</li><li><b>JITは設計上オフです。</b> インタプリタを直接使います。lunaのCranelift JITはkevyサーバーにリンクされていません。依存の面を最小に保ち、JIT時のポーズを避けるためです。</li></ul>
+<h2 id="faq">FAQ</h2>
+<p><b>手元にある既存のRedis Luaスクリプトは、無改造で動きますか？</b> Lua 5.1（Redisのデフォルト）を対象にしていて、<code>redis.call</code> / <code>redis.pcall</code> / <code>redis.error_reply</code> / <code>redis.status_reply</code> / <code>KEYS</code> / <code>ARGV</code> / <code>cjson</code> / <code>cmsgpack</code>しか使っていないなら、動きます。debugライブラリ、OSライブラリ、あるいはプリコンパイルされたバイトコードのロードに依存しているなら、動きません——それらはサンドボックスの外に出されています。</p>
+<p><b>別々のシャードにあるキーをまたいでスクリプトを走らせるには？</b> できません——アトミック性こそが要点だからです。仕事をシャードごとのスクリプトに分割してクライアント側で調整するか、関係するキーがハッシュタグを共有するようにキーのレイアウトを設計してください（<code>{user:42}:quota</code>と<code>{user:42}:counter</code>は同じシャードにルーティングされます）。</p>
+<p><b><code>EVALSHA</code>が<code>-NOSCRIPT</code>を返します。どうすればいいですか？</b> 同じ本体を<code>EVAL</code>で送り直してください。サーバーはそれを再びキャッシュし、呼び出しに答えます。たいていのクライアントライブラリは、このフォールバックを自動で処理します。<code>SCRIPT FLUSH</code>もプロセスの再起動も、どちらもキャッシュをリセットします。</p>
+<p><b>スクリプトから<code>BLPOP</code>などのブロッキングコマンドを呼べますか？</b> 呼べません。<code>EVAL</code>の内側のブロッキングコマンドは、アトミック性の契約を破壊してしまいます——シャードは自分自身を待って凍りつくか、ほかの仕事を割り込ませるかのどちらかになるからです。ブロッキングコマンドは、スクリプトからディスパッチされるとエラーを返します。</p>
+<p><b>より新しいバージョンがあるのに、なぜデフォルトがLua 5.1なのですか？</b> Redisエコシステムで公開されているスクリプトは、すべて5.1を前提にしています。5.1をデフォルトにするということは、それらのスクリプトが、整数サブタイプやビット演算子や<code>goto</code>まわりの驚きなしに、コピー&amp;ペーストで通るということです。個々のスクリプトをshebangでより新しい方言へオプトインさせるのは、新しい機能が積極的に欲しくなったときの、1行の変更で済みます。</p></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

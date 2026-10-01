@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>暗号化リンク · kevy</title>
+    <meta name="description" content="レプリケーション、選挙のコントロールプレーン、クライアント接続は、それぞれ kevy 自身の暗号化され認証されたリンクの上で動かせます。どれも明示的に有効にしない限りオフです。TLS と AUTH は今もありません。TLS が必要なクライアントは [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) のとお">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/encrypted-links/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/encrypted-links/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/encrypted-links/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/encrypted-links/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/encrypted-links/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/encrypted-links/" hreflang="en">EN</a><a href="../../../zh/docs/encrypted-links/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/encrypted-links/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a class="on" href="../../../ja/docs/encrypted-links/" aria-current="page">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#対象となるリンク">対象となるリンク</a></li><li class="l2"><a href="#鍵">鍵</a></li><li class="l2"><a href="#設定">設定</a></li><li class="l2"><a href="#組み込みストア">組み込みストア</a></li><li class="l2"><a href="#クライアント">クライアント</a></li><li class="l2"><a href="#クラスタモード">クラスタモード</a></li><li class="l2"><a href="#コスト">コスト</a></li><li class="l2"><a href="#暗号化ノードと平文ノードの混在">暗号化ノードと平文ノードの混在</a></li><li class="l2"><a href="#実測したこと">実測したこと</a></li><li class="l2"><a href="#参照">参照</a></li></ul></details><div><h1 id="暗号化リンク">暗号化リンク</h1>
+<p>レプリケーション、選挙のコントロールプレーン、クライアント接続は、それぞれ kevy 自身の暗号化され認証されたリンクの上で動かせます。どれも<b>明示的に有効にしない限りオフ</b>です。TLS と AUTH は今もありません。TLS が必要なクライアントは <a href="../deploy-behind-a-proxy/">deploy-behind-a-proxy.md</a> のとおりプロキシ経由で接続し、暗号化ポートを開いても開かなくても平文のクライアントポートの振る舞いは変わりません。</p>
+<h2 id="対象となるリンク">対象となるリンク</h2>
+<div class="tbl"><table><thead><tr><th>リンク</th><th>暗号化される条件</th><th>認証される相手</th></tr></thead><tbody><tr><td>選挙（<code>elect_port_base</code>）</td><td><code>[cluster] secure = true</code></td><td>両端。<code>peer_keys</code> の鍵による</td></tr><tr><td>レプリケーション（<code>listen_port_base + i</code>）</td><td><code>[replication] secure = true</code></td><td>プライマリは <code>upstream_key</code> かピアの鍵で、レプリカは <code>replica_keys</code> を設定したときに認証される</td></tr><tr><td><code>[secure] listen_port</code> のクライアント</td><td>常に暗号化</td><td>サーバーは自分の鍵で、<code>client_keys</code> を設定したときはクライアントも認証される</td></tr><tr><td><code>port</code>、クラスタポート、unix ソケットのクライアント</td><td>暗号化しない</td><td>認証しない。プロキシを使う</td></tr></tbody></table></div>
+<p>プロトコルは Noise <code>IK</code> で、X25519、ChaCha20-Poly1305、BLAKE2s を使います。イニシエータは接続前に相手の公開鍵を知っており、レスポンダは最初のメッセージからイニシエータの公開鍵を知り、応答する前に拒否できます。この 1 往復のあとの通信はすべて暗号化され、認証されます。暗号プリミティブは kevy 自身の実装で依存はなく、公開されたテストベクタや他の実装と照合済みですが、第三者の監査は受けていません。</p>
+<h2 id="鍵">鍵</h2>
+<p>各ノードに鍵ペアが必要です。<code>kevy keygen</code> は秘密鍵を書き出し、公開鍵を表示します。</p>
+<figure class="code"><pre><code class="lang-console">$ kevy keygen /etc/kevy/node.key
+ffe2a40f453275a19e8b115332459968e9a3b54b9c2e728ec538ccdd724b2f6c</code></pre></figure>
+<p>ファイルはモード <code>0600</code> で作られ、既存のファイルは上書きしません。他のユーザーが読める鍵ファイルでは、kevy は起動を拒否します。</p>
+<h2 id="設定">設定</h2>
+<p>各ノードは自分の鍵を指定し、すべてのピアの公開鍵を列挙します。公開鍵は、各ノードで <code>kevy keygen</code> が表示したものです。次は <code>n2</code> の設定です。</p>
+<figure class="code"><pre><code class="lang-toml">[secure]
+private_key_file = "/etc/kevy/node.key"
+
+[cluster]
+enabled   = true
+node_id   = "n2"
+secure    = true
+peers     = "n1@10.0.0.11:6204:6004,n2@10.0.0.12:6204:6004,n3@10.0.0.13:6204:6004"
+peer_keys = ["n1=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c", "n3=38bde379dfddf094d8746267013da2d5b62153c74dea6f82a4910797faecb440"]
+
+[replication]
+role         = "replica"
+upstream     = "10.0.0.11:16004"
+secure       = true
+upstream_key = "d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c"
+replica_keys = []   # プライマリ側：接続を許すレプリカの鍵。空ならすべて許可</code></pre></figure>
+<ul><li><code>peers</code> のうち自分以外の各ノードについて、<code>peer_keys</code> に項目が必要です。自分の項目は無視されるので、全ノードで同じリストを共有できます。</li><li>レプリカは <code>upstream_key</code> と <code>peer_keys</code> のすべての鍵をプライマリとして信頼します。選挙のあと、新しいプライマリの鍵はすでにリストにあるので、設定を変えずに追従します。</li><li>プライマリの <code>replica_keys</code> は接続できるレプリカを制限します。空のままならどのレプリカも接続でき、リンクはそれでも暗号化されます。</li></ul>
+<p>kevy は起動時にこれを確認します。<code>secure = true</code> なのに <code>private_key_file</code> がない、鍵のないピアがある、<code>upstream_key</code> のない暗号化レプリカがある、のいずれでも、足りないものを示してノードは起動を止めます。平文に戻ることはありません。</p>
+<h2 id="組み込みストア">組み込みストア</h2>
+<p>組み込みのライターとそのレプリカも同じ方法でリンクを暗号化します。設定は <code>kevy.toml</code> ではなくコードで行います。ハンドシェイクはサーバーと同じなので、組み込みレプリカは暗号化された kevy サーバーに追従でき、サーバーのレプリカも暗号化された組み込みライターに追従できます。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Keypair, LinkKeys, Store};
+
+# fn keys() -&gt; (Keypair, Keypair) { (Keypair::from_secret([1; 32]), Keypair::from_secret([2; 32])) }
+let (writer_key, replica_key) = keys();
+let writer_public = writer_key.public();
+
+// ライター：どのレプリカも接続でき、リンクは暗号化される
+let writer = Store::open(
+    Config::default()
+        .with_embed_writer("0.0.0.0:7101")
+        .with_writer_security(LinkKeys::new(writer_key)),
+)?;
+
+// レプリカ：ライターの公開鍵を信頼する
+let replica = Store::open(
+    Config::default()
+        .without_aof()
+        .with_replica_upstream("writer.internal:7101")
+        .with_replica_security(LinkKeys::new(replica_key).with_peers(vec![writer_public])),
+)?;
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<ul><li>レプリカでは、<code>peers</code> は信頼するプライマリの一覧で、応答があるまで順に試します。空だと開くときに失敗します。ライターでは、接続を許すレプリカの一覧で、空ならすべて許可します。</li><li><code>Keypair::from_secret</code> が受け取る 32 バイトは、<code>kevy keygen</code> が hex で書き出すものです。どこに保管するかはアプリケーションが決めます。</li></ul>
+<h2 id="クライアント">クライアント</h2>
+<p><code>[secure] listen_port</code> は暗号化プロトコルだけを話す 2 つ目のクライアントポートを開きます。平文の <code>port</code> はそのままです。クライアントはサーバーの公開鍵を含む <code>kevys://</code> URL で接続します。</p>
+<figure class="code"><pre><code class="lang-toml">[secure]
+private_key_file = "/etc/kevy/node.key"
+listen_port      = 6404
+client_keys      = []   # 許可するクライアントの公開鍵。空ならすべて許可し、それでも暗号化される</code></pre></figure>
+<figure class="code"><pre><code class="lang-text">kevys://10.0.0.11:6404?server_key=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c
+kevys://10.0.0.11:6404/0?server_key=&lt;hex&gt;&amp;client_key_file=/etc/app/kevy.key</code></pre></figure>
+<ul><li><code>client_key_file</code> のないクライアントは、接続ごとに新しい鍵ペアを作ります。<code>client_keys</code> が空ならそれで足ります。空でないときは <code>kevy keygen</code> でクライアントの鍵を作り、その公開鍵を列挙してください。</li><li><code>kevys://</code> を受け付けるのは Rust クライアントです。<code>kevy-resp-client</code>（<code>RespClient::connect_url</code>、または任意の RESP コードの下に <code>SecureStream</code> を置く）、<code>kevy-client</code>（<code>Connection</code> と <code>Subscriber</code>）、<code>kevy-client-async</code>（<code>AsyncConnection::connect_secure_url</code>、<code>AsyncSubscriber::connect_secure_url</code>）です。<code>kevy-cli -u</code> も受け付けます。ほかの言語のバインディングは対応していないので、TLS プロキシを使ってください。</li><li><code>CLIENT LIST</code>、<code>CLIENT INFO</code>、<code>CLIENT KILL ADDR</code> にはサーバーではなくクライアント自身のアドレスが表示されます。</li><li>このポートには <code>private_key_file</code> が必要で、<code>port</code> と同じにはできません。どちらの設定ミスでも、サーバーは起動時に停止します。</li></ul>
+<h2 id="クラスタモード">クラスタモード</h2>
+<p>クラスタモードでは、各シャードのクラスタポートに暗号化された双子のポートが付き、そこから平文のクラスタポートへ中継されます。暗号化クライアントも平文クライアントと同じくスロットでルーティングします。</p>
+<figure class="code"><pre><code class="lang-toml">[cluster]
+enabled = true              # シャード i は port_base + i（既定は port + 1）
+
+[secure]
+private_key_file  = "/etc/kevy/node.key"
+listen_port       = 6404
+cluster_port_base = 6405    # シャード i の暗号化ポートは 6405 + i。0 = listen_port + 1</code></pre></figure>
+<p>暗号化ポートから入ったクライアントには暗号化ポートが示されます。<code>-MOVED</code> と <code>CLUSTER SLOTS</code> / <code>NODES</code> / <code>SHARDS</code> は双子のポートを返し、平文クライアントには今までどおり平文ポートが示されます。プロキシや NAT の後ろでは、<code>announce_cluster_port_base</code> で通知する先頭ポートを設定します。暗号化ポートの範囲どうし、およびクライアントポートや平文クラスタポートと重なってはならず、重なるとサーバーは起動しません。</p>
+<p><code>kevy_client::ClusterClient::connect_url</code>、<code>kevy_client_async::cluster::AsyncClusterClient::connect_secure_url</code>、<code>kevy-cli -c</code>、<code>kevy-cli --cluster</code> ツールは、暗号化クラスタポートの 1 つを指す <code>kevys://</code> URL を受け取り、同じ鍵ですべてのシャードに接続します。</p>
+<figure class="code"><pre><code class="lang-text">kevy-cli -c -u "kevys://10.0.0.11:6405?server_key=&lt;hex&gt;" SET user:1 alice
+kevy-cli -u "kevys://10.0.0.11:6405?server_key=&lt;hex&gt;" --cluster info 10.0.0.11:6405</code></pre></figure>
+<p><code>kevy_cluster_rw::ReadWriteClient::connect_urls</code> はノードごとに URL を 1 つ受け取り、それぞれにそのノードの鍵を付けます。暗号化時には、鍵を持たないノードへの <code>-MISDIRECTED</code> を平文でたどらず、拒否します。</p>
+<h2 id="コスト">コスト</h2>
+<p>暗号処理はリアクタとは別のスレッドで動きます。各接続のバイトはそこで復号されてループバック経由で平文ポートに渡され、応答は戻る途中で暗号化されます。このポートを開いても開かなくても平文の経路は同じコードで、暗号化接続は暗号処理のほかにループバックの往復を 1 回余分に払います。</p>
+<p>1 台の Linux ホストで、クライアントとサーバーをループバックで結び、4 シャードで計測しました。</p>
+<div class="tbl"><table><thead><tr><th></th><th style="text-align:right">平文ポート</th><th style="text-align:right">暗号化ポート</th></tr></thead><tbody><tr><td>1 リクエストの往復</td><td style="text-align:right">10 µs</td><td style="text-align:right">25 µs</td></tr><tr><td>1 接続での 256 KB <code>GET</code></td><td style="text-align:right">3.0 GB/s</td><td style="text-align:right">0.32 GB/s</td></tr><tr><td>新規接続と <code>PING</code> 1 回</td><td style="text-align:right">38 µs</td><td style="text-align:right">0.58 ms</td></tr></tbody></table></div>
+<p>往復で増えた時間の大半はその余分な 1 ホップで、小さなメッセージの暗号化と復号は合わせて約 0.5 µs です。大きな値は移植性のある実装の暗号で頭打ちになり、ハンドシェイクの時間はほぼ X25519 です。接続を開いたまま使うコネクションプールなら、ハンドシェイクは 1 回で済みます。</p>
+<h2 id="暗号化ノードと平文ノードの混在">暗号化ノードと平文ノードの混在</h2>
+<p>暗号化ノードは平文ノードと通信しません。平文のレプリカが暗号化プライマリに接続しても応答はなく、他ノードの <code>peer_keys</code> にない鍵を持つノードの声は選挙で誰にも届きません。クラスタを暗号化に切り替えるには、新しい設定で全ノードを再起動してください。</p>
+<h2 id="実測したこと">実測したこと</h2>
+<p>3 ノード、各 1 シャードで、選挙とレプリケーションの両方を暗号化した構成です。</p>
+<ul><li>プライマリへの書き込みは両方のレプリカに届き、ノード間ネットワークのキャプチャには、200 回書いたマーカー値がレプリケーションと選挙のポートで一度も現れませんでした。同じ手順を <code>secure = false</code> で行うと 400 回現れました。</li><li>プライマリを停止すると新しいプライマリが選ばれ、もう一方のノードがそれに追従し、フェイルオーバー後の書き込みも受け取りました。</li><li>ノードあたり 4 シャード、io_uring リアクタの構成で、<code>replica_keys</code> で制限したレプリカは書いた 400 個のキーをすべて受け取り、レプリケーションポートのキャプチャには値が一つもありませんでした。同じ構成の平文での実行では 400 個すべてが見えました。</li><li>別のプライマリ鍵を期待するレプリカ、<code>replica_keys</code> にないレプリカ、平文のレプリカ、設定されていない鍵を持つ選挙ピアは、いずれも拒否されました。</li></ul>
+<h2 id="参照">参照</h2>
+<ul><li><a href="../deploy-behind-a-proxy/">deploy-behind-a-proxy.md</a>：<code>kevys://</code> を使えないクライアントの TLS</li><li><a href="../replication/">replication.md</a>：レプリケーションそのもの</li><li><a href="../availability/">availability.md</a>：選挙とフェイルオーバー</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

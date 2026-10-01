@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>各言語から kevy を使う · kevy</title>
+    <meta name="description" content="エンジンへの到達経路は二つあり、どちらを選ぶかでこのページの残りが決まります。">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/bindings/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/bindings/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/bindings/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/bindings/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/bindings/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/bindings/" hreflang="en">EN</a><a href="../../../zh/docs/bindings/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/bindings/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a class="on" href="../../../ja/docs/bindings/" aria-current="page">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a href="../../../ja/docs/deploy-behind-a-proxy/">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#何がどこに公開されているか">何がどこに公開されているか</a></li><li class="l2"><a href="#公開パッケージが持っているもの">公開パッケージが持っているもの</a></li><li class="l2"><a href="#同じストアを四つの言語から">同じストアを、四つの言語から</a></li><li class="l2"><a href="#どれを選ぶか">どれを選ぶか</a></li></ul></details><div><h1 id="各言語から-kevy-を使う">各言語から kevy を使う</h1>
+<p>エンジンへの到達経路は二つあり、どちらを選ぶかでこのページの残りが決まります。</p>
+<p><b>ネットワーク越しに。</b> kevy のサーバーは RESP を話すので、その言語に既にある Redis クライアントがそのまま接続できます——こちら側にインストールするものは ありません。それが<a href="../../../docs/clients/">お使いの Redis クライアントを向ける</a>であり、 たいていのサービスにとってはそれが正解です。</p>
+<p><b>プロセスの中に。</b> 同じエンジンが C ABI を持つライブラリになり、以下の バインディングはそれを包んでいます。サーバーもソケットも不要で、データ ファイルは同一。このページはその話です。</p>
+<h2 id="何がどこに公開されているか">何がどこに公開されているか</h2>
+<p>以下の各行は、それぞれのレジストリから実際にインストールして動かしてから 書いています。</p>
+<div class="tbl"><table><thead><tr><th>言語</th><th>インストール</th><th>バージョン</th></tr></thead><tbody><tr><td>Rust</td><td><code>cargo add kevy-embedded</code></td><td>7.0.0</td></tr><tr><td>Python</td><td><code>pip install kevy</code></td><td>7.0.0</td></tr><tr><td>Go</td><td><code>go get github.com/goliajp/kevy-go/v7</code></td><td>7.0.0</td></tr><tr><td>Java</td><td>Maven Central の <code>jp.golia:kevy</code></td><td>7.0.0</td></tr><tr><td>Node / TypeScript</td><td><code>npm i @goliapkg/kevy-ts</code></td><td>7.0.0</td></tr><tr><td>ブラウザ（wasm）</td><td><code>npm i @goliapkg/kevy</code></td><td>7.0.0</td></tr><tr><td>Flutter</td><td><code>flutter pub add flutter_kevy</code></td><td>7.0.0</td></tr></tbody></table></div>
+<figure class="code"><pre><code class="lang-xml">&lt;!-- Java、pom.xml に --&gt;
+&lt;dependency&gt;
+  &lt;groupId&gt;jp.golia&lt;/groupId&gt;&lt;artifactId&gt;kevy&lt;/artifactId&gt;&lt;version&gt;7.0.0&lt;/version&gt;
+&lt;/dependency&gt;</code></pre></figure>
+<p><b>.NET は現在 NuGet にありません。</b> 5.1.0 は公開後に非掲載としました。存在 しない内部パッケージへの依存を宣言しており、復元できなかったためです。修正は リポジトリに入っており、次のリリースで出ます。それまでは <code>bindings/csharp</code> からビルドしてください。</p>
+<p><b>Swift・Kotlin・C#・React Native</b> のバインディングは <a href="https://github.com/goliajp/kevy/tree/develop/bindings"><code>bindings/</code></a> にあり、 ソースからビルドできますが、各レジストリにはまだ公開していません。</p>
+<h2 id="公開パッケージが持っているもの">公開パッケージが持っているもの</h2>
+<p>多くの場合、<b>エンジンは入っていません</b>——これは意図的です。</p>
+<p>エンジンはプラットフォームごとのネイティブライブラリです。Python の wheel、 Go の module、.NET のパッケージが通る配布経路はソースやマネージドコードを 運ぶもので、プラットフォームごと・バージョンごとに数十 MB を永久に抱えさせる のは筋が通りません。そこで公開するのは「どこでも動く側」です。</p>
+<ul><li><b>Python と Go</b> は RESP クライアントを公開します。標準ライブラリ以外に 依存がなく、その言語が動く場所すべてで動きます。<code>mem://</code> と <code>file://</code> は エンジンの入手先を示すエラーを返します。</li><li><b>Java・Node・ブラウザ・Flutter</b> はエンジンを同梱します。これらの パッケージ形式はもともとそのために作られているからです（JNI ライブラリを 含む jar、<code>.node</code> アドオンを含む npm パッケージ、wasm モジュール、 xcframework と jniLibs を含む pub パッケージ）。</li></ul>
+<p>エンジンが同梱されていない場合でも、コマンド一つの距離です。</p>
+<figure class="code"><pre><code class="lang-bash">git clone https://github.com/goliajp/kevy
+cd kevy &amp;&amp; cargo build --release -p kevy-ffi</code></pre></figure>
+<p>あとはバインディングが探す場所に置くか、<code>KEVY_FFI_LIB</code> で指すだけです。</p>
+<h2 id="同じストアを四つの言語から">同じストアを、四つの言語から</h2>
+<figure class="code"><pre><code class="lang-python"># Python —— pip install kevy
+import kevy
+db = kevy.connect("file:///var/lib/app")     # または kevy://host:6379
+db.set(b"user:1", b"alice")
+db.get(b"user:1")                            # b"alice"</code></pre></figure>
+<figure class="code"><pre><code class="lang-go">// Go —— go get github.com/goliajp/kevy-go/v7
+import kevy "github.com/goliajp/kevy-go/v7"
+
+c, _ := kevy.Connect("kevy://127.0.0.1:6379")
+c.Set(ctx, []byte("user:1"), []byte("alice"))</code></pre></figure>
+<figure class="code"><pre><code class="lang-java">// Java —— jp.golia:kevy
+try (KevyClient c = KevyClient.connect("file:///var/lib/app")) {
+    c.set("user:1", "alice");
+    c.get("user:1");
+}</code></pre></figure>
+<figure class="code"><pre><code class="lang-dart">// Flutter —— flutter pub add flutter_kevy
+final db = KevyDb.open('/data/app');
+db.set('user:1', utf8.encode('alice') as Uint8List);
+db.getText('user:1');                        // alice</code></pre></figure>
+<p>いずれも同じエンジン、同じファイルです。Python バインディングが書いたストアは Go バインディングで開けますし、サーバーでも開けます。</p>
+<h2 id="どれを選ぶか">どれを選ぶか</h2>
+<p><b>すでに Redis と話しているサービス</b>にはバインディングは不要です。既存の クライアントを kevy サーバーに向けるだけで、コードはそのままです。</p>
+<p><b>自分のデータを自分で持つアプリケーション</b>——デスクトップ、モバイル、CLI、 エージェント——には組み込み形態が向きます。動かすプロセスも占有するポートも なく、データはそのままコピーできるディレクトリです。</p>
+<p><b>その中間</b>——背後に本物のデータ構造を持つローカルキャッシュが欲しい サービスや、ネットワークが切れても動き続ける必要があるエッジプロセス——は、 エンジンを組み込んで中央から複製できます。<a href="../replication/">レプリケーション</a> を参照してください。</p></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

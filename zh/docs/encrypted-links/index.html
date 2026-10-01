@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加密链路 · kevy</title>
+    <meta name="description" content="复制、选举控制面和客户端连接，都可以各自走 kevy 自带的加密链路，并认证对方身份。它们默认全部关闭，只有显式开启才生效。kevy 依然没有 TLS，也没有 AUTH：需要 TLS 的客户端按 [deploy-behind-a-proxy.md](deploy-behind-a-proxy.md) 的做法经代理接入；开不开加密端口，明文客户端端口的行为都不">
+    <link rel="canonical" href="https://kevy.golia.jp/zh/docs/encrypted-links/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/encrypted-links/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/encrypted-links/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/encrypted-links/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/encrypted-links/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../zh/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../zh/">首页</a><a href="../../../zh/docs/" class="on" aria-current="page">文档</a><a href="../../../zh/docs/commands/" class="hide-sm">命令</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/encrypted-links/" hreflang="en">EN</a><a class="on" href="../../../zh/docs/encrypted-links/" hreflang="zh-CN">中文</a><a href="../../../ja/docs/encrypted-links/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">上手</div><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a><a href="../../../zh/docs/persistence/">持久化</a><a href="../../../zh/docs/tuning/">调优 kevy</a></div><div><div class="group">运行</div><a href="../../../zh/docs/upgrading-6.4-to-7.0/">从 6.4 升级到 7.0</a><a href="../../../zh/docs/upgrading-6.3-to-6.4/">从 6.3 升级到 6.4</a><a href="../../../zh/docs/upgrading-6.2-to-6.3/">从 6.2 升级到 6.3</a><a href="../../../zh/docs/upgrading-6.2.0-to-6.2.1/">从 6.2.0 升级到 6.2.1</a><a href="../../../zh/docs/upgrading-5.1-to-5.2/">从 5.1 升级到 5.2</a><a href="../../../zh/docs/upgrading-5.0-to-5.1/">从 5.0 升级到 5.1</a><a href="../../../zh/docs/upgrading-4-to-5/">从 4.x 升级到 5.0</a><a href="../../../zh/docs/UPGRADING/">更早的大版本升级</a><a href="../../../zh/docs/replication/">复制</a><a href="../../../zh/docs/availability/">可用性</a><a href="../../../zh/docs/cluster/">集群</a><a href="../../../zh/docs/tiering/">透明分层存储（[tiering] / with_tier_budget*）</a><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a><a href="../../../zh/docs/alloc/">kevy-alloc——服务端的分配器</a><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a><a href="../../../zh/docs/async/">异步客户端</a></div><div><div class="group">数据</div><a href="../../../zh/docs/indexes/">二级索引（IDX.* / idx_*）</a><a href="../../../zh/docs/tables/">表（TABLE.* / table_*）</a><a href="../../../zh/docs/relational-cli/">kevy-cli 的关系命令</a><a href="../../../zh/docs/table-migration/">从手工维护的索引迁移到表</a><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a><a href="../../../zh/docs/views/">视图（VIEW.* / view_*）</a><a href="../../../zh/docs/cdc/">CDC——变更流（FEED.* / changes_since）</a><a href="../../../zh/docs/pubsub/">Pub/sub</a><a href="../../../zh/docs/lua/">Lua 脚本</a><a href="../../../zh/docs/packed-rows/">packed-rows——把声明过的行存成一次分配</a></div><div><div class="group">嵌入</div><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a><a href="../../../zh/docs/electron/">在 Electron 里用 kevy</a><a href="../../../zh/docs/tauri/">在 Tauri 应用里用 kevy</a><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></div><div><div class="group">客户端</div><a href="../../../zh/docs/bindings/">在你的语言里使用 kevy</a></div><div><div class="group">参考</div><a href="../../../zh/docs/boundaries/">kevy 不做什么</a><a href="../../../zh/docs/error-replies/">错误回复目录</a><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a><a href="../../../zh/docs/deploy-behind-a-proxy/">把 kevy 放在代理后面部署</a><a class="on" href="../../../zh/docs/encrypted-links/" aria-current="page">加密链路</a><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></div></nav><main class="docmain"><details class="toc"><summary>本页内容</summary><ul><li class="l2"><a href="#覆盖哪些链路">覆盖哪些链路</a></li><li class="l2"><a href="#密钥">密钥</a></li><li class="l2"><a href="#配置">配置</a></li><li class="l2"><a href="#嵌入式存储">嵌入式存储</a></li><li class="l2"><a href="#客户端">客户端</a></li><li class="l2"><a href="#集群模式">集群模式</a></li><li class="l2"><a href="#代价">代价</a></li><li class="l2"><a href="#加密节点和明文节点混用">加密节点和明文节点混用</a></li><li class="l2"><a href="#哪些实测过">哪些实测过</a></li><li class="l2"><a href="#参见">参见</a></li></ul></details><div><h1 id="加密链路">加密链路</h1>
+<p>复制、选举控制面和客户端连接，都可以各自走 kevy 自带的加密链路，并认证对方身份。它们<b>默认全部关闭，只有显式开启才生效</b>。kevy 依然没有 TLS，也没有 AUTH：需要 TLS 的客户端按 <a href="../deploy-behind-a-proxy/">deploy-behind-a-proxy.md</a> 的做法经代理接入；开不开加密端口，明文客户端端口的行为都不变。</p>
+<h2 id="覆盖哪些链路">覆盖哪些链路</h2>
+<div class="tbl"><table><thead><tr><th>链路</th><th>何时加密</th><th>谁被认证</th></tr></thead><tbody><tr><td>选举（<code>elect_port_base</code>）</td><td><code>[cluster] secure = true</code></td><td>两端都认证，依据 <code>peer_keys</code> 里的公钥</td></tr><tr><td>复制（<code>listen_port_base + i</code>）</td><td><code>[replication] secure = true</code></td><td>主节点凭 <code>upstream_key</code> 或某个 peer 公钥认证；设置了 <code>replica_keys</code> 时 replica 也被认证</td></tr><tr><td><code>[secure] listen_port</code> 上的客户端</td><td>始终加密</td><td>服务端凭自己的公钥认证；设置了 <code>client_keys</code> 时客户端也被认证</td></tr><tr><td><code>port</code>、集群端口、unix socket 上的客户端</td><td>不加密</td><td>不认证，请用代理</td></tr></tbody></table></div>
+<p>协议是 Noise <code>IK</code>，用 X25519、ChaCha20-Poly1305 和 BLAKE2s。发起方连接前就知道对方的公钥；响应方从第一条消息里得知发起方的公钥，在回复之前就可以拒绝它；这一个来回之后的所有内容都加密并带认证。这些密码学原语是 kevy 自己实现的，没有任何依赖，已经对照公开的测试向量和其他实现做过验证，但没有经过第三方审计。</p>
+<h2 id="密钥">密钥</h2>
+<p>每个节点需要一对密钥。<code>kevy keygen</code> 写出私钥，并打印公钥：</p>
+<figure class="code"><pre><code class="lang-console">$ kevy keygen /etc/kevy/node.key
+ffe2a40f453275a19e8b115332459968e9a3b54b9c2e728ec538ccdd724b2f6c</code></pre></figure>
+<p>私钥文件以 <code>0600</code> 权限创建，已存在时不会被覆盖。私钥文件如果其他用户可读，kevy 拒绝启动。</p>
+<h2 id="配置">配置</h2>
+<p>每个节点写明自己的私钥，并列出所有对端的公钥，即各节点上 <code>kevy keygen</code> 打印出来的那一行。下面是 <code>n2</code> 的配置：</p>
+<figure class="code"><pre><code class="lang-toml">[secure]
+private_key_file = "/etc/kevy/node.key"
+
+[cluster]
+enabled   = true
+node_id   = "n2"
+secure    = true
+peers     = "n1@10.0.0.11:6204:6004,n2@10.0.0.12:6204:6004,n3@10.0.0.13:6204:6004"
+peer_keys = ["n1=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c", "n3=38bde379dfddf094d8746267013da2d5b62153c74dea6f82a4910797faecb440"]
+
+[replication]
+role         = "replica"
+upstream     = "10.0.0.11:16004"
+secure       = true
+upstream_key = "d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c"
+replica_keys = []   # 在主节点上：允许连接的 replica 公钥；留空表示都允许</code></pre></figure>
+<ul><li><code>peers</code> 里除自己之外的每个节点，<code>peer_keys</code> 都要有一项；自己那一项会被忽略，所以所有节点可以共用同一份列表。</li><li>replica 把 <code>upstream_key</code> 和 <code>peer_keys</code> 里的每个公钥都当作可信的主节点。选举切换后，它不用改任何配置就能跟随新主，因为新主的公钥本来就在列表里。</li><li>主节点上的 <code>replica_keys</code> 限定哪些 replica 可以连接。留空时任何 replica 都能连，链路照样加密。</li></ul>
+<p>kevy 在启动时检查这些配置：开了 <code>secure = true</code> 却没有 <code>private_key_file</code>、某个对端没有公钥、或者加密的 replica 没有 <code>upstream_key</code>，节点都会停止启动，并说明缺了什么。它不会退回明文。</p>
+<h2 id="嵌入式存储">嵌入式存储</h2>
+<p>嵌入式写端和它的 replica 用同样的方式加密链路，只是在代码里配置，不用 <code>kevy.toml</code>。握手和 server 完全相同，所以嵌入式 replica 可以跟随加密的 kevy server，server replica 也可以跟随加密的嵌入式写端。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, Keypair, LinkKeys, Store};
+
+# fn keys() -&gt; (Keypair, Keypair) { (Keypair::from_secret([1; 32]), Keypair::from_secret([2; 32])) }
+let (writer_key, replica_key) = keys();
+let writer_public = writer_key.public();
+
+// 写端：任何 replica 都能连，链路照样加密
+let writer = Store::open(
+    Config::default()
+        .with_embed_writer("0.0.0.0:7101")
+        .with_writer_security(LinkKeys::new(writer_key)),
+)?;
+
+// replica：信任写端的公钥
+let replica = Store::open(
+    Config::default()
+        .without_aof()
+        .with_replica_upstream("writer.internal:7101")
+        .with_replica_security(LinkKeys::new(replica_key).with_peers(vec![writer_public])),
+)?;
+# Ok::&lt;(), kevy_embedded::KevyError&gt;(())</code></pre></figure>
+<ul><li>在 replica 上，<code>peers</code> 列出它信任的主节点，逐个尝试直到有一个应答；列表为空时打开会失败。在写端上，它列出允许连接的 replica；留空表示都允许。</li><li><code>Keypair::from_secret</code> 接收的 32 字节，就是 <code>kevy keygen</code> 以 hex 写出的那一串；应用把它存在哪里由应用自己决定。</li></ul>
+<h2 id="客户端">客户端</h2>
+<p><code>[secure] listen_port</code> 开一个只讲加密协议的第二个客户端端口，明文的 <code>port</code> 保持原样。客户端用 <code>kevys://</code> URL 连接，URL 里写明服务端的公钥：</p>
+<figure class="code"><pre><code class="lang-toml">[secure]
+private_key_file = "/etc/kevy/node.key"
+listen_port      = 6404
+client_keys      = []   # 允许的客户端公钥；留空表示都允许，链路照样加密</code></pre></figure>
+<figure class="code"><pre><code class="lang-text">kevys://10.0.0.11:6404?server_key=d5c015b88401b6b33f5cb292b01ff3034e5f1de008b2e3f77faed23c31f16a4c
+kevys://10.0.0.11:6404/0?server_key=&lt;hex&gt;&amp;client_key_file=/etc/app/kevy.key</code></pre></figure>
+<ul><li>不带 <code>client_key_file</code> 的客户端，每条连接各自生成一对新密钥。<code>client_keys</code> 为空时这就够了；不为空时，用 <code>kevy keygen</code> 为客户端生成密钥，并把公钥列进去。</li><li>接受 <code>kevys://</code> 的是 Rust 客户端：<code>kevy-resp-client</code>（<code>RespClient::connect_url</code>，或者把 <code>SecureStream</code> 放在任何 RESP 代码下面）、<code>kevy-client</code>（<code>Connection</code> 和 <code>Subscriber</code>）、<code>kevy-client-async</code>（<code>AsyncConnection::connect_secure_url</code>、<code>AsyncSubscriber::connect_secure_url</code>）。<code>kevy-cli -u</code> 也接受。其他语言的绑定不支持，请用 TLS 代理。</li><li><code>CLIENT LIST</code>、<code>CLIENT INFO</code> 和 <code>CLIENT KILL ADDR</code> 显示的是客户端自己的地址，不是服务端的。</li><li>这个端口需要 <code>private_key_file</code>，并且不能和 <code>port</code> 相同；两种配置错误都会让服务端在启动时停下。</li></ul>
+<h2 id="集群模式">集群模式</h2>
+<p>集群模式下，每个 shard 的集群端口都有一个加密的孪生端口，转发到对应的明文集群端口，所以加密客户端和明文客户端一样按 slot 路由：</p>
+<figure class="code"><pre><code class="lang-toml">[cluster]
+enabled = true              # shard i 在 port_base + i（默认 port + 1）
+
+[secure]
+private_key_file  = "/etc/kevy/node.key"
+listen_port       = 6404
+cluster_port_base = 6405    # shard i 的加密端口是 6405 + i；0 = listen_port + 1</code></pre></figure>
+<p>经加密端口进来的客户端，看到的是加密端口：<code>-MOVED</code> 和 <code>CLUSTER SLOTS</code> / <code>NODES</code> / <code>SHARDS</code> 给出的都是孪生端口；明文客户端看到的仍是明文端口。放在代理或 NAT 后面时，用 <code>announce_cluster_port_base</code> 设置对外通告的起始端口。加密端口区间之间、以及它们和客户端端口、明文集群端口之间都不能重叠，重叠时服务端拒绝启动。</p>
+<p><code>kevy_client::ClusterClient::connect_url</code>、<code>kevy_client_async::cluster::AsyncClusterClient::connect_secure_url</code>、<code>kevy-cli -c</code> 和 <code>kevy-cli --cluster</code> 工具，接受一个指向某个加密集群端口的 <code>kevys://</code> URL，并用同一组密钥连接所有 shard：</p>
+<figure class="code"><pre><code class="lang-text">kevy-cli -c -u "kevys://10.0.0.11:6405?server_key=&lt;hex&gt;" SET user:1 alice
+kevy-cli -u "kevys://10.0.0.11:6405?server_key=&lt;hex&gt;" --cluster info 10.0.0.11:6405</code></pre></figure>
+<p><code>kevy_cluster_rw::ReadWriteClient::connect_urls</code> 每个节点一个 URL，各带该节点的公钥。加密时，遇到指向没有公钥的节点的 <code>-MISDIRECTED</code>，它会拒绝，而不是改用明文去连。</p>
+<h2 id="代价">代价</h2>
+<p>加解密在 reactor 旁边的独立线程上完成：每条连接的字节在那里解密，经本机回环交给明文端口，回复在返回途中加密。开不开这个端口，明文路径都是同一套代码；加密连接除了加解密本身，还要多付一次本机往返。</p>
+<p>在一台 Linux 主机上实测，客户端和服务端走本机回环，4 个 shard：</p>
+<div class="tbl"><table><thead><tr><th></th><th style="text-align:right">明文端口</th><th style="text-align:right">加密端口</th></tr></thead><tbody><tr><td>单个请求的往返</td><td style="text-align:right">10 µs</td><td style="text-align:right">25 µs</td></tr><tr><td>单连接 256 KB <code>GET</code></td><td style="text-align:right">3.0 GB/s</td><td style="text-align:right">0.32 GB/s</td></tr><tr><td>新建连接加一次 <code>PING</code></td><td style="text-align:right">38 µs</td><td style="text-align:right">0.58 ms</td></tr></tbody></table></div>
+<p>往返多出的时间大部分是那一跳；小消息的加密和解密合计约半微秒。大值受限于加密算法，它是一份可移植的实现；握手的耗时主要在 X25519。连接池会一直保持连接，握手只付一次。</p>
+<h2 id="加密节点和明文节点混用">加密节点和明文节点混用</h2>
+<p>加密节点不和明文节点通信：明文 replica 连加密主节点得不到任何回复；公钥不在其他节点 <code>peer_keys</code> 里的节点，在选举里没人听得到。要把一个集群切到加密，用新配置把每个节点都重启一遍。</p>
+<h2 id="哪些实测过">哪些实测过</h2>
+<p>三个节点、每个节点一个 shard，选举和复制都加密：</p>
+<ul><li>主节点上的写入到达了两个 replica；节点之间的网络抓包里，写了 200 次的标记值在复制端口和选举端口上一次都没出现；同样的步骤在 <code>secure = false</code> 下出现了 400 次；</li><li>杀掉主节点后选出了新主，另一个节点跟随它，并收到了切换之后的写入；</li><li>每节点 4 个 shard、使用 io_uring reactor 时，受 <code>replica_keys</code> 限制的 replica 收到了全部 400 个 key，复制端口的抓包里一个值都没有；同样配置的明文运行里 400 个全部可见；</li><li>期待另一个主节点公钥的 replica、不在 <code>replica_keys</code> 里的 replica、明文 replica，以及持有未配置公钥的选举对端，都被拒绝了。</li></ul>
+<h2 id="参见">参见</h2>
+<ul><li><a href="../deploy-behind-a-proxy/">deploy-behind-a-proxy.md</a>：用不了 <code>kevys://</code> 的客户端怎么上 TLS</li><li><a href="../replication/">replication.md</a>：复制本身</li><li><a href="../availability/">availability.md</a>：选举与故障切换</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>以 MIT OR Apache-2.0 双许可发布</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

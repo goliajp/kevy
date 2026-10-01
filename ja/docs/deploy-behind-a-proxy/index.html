@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>kevy をプロキシの後ろに置いて運用する · kevy</title>
+    <meta name="description" content="kevy に AUTH はなく、TLS もありません。認証も暗号化も、プロセスの前で行います。 この章はその手順で、書き換えずにそのまま写して使えるように書いています。（Rust クライアントは代わりに、kevys:// で kevy 自身の暗号化クライアントポートを使えます。[encrypted-links.md](encrypted-links.md) ">
+    <link rel="canonical" href="https://kevy.golia.jp/ja/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/deploy-behind-a-proxy/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/deploy-behind-a-proxy/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../../kevy-logo.svg"/><link rel="preload" as="image" href="../../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../../ja/"><img src="../../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../../ja/">ホーム</a><a href="../../../ja/docs/" class="on" aria-current="page">ドキュメント</a><a href="../../../ja/docs/commands/" class="hide-sm">コマンド</a><div class="langswitch" role="group" aria-label="language"><a href="../../../docs/deploy-behind-a-proxy/" hreflang="en">EN</a><a href="../../../zh/docs/deploy-behind-a-proxy/" hreflang="zh-CN">中文</a><a class="on" href="../../../ja/docs/deploy-behind-a-proxy/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">はじめに</div><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a><a href="../../../ja/docs/persistence/">永続化</a><a href="../../../ja/docs/tuning/">kevyのチューニング</a></div><div><div class="group">運用</div><a href="../../../ja/docs/upgrading-6.4-to-7.0/">6.4 から 7.0 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.3-to-6.4/">6.3 から 6.4 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2-to-6.3/">6.2 から 6.3 へのアップグレード</a><a href="../../../ja/docs/upgrading-6.2.0-to-6.2.1/">6.2.0 から 6.2.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.1-to-5.2/">5.1 から 5.2 へのアップグレード</a><a href="../../../ja/docs/upgrading-5.0-to-5.1/">5.0 から 5.1 へのアップグレード</a><a href="../../../ja/docs/upgrading-4-to-5/">4.x から 5.0 へのアップグレード</a><a href="../../../ja/docs/UPGRADING/">以前のメジャーバージョンのアップグレード</a><a href="../../../ja/docs/replication/">レプリケーション</a><a href="../../../ja/docs/availability/">可用性</a><a href="../../../ja/docs/cluster/">クラスタ</a><a href="../../../ja/docs/tiering/">透過的ティアリング（[tiering] / with_tier_budget*）</a><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a><a href="../../../ja/docs/alloc/">kevy-alloc——サーバーのアロケータ</a><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a><a href="../../../ja/docs/async/">非同期クライアント</a></div><div><div class="group">データ</div><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX.* / idx_*）</a><a href="../../../ja/docs/tables/">テーブル（TABLE.* / table_*）</a><a href="../../../ja/docs/relational-cli/">kevy-cli のリレーショナルコマンド</a><a href="../../../ja/docs/table-migration/">手書きインデックスからテーブルへ移行する</a><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a><a href="../../../ja/docs/views/">ビュー（VIEW.* / view_*）</a><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED.* / changes_since）</a><a href="../../../ja/docs/pubsub/">Pub/sub</a><a href="../../../ja/docs/lua/">Luaスクリプティング</a><a href="../../../ja/docs/packed-rows/">packed-rows — 宣言済みの行を 1 回の確保に収める</a></div><div><div class="group">組み込み</div><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a><a href="../../../ja/docs/electron/">Electron で kevy を使う</a><a href="../../../ja/docs/tauri/">Tauri アプリで kevy を使う</a><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></div><div><div class="group">クライアント</div><a href="../../../ja/docs/bindings/">各言語から kevy を使う</a></div><div><div class="group">リファレンス</div><a href="../../../ja/docs/boundaries/">kevy がやらないこと</a><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a><a class="on" href="../../../ja/docs/deploy-behind-a-proxy/" aria-current="page">kevy をプロキシの後ろに置いて運用する</a><a href="../../../ja/docs/encrypted-links/">暗号化リンク</a><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></div></nav><main class="docmain"><details class="toc"><summary>このページ</summary><ul><li class="l2"><a href="#kevy-が開くもの">kevy が開くもの</a></li><li class="l2"><a href="#形">形</a></li><li class="l2"><a href="#resp-は-http-ではない">RESP は HTTP ではない</a></li><li class="l3"><a href="#stunnel--ループバックのポート">stunnel → ループバックのポート</a></li><li class="l3"><a href="#haproxy--unix-ソケット">HAProxy → unix ソケット</a></li><li class="l3"><a href="#nginx-stream--unix-ソケット">nginx stream → unix ソケット</a></li><li class="l2"><a href="#クライアント証明書">クライアント証明書</a></li><li class="l2"><a href="#クライアント側">クライアント側</a></li><li class="l2"><a href="#必要なものだけを晒す">必要なものだけを晒す</a></li><li class="l2"><a href="#プロキシの後ろでクラスタモードを使う">プロキシの後ろでクラスタモードを使う</a></li><li class="l2"><a href="#ホスト間のレプリケーションと選挙">ホスト間のレプリケーションと選挙</a></li><li class="l2"><a href="#実測したことしていないこと">実測したこと、していないこと</a></li><li class="l2"><a href="#参照">参照</a></li></ul></details><div><h1 id="kevy-をプロキシの後ろに置いて運用する">kevy をプロキシの後ろに置いて運用する</h1>
+<p>kevy に AUTH はなく、TLS もありません。<b>認証も暗号化も、プロセスの前で行います。</b> この章はその手順で、書き換えずにそのまま写して使えるように書いています。（Rust クライアントは代わりに、<code>kevys://</code> で kevy 自身の暗号化クライアントポートを使えます。<a href="../encrypted-links/">encrypted-links.md</a> を参照。）</p>
+<h2 id="kevy-が開くもの">kevy が開くもの</h2>
+<div class="tbl"><table><thead><tr><th></th><th>ポート</th><th>備考</th></tr></thead><tbody><tr><td>既定</td><td><b>ひとつ</b>（<code>6004</code>）</td><td><code>--threads N</code> は<b>同じ</b>ポートに <code>SO_REUSEPORT</code> のリスナを N 個開くのであって、N 個のポートではありません</td></tr><tr><td><code>--cluster</code></td><td><b>1 + N</b></td><td>メインポートに加えて、シャードごとに <code>port+1+i</code></td></tr><tr><td><code>KEVY_UNIX_SOCKET=&lt;path&gt;</code></td><td>変わらない</td><td>unix ソケットは<b>追加</b>されるだけで、TCP のリスナはそのまま</td></tr></tbody></table></div>
+<p>既定のバインドは <code>127.0.0.1</code> です。これがすでにこの章の求める形です。エンジンはこのホストからしか届かない場所で待ち受け、公開アドレスを持つのは前段の終端器だけになります。</p>
+<h2 id="形">形</h2>
+<figure class="code"><pre><code>   client ──TLS──▶  terminator  ──plain──▶  kevy
+  (rediss://)     (stunnel / HAProxy /     127.0.0.1:6004
+   + クライアント証明書  nginx stream)       または /run/kevy/kevy.sock</code></pre></figure>
+<p>kevy 側は何も変わりません。RESP にはホスト名も SNI も絶対 URL も載らないので、前段のバイトプロキシはどちら側からも見えません。</p>
+<h2 id="resp-は-http-ではない">RESP は HTTP ではない</h2>
+<p>HTTP のリバースプロキシは RESP を運べません。<b>素の Caddy</b> も同じです。コアに L4 モジュールがないので、Caddyfile をどう書いても <code>caddy</code> 単体では kevy の前に TLS を置けません。TCP レベルの終端器が必要です。</p>
+<ul><li><b>stunnel</b>：いちばん小さく、どのディストリビューションにもパッケージがあり、この仕事だけをします。</li><li><b>HAProxy</b> の <code>mode tcp</code>：すでに HAProxy を運用しているか、ヘルスチェックやフェイルオーバーを同じ場所で扱いたいときに。</li><li><b>nginx</b> の <code>stream</code> モジュール：同様に、すでに nginx があるときに。</li></ul>
+<p>以下の設定はどれも、暗号化に加えて<b>あなたの CA が発行したクライアント証明書を要求します</b>。クライアント証明書の行を外すと、プロキシは接続してきた誰に対しても暗号化するだけになります。kevy には AUTH がないので、それは誰でもすべてのキーを読み書きできるということです。</p>
+<h3 id="stunnel--ループバックのポート">stunnel → ループバックのポート</h3>
+<figure class="code"><pre><code class="lang-ini">[kevy]
+accept      = 0.0.0.0:6379
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes</code></pre></figure>
+<h3 id="haproxy--unix-ソケット">HAProxy → unix ソケット</h3>
+<p>ソケットファイルはファイルシステムの権限で囲えます。kevy はソケットを誰でも書き込める状態で作るので、終端器のグループだけが入れるディレクトリ、たとえばモード <code>0750</code> の <code>/run/kevy</code> に置いてください（<a href="../uds/">uds.md</a> を参照）。ただし、これで終端器が唯一の入口になるわけではありません。後述のループバックの TCP リスナは開いたままなので、共有ホストではどのローカルユーザーも <code>127.0.0.1:6004</code> に届きます。</p>
+<figure class="code"><pre><code>listen kevy
+    bind :6379 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    timeout client 0
+    timeout server 0
+    server kevy unix@/run/kevy/kevy.sock</code></pre></figure>
+<p><code>server.pem</code> は証明書の後ろに秘密鍵をつなげた 1 つのファイルです。</p>
+<p>ソケット付きで kevy を起動します。</p>
+<figure class="code"><pre><code class="lang-console">KEVY_UNIX_SOCKET=/run/kevy/kevy.sock kevy --dir /var/lib/kevy</code></pre></figure>
+<p>このパスについて 2 点あります。パスがすでに存在すると <b>kevy は起動を拒否します</b>。自分で作っていないパスは上書きしないので、再起動時に片付けるか、起動ごとに別のパスを使ってください。また、<code>127.0.0.1</code> の TCP リスナはそのまま残ります。ソケットは置き換えではなく追加です。</p>
+<h3 id="nginx-stream--unix-ソケット">nginx stream → unix ソケット</h3>
+<figure class="code"><pre><code class="lang-nginx">stream {
+    upstream kevy { server unix:/run/kevy/kevy.sock; }
+    server {
+        listen 6379 ssl;
+        ssl_certificate        /etc/kevy/tls/server.crt;
+        ssl_certificate_key    /etc/kevy/tls/server.key;
+        ssl_client_certificate /etc/kevy/tls/ca.crt;
+        ssl_verify_client      on;
+        proxy_pass kevy;
+        proxy_timeout 1h;
+    }
+}</code></pre></figure>
+<p>3 つの設定のタイムアウトに注意してください。ブロック中の <code>BLPOP</code> やアイドルな Pub/Sub の購読者は、1 バイトも流れない接続を、アプリケーションが望むだけ開いたままにします。アイドル接続を刈り取るプロキシは、<b>kevy が購読者を落としているのとまったく同じに見えます</b>。nginx の <code>proxy_timeout</code> は無効にできないので、想定される最長のアイドル時間より長くしてください。</p>
+<h2 id="クライアント証明書">クライアント証明書</h2>
+<p>CA は終端器に信頼されればよいので、自前のもので足ります。OpenSSL での例です。</p>
+<figure class="code"><pre><code class="lang-console"># CA：ca.key はオフラインで保管
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=kevy-ca" \
+  -keyout ca.key -out ca.crt
+
+# 終端器の証明書。クライアントが接続に使う名前で発行する
+openssl req -newkey rsa:2048 -nodes -subj "/CN=kevy.internal" -keyout server.key -out server.csr
+printf 'subjectAltName=DNS:kevy.internal\n' &gt; san.ext
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -extfile san.ext -out server.crt
+cat server.crt server.key &gt; server.pem      # HAProxy 用の形式
+
+# アプリケーションごとに 1 枚
+openssl req -newkey rsa:2048 -nodes -subj "/CN=billing-app" -keyout billing.key -out billing.csr
+openssl x509 -req -in billing.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 \
+  -out billing.crt</code></pre></figure>
+<p>あるアプリケーションを失効させるには、新しい CA で発行し直すか、終端器に CRL を追加します。kevy 自身は証明書を一切見ません。</p>
+<h2 id="クライアント側">クライアント側</h2>
+<p>TLS を有効にした標準の Redis クライアントなら、終端器の後ろの kevy にそのまま接続できます。終端器を信頼するための CA と、入るための自分の証明書が必要です。</p>
+<figure class="code"><pre><code class="lang-console">redis-cli --tls --cacert ca.crt --cert billing.crt --key billing.key -h kevy.internal -p 6379 PING</code></pre></figure>
+<p><b><code>kevy-cli</code> はできません。</b> <code>rediss://</code> に対して <code>Unsupported</code> を返します。kevy は TLS なしで出荷され、CLI にも使える TLS 実装がないからです。使う段になって気づくのではなく、先に段取りしておくべき運用上の帰結です。ホスト上で直接操作するか、kevy 自身の暗号化クライアントポート（<code>kevy-cli -u kevys://…</code>。<a href="../encrypted-links/">encrypted-links.md</a> を参照）を使うか、SSH トンネルを使ってください。</p>
+<figure class="code"><pre><code class="lang-console">ssh -N -L 6004:127.0.0.1:6004 you@host   # そのあと：kevy-cli -p 6004</code></pre></figure>
+<h2 id="必要なものだけを晒す">必要なものだけを晒す</h2>
+<p>既定のバインドなら、<b>kevy にファイアウォール規則は一つも要りません</b>。そもそもホストの外から届かないからです。開けるポートは終端器の分だけです。どうしても kevy を実インタフェースにバインドするなら、ループバックのバインドが何もせずに果たしていた役目をファイアウォールが引き受けることになり、それがネットワークと<b>認証のないデータベース</b>の間にある唯一の防壁になります。</p>
+<h2 id="プロキシの後ろでクラスタモードを使う">プロキシの後ろでクラスタモードを使う</h2>
+<p>キーを意識するクライアントは、各スロットの場所を <code>CLUSTER SLOTS</code> から知り、<code>-MOVED</code> のリダイレクトに従います。したがって kevy は自分のアドレスではなく、<b>プロキシ</b>が待ち受けるアドレスを広告する必要があります。そのための設定が 2 つあります。</p>
+<figure class="code"><pre><code class="lang-toml">[cluster]
+enabled            = true
+announce_ip        = "203.0.113.7"   # クライアントがプロキシに到達するアドレス
+announce_port_base = 7001            # プロキシ側でシャード 0 に割り当てるポート</code></pre></figure>
+<p>そのうえでシャードごとのポートを同じ順序で一対一に対応させます。プロキシの <code>7001 + i</code> を kevy の <code>port + 1 + i</code> の前に置きます。2 シャードを HAProxy の後ろに置く例です。</p>
+<figure class="code"><pre><code>listen kevy-main
+    bind :7000 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6004
+listen kevy-shard0
+    bind :7001 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6005
+listen kevy-shard1
+    bind :7002 ssl crt /etc/kevy/tls/server.pem ca-file /etc/kevy/tls/ca.crt verify required
+    mode tcp
+    server kevy 127.0.0.1:6006</code></pre></figure>
+<p>これで <code>CLUSTER SLOTS</code>、<code>CLUSTER NODES</code>、<code>CLUSTER SHARDS</code> とすべての <code>-MOVED</code> が <code>203.0.113.7:7001</code> と <code>203.0.113.7:7002</code> を示すようになります。<code>announce_ip</code> がなければ、kevy はバインドしているアドレスを広告し、<code>0.0.0.0</code> のバインドなら <code>127.0.0.1</code> を広告します。同じホストのクライアントには正しくても、ほかの場所からは届きません。</p>
+<h2 id="ホスト間のレプリケーションと選挙">ホスト間のレプリケーションと選挙</h2>
+<p>レプリケーションと選挙のコントロールプレーンはそれぞれ専用のポートを持ちます。kevy 自身がこの両方を暗号化・認証できます（トンネル不要。<a href="../encrypted-links/">encrypted-links.md</a> を参照）。それを使わない場合、どちらも暗号化も認証もされません。ホストをまたぐ場合は、各ノードをループバックでだけ待ち受けさせ、ピアごとにローカルのトンネル入口を用意します。各ノードに必要なものは次のとおりです。</p>
+<ul><li>受信側：このノードが提供するローカルポートごとに 1 つの TLS サービス。クライアントポート（<code>FAILOVER</code> の問い合わせ用）、選挙ポート、そして<b>シャードごとに 1 つ</b>のレプリケーションポート。</li><li>送信側：各ピアのそれらのポートごとに 1 つのクライアントモードのサービス。ローカルポートは自由に選べます。</li><li><code>peers</code> リストでは各ピアを<b>ローカル</b>のトンネルポートで書き、レプリケーションポートは 4 つ目のフィールドに入れます。こうすると、新しく選ばれたプライマリに追従するノードは、ピアに直接ではなくトンネルに接続します。</li></ul>
+<p>3 ノードのうち <code>n2</code> の例です。各ノード 1 シャードで、ピア <code>n1</code> と <code>n3</code> をそれぞれローカルポート <code>8010-8012</code> と <code>8030-8032</code> に割り当てます。</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+bind = "127.0.0.1"
+port = 6004
+
+[replication]
+role     = "replica"
+upstream = "127.0.0.1:8012"          # n1's replication port, through the tunnel
+
+[cluster]
+enabled         = true
+node_id         = "n2"
+elect_port_base = 6204
+peers = "n1@127.0.0.1:8011:8010:8012,n2@127.0.0.1:6204:6004:16004,n3@127.0.0.1:8031:8030:8032"</code></pre></figure>
+<figure class="code"><pre><code class="lang-ini">foreground = yes
+
+; inbound: what peers reach on this host
+[in-client]
+accept      = 0.0.0.0:7004
+connect     = 127.0.0.1:6004
+cert        = /etc/kevy/tls/server.crt
+key         = /etc/kevy/tls/server.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+requireCert = yes
+; [in-elect] 7204 -&gt; 6204 and [in-repl] 17004 -&gt; 16004, same options
+
+; outbound: n1's three ports as local ports on this host
+[to-n1-client]
+client      = yes
+accept      = 127.0.0.1:8010
+connect     = n1.internal:7004
+cert        = /etc/kevy/tls/n2.crt
+key         = /etc/kevy/tls/n2.key
+CAfile      = /etc/kevy/tls/ca.crt
+verifyChain = yes
+checkHost   = n1.internal
+; [to-n1-elect] 8011 -&gt; n1.internal:7204, [to-n1-repl] 8012 -&gt; n1.internal:17004,
+; and the same three for n3 on 8030-8032</code></pre></figure>
+<p>TLS のオプションは上のように各サービスに書いてください。stunnel 5.76 は、これらをグローバルセクションに置き、同じファイルにクライアントモードのサービスもあると、起動時にクラッシュしました。</p>
+<p>実測したこと：3 ノード、各ノード 1 シャードで、すべてのリンクを stunnel とクライアント証明書経由にした構成。プライマリへの書き込みは両方のレプリカに届き、ホスト間のネットワークのキャプチャには 200 回書いたマーカー値が一度も現れませんでした。同じ時間にプライマリのループバックで取ったキャプチャには 600 回現れています。プライマリを停止すると、<code>n2</code> が 6 秒で選ばれ、<code>n3</code> はローカルのトンネル経由で追従し、フェイルオーバー後の書き込みも受け取りました。実測していないこと：ノードあたり 2 シャード以上の構成。</p>
+<h2 id="実測したことしていないこと">実測したこと、していないこと</h2>
+<p>このツリーで、HAProxy 3.4.5、nginx 1.30.5、stunnel 5.76 を kevy の前に置き、クライアントに redis-cli 8.0.2、証明書の発行に OpenSSL 3.5.7 を使って実測しました。</p>
+<ul><li>上の表のポート構成。<code>--cluster</code> がシャードごとに <code>port+1+i</code> を開くことも含む。</li><li>上の 3 つのクライアント証明書の設定。いずれも kevy の TCP ポートへ転送する形で確認した。CA が発行した証明書を持つクライアントは読み書きでき、証明書のないクライアントと別の CA の証明書を持つクライアントはコマンドを送る前に切断され、書こうとしたキーは後から見つからない。</li><li>HAProxy と nginx の設定で kevy の unix ソケットへ転送する形。受け入れと拒否の結果は上と同じ。kevy が作ったソケットは <code>srwxrwxrwx</code> だったので、ディレクトリで囲う必要がある。</li><li>上のタイムアウト設定で、3 つの終端器それぞれを通して <code>BLPOP</code> を 10 分間アイドルのまま保ち、その後 push で解放した。3 つとも push した要素を受け取った。</li><li><code>announce_ip</code> と <code>announce_port_base</code> を設定し、HAProxy の後ろに置いたクラスタモード。<code>-MOVED</code> はプロキシ側のシャードポートを示し、<code>redis-cli -c</code> で 1 つのシャードポートから書いたキーは、メインポートからすべて読み戻せる。</li><li>素の Caddy（2.11.4）には L4 モジュールがない。</li><li><code>kevy-cli</code> が <code>rediss://</code> を拒否する。</li></ul>
+<p>試していないこと：CRL によるクライアントの失効と、期限切れのクライアント証明書。</p>
+<h2 id="参照">参照</h2>
+<ul><li><a href="../uds/">uds.md</a>：unix ソケットの詳細</li><li><a href="../cluster/">cluster.md</a>：単一ノードのクラスタモードが何のためにあるか</li><li><a href="../tuning/">tuning.md</a>：<code>--threads</code>、そしてスレッドを減らしたほうが速くなりうる理由</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>MIT OR Apache-2.0 のデュアルライセンスで公開</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>

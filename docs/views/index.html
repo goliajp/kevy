@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Views (VIEW.* / view_*) · kevy</title>
+    <meta name="description" content="A view is a named composition of declared indexes — an AND/OR/DIFF tree of index shapes with an ordering index — queryable as one unit, either evaluated per query (virtual) or main">
+    <link rel="canonical" href="https://kevy.golia.jp/docs/views/">
+    <link rel="alternate" hreflang="en" href="https://kevy.golia.jp/docs/views/">
+    <link rel="alternate" hreflang="zh-CN" href="https://kevy.golia.jp/zh/docs/views/">
+    <link rel="alternate" hreflang="ja" href="https://kevy.golia.jp/ja/docs/views/">
+    <link rel="alternate" hreflang="x-default" href="https://kevy.golia.jp/docs/views/">
+    <meta name="generator" content="kevy 7.0.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#fcfbf8">
+    <link rel="icon" href="../../kevy-logo.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/index-BNwYRJhW.css">
+  </head>
+  <body>
+<link rel="preload" as="image" href="../../kevy-logo.svg"/><link rel="preload" as="image" href="../../golia-wordmark.png"/><header class="masthead"><div class="masthead-inner"><a class="brand" href="../../"><img src="../../kevy-logo.svg" alt="" width="26" height="26"/><span class="wordmark">kevy</span></a><nav class="topnav"><a href="../../">Home</a><a href="../../docs/" class="on" aria-current="page">Docs</a><a href="../../docs/commands/" class="hide-sm">Commands</a><div class="langswitch" role="group" aria-label="language"><a class="on" href="../../docs/views/" hreflang="en">EN</a><a href="../../zh/docs/views/" hreflang="zh-CN">中文</a><a href="../../ja/docs/views/" hreflang="ja">日本語</a></div></nav></div></header><div class="docshell"><nav class="docnav" aria-label="documentation"><div><div class="group">Getting started</div><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a><a href="../../docs/persistence/">Persistence</a><a href="../../docs/tuning/">Tuning kevy</a></div><div><div class="group">Running it</div><a href="../../docs/upgrading-6.4-to-7.0/">Upgrading from 6.4 to 7.0</a><a href="../../docs/rust-api-7.0/">Rust API changes in 7.0</a><a href="../../docs/upgrading-6.3-to-6.4/">Upgrading from 6.3 to 6.4</a><a href="../../docs/upgrading-6.2-to-6.3/">Upgrading from 6.2 to 6.3</a><a href="../../docs/upgrading-6.2.0-to-6.2.1/">Upgrading from 6.2.0 to 6.2.1</a><a href="../../docs/upgrading-5.1-to-5.2/">Upgrading from 5.1 to 5.2</a><a href="../../docs/upgrading-5.0-to-5.1/">Upgrading from 5.0 to 5.1</a><a href="../../docs/upgrading-4-to-5/">Upgrading from 4.x to 5.0</a><a href="../../docs/UPGRADING/">Upgrading across the older majors</a><a href="../../docs/replication/">Replication</a><a href="../../docs/availability/">Availability</a><a href="../../docs/cluster/">Cluster</a><a href="../../docs/tiering/">Transparent tiering ([tiering] / with_tier_budget*)</a><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a><a href="../../docs/alloc/">kevy-alloc — the server&#x27;s allocator</a><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a><a href="../../docs/async/">Async client</a></div><div><div class="group">Working with data</div><a href="../../docs/indexes/">Secondary indexes (IDX.* / idx_*)</a><a href="../../docs/tables/">Tables (TABLE.* / table_*)</a><a href="../../docs/relational-cli/">Relational commands in kevy-cli</a><a href="../../docs/table-migration/">Migrating hand-maintained indexes to tables</a><a href="../../docs/vector-search/">Vector search (KIND ann)</a><a href="../../docs/text-search/">Full-text search (KIND text)</a><a class="on" href="../../docs/views/" aria-current="page">Views (VIEW.* / view_*)</a><a href="../../docs/cdc/">CDC — the change feed (FEED.* / changes_since)</a><a href="../../docs/pubsub/">Pub/sub</a><a href="../../docs/lua/">Lua scripting</a><a href="../../docs/packed-rows/">packed-rows — store a declared row as one allocation</a></div><div><div class="group">Embedding it</div><a href="../../docs/wasm/">kevy on WebAssembly</a><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a><a href="../../docs/electron/">kevy in Electron</a><a href="../../docs/tauri/">kevy in a Tauri app</a><a href="../../docs/iot/">kevy on IoT devices</a></div><div><div class="group">Clients</div><a href="../../docs/clients/">Bring your redis client</a><a href="../../docs/bindings/">Use kevy from your language</a><a href="../../docs/client-contract/">kevy Client Contract (language-agnostic)</a></div><div><div class="group">Reference</div><a href="../../docs/boundaries/">What kevy will not do</a><a href="../../docs/error-replies/">Error reply catalog</a><a href="../../docs/rds-workloads/">RDS workloads on kevy</a><a href="../../docs/deploy-behind-a-proxy/">Deploying kevy behind a proxy</a><a href="../../docs/encrypted-links/">Encrypted links</a><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></div></nav><main class="docmain"><details class="toc"><summary>On this page</summary><ul><li class="l2"><a href="#first-check-whether-you-need-one">First: check whether you need one</a></li><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#the-three-structural-rules">The three structural rules</a></li><li class="l2"><a href="#modes-and-cost-model">Modes and cost model</a></li><li class="l3"><a href="#diff-the-declared-anti-join">DIFF: the declared anti-join</a></li><li class="l2"><a href="#consistency">Consistency</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></details><div><h1 id="views-view--view">Views (<code>VIEW.*</code> / <code>view_*</code>)</h1>
+<p>A view is a <b>named composition of declared indexes</b> — an AND/OR/DIFF tree of index shapes with an ordering index — queryable as one unit, either evaluated per query (<b>virtual</b>) or maintained incrementally on every write (<b>materialized</b>, optionally top-K bounded). Views are the engine's answer to the "hot list" query — <code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC LIMIT 10</code> — as a declared access path instead of a query-time scan.</p>
+<figure class="code"><pre><code>IDX.CREATE j_pri  ON PREFIX job: FIELD pri  TYPE i64 KIND range
+IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+
+VIEW.CREATE ready_jobs
+    QUERY ( AND j_pri RANGE 0 100 j_state EQ ready )
+    ORDER BY j_pri DESC
+    MODE materialized TOPK 100
+VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="first-check-whether-you-need-one">First: check whether you need one</h2>
+<p>The example above is deliberate, and it is also the shape you most often <b>do not</b> need a view for. <code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC</code> is an equality prefix followed by one range on the next column — precisely what a composite <code>ORDERPATH</code> represents as a single contiguous walk (<a href="../tables/#composite-orderpath-semantics">tables.md</a>):</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli TABLE.DECLARE job PREFIX job: PK id \
+    COLUMN id str COLUMN state str COLUMN pri i64 \
+    ORDERPATH ready_by_pri ON state THEN pri DESC
+kevy-cli IDX.QUERY job.ready_by_pri WHERE state EQ ready RANGE pri 0 100 LIMIT 10</code></pre></figure>
+<p>One B-tree, no second structure to maintain, no rebuild to verify. The first real consumer to declare a table covered all fourteen of its list axes this way and declared <b>zero</b> views — that is the expected outcome, not a gap.</p>
+<p>Reach for a view when the shape is one an ordered composite key cannot be:</p>
+<ul><li><b><code>OR</code></b> across independent indexes — a single ordered key has one leading column, so a union is not a walk.</li><li><b><code>DIFF</code></b> — set subtraction, left minus right.</li><li><b>two ranges</b>, on different columns. A composite can range on one column, at the tail, and nothing may follow it; two open dimensions are not one contiguous interval.</li><li>a <b>bounded, always-warm answer</b>: <code>MODE materialized TOPK n</code> keeps the top slice maintained on the write path, so the read is a fixed cost no matter how selective the predicate turns out to be.</li></ul>
+<p>If your shape is not on that list, declare the <code>ORDERPATH</code> and stop. A view is the more expensive of the two by construction — it composes indexes that must exist anyway, and materializing one adds write-path work and a structure <code>VIEW.VERIFY</code> then has to audit.</p>
+<h2 id="quick-start-server">Quick start (server)</h2>
+<p>Everything a view composes must exist first — leaves and the ORDER BY index are declared <code>IDX.*</code> indexes over the same prefix domain (<a href="../indexes/">indexes.md</a>):</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
+kevy-cli -p 6004 IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+kevy-cli -p 6004 VIEW.CREATE ready_jobs QUERY ( AND j_pri RANGE 0 100 j_state EQ ready ) ORDER BY j_pri DESC MODE materialized TOPK 100
+kevy-cli -p 6004 HSET job:1 pri 10 state ready
+kevy-cli -p 6004 HSET job:2 pri 99 state blocked
+kevy-cli -p 6004 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<p>The reply pages <code>key, order-value</code> pairs in view order with a resume <code>CURSOR</code>. The tree grammar (one line, parenthesized):</p>
+<figure class="code"><pre><code>tree     = '(' AND|OR|DIFF sub sub ')' | leaf
+leaf     = &lt;index&gt; RANGE &lt;min&gt; &lt;max&gt; | &lt;index&gt; EQ &lt;value&gt;</code></pre></figure>
+<p>Supporting verbs: <code>VIEW.LIST</code> (catalog + mode + shape), <code>VIEW.EXPLAIN name</code> (the tree with per-leaf cardinalities), <code>VIEW.VERIFY name</code> (members / bytes / order-exclusions — <b>bytes and order-exclusions are materialized-only</b>; a virtual view stores nothing and reports both as 0, and verifying one costs a full fresh <code>eval_tree</code>, which is the one place a virtual view is the expensive one), <code>VIEW.REBUILD name</code> (force a materialized rebuild — answer- preserving), <code>VIEW.DROP name</code>.</p>
+<h2 id="the-three-structural-rules">The three structural rules</h2>
+<ol><li><b>Components are named indexes.</b> Leaves carry a shape (<code>RANGE min max</code> | <code>EQ v</code>, coerced to the referenced index's type at CREATE); the view layer holds no predicates of its own. Trees are depth ≤ 3, ≤ 4 leaves; <code>AND</code>/<code>OR</code> may be re-ordered by the engine, <code>DIFF</code> is fixed left-minus-right.</li><li><b>A view stores membership + order only</b> — never field values. <code>ORDER BY &lt;index&gt;</code> supplies the sort key; rows absent from the order index are excluded (counted, visible in <code>VIEW.VERIFY</code>).</li><li><b>Hydration is dereference, not query.</b> <code>VIA &lt;template&gt;</code> (e.g. <code>user:{key.1}</code>; <code>{key}</code> = member key, <code>{key.N}</code> = its N-th <code>:</code>-segment) maps each member to a target key; <code>VIEW.QUERY … FIELDS f…</code> reads those fields on the targets' owning shards in a second internal fan-out. Missing target = nil row fields. Targets take no predicates.</li></ol>
+<h2 id="modes-and-cost-model">Modes and cost model</h2>
+<ul><li><b>Virtual</b> — evaluated at query time by streaming the ORDER index in order and probing tree membership per candidate: a LIMIT-100 page costs O(limit / selectivity) probes, not O(members). Always fresh; zero write cost. The failure mode is a highly selective tree under a large ORDER domain (many candidates probed per emitted row) — that shape wants materialization.</li><li><b>Materialized</b> — an ordered member set per shard, updated in the same write hook that maintains indexes (one probe per referenced index per write, shared across all views). <code>TOPK k</code> bounds it to <code>k + k/4</code>, evicting from the view's worst end; a non-member worse than the current worst is rejected with a single comparison — the steady-state write tax measured by <a href="https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh"><code>bench/viewgate.sh</code></a> is ~2% for 3 indexes + 4 top-K views (the gate clamps it &lt; 15%). Shrinking below <code>k</code> schedules a local per-shard rebuild (next tick). Unbounded materialized views pay O(log members) per affected write.</li><li>Right after <code>VIEW.CREATE</code>, expect a brief settling window (the first write burst over a fresh top-K set runs slower while the eviction threshold stabilizes).</li></ul>
+<p>Choosing: a dashboard top-100 over a high-write domain wants <code>MODE materialized TOPK 100</code> (bounded memory, O(1) rejection of non-contenders); an occasionally-paged report over a moderate domain wants <code>MODE virtual</code> (zero write tax, always fresh). <code>VIEW.EXPLAIN</code> shows per-leaf cardinalities — the selectivity data for the call.</p>
+<h3 id="diff-the-declared-anti-join">DIFF: the declared anti-join</h3>
+<p><code>DIFF</code> is left-minus-right and NOT commutative — the one tree node whose children the engine never re-orders. The canonical use is "eligible but not excluded":</p>
+<figure class="code"><pre><code>VIEW.CREATE assignable
+    QUERY ( DIFF j_pri RANGE 0 100 j_state EQ quarantined )
+    ORDER BY j_pri DESC
+    MODE virtual</code></pre></figure>
+<p>— every job in the working priority band, minus the quarantined ones.</p>
+<p>In SQL terms this is the <code>WHERE … AND NOT EXISTS (…)</code> shape — as a declared access path instead of a per-query subquery (<a href="../rds-workloads/">rds-workloads.md</a> maps the rest of that vocabulary).</p>
+<h2 id="consistency">Consistency</h2>
+<p>Same envelope as indexes (<a href="../indexes/">indexes.md</a>): per-shard atomic with the triggering write, cross-shard merged without a global snapshot (SCAN-class).</p>
+<ul><li>Queries answer <code>-INDEXBUILDING</code> while any referenced index is still backfilling (a partial index would silently misreport membership) — same retry discipline as index queries.</li><li><code>VIEW.REBUILD</code> is answer-preserving (asserted in the e2e suite); <code>VIEW.VERIFY</code> makes drift falsifiable (members / bytes / order-exclusions).</li><li>The view catalog is recorded in the log and every snapshot, and replicates; materialized CONTENT is derived state — rebuilt after restart, never snapshotted.</li></ul>
+<h2 id="embedded">Embedded</h2>
+<p>Typed API behind the <code>index</code> cargo feature (on by default) — the tree is passed as a value, no text grammar in-process, and every call returns <code>KevyResult</code> (4.0's single error currency):</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
+};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+    store.idx_create(b"j_pri", b"job:", b"pri", IndexValType::I64,
+                     IndexKind::Range)?;
+    store.idx_create(b"j_state", b"job:", b"state", IndexValType::Str,
+                     IndexKind::Range)?;
+
+    let tree = ViewTree::And(
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_pri",
+            IndexValue::I64(0),
+            IndexValue::I64(100),
+        ))),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_state",
+            IndexValue::Str(b"ready".to_vec()),
+            IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        ))),
+    );
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
+                      ViewMode::Materialized { top_k: 100 })?;
+
+    store.hset(b"job:1", &amp;[
+        (b"pri".as_slice(), b"10".as_slice()),
+        (b"state".as_slice(), b"ready".as_slice()),
+    ])?;
+
+    // One page: (Vec&lt;(key, order_value)&gt;, Option&lt;resume_cursor&gt;).
+    let (rows, _next) = store.view_query(b"ready_jobs", None, 10)?;
+    for (key, val) in &amp;rows {
+        println!("{} {val:?}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<ul><li><code>view_create(name, tree, order_by, order, mode)</code> builds synchronously; every referenced index (leaves + ORDER BY) must already be declared (<code>KevyError::InvalidInput</code> otherwise).</li><li><code>view_query(name, after, limit)</code> pages <code>(key, order_value)</code> rows; the returned cursor resumes exclusively (DESC views page from the large end). <code>view_count</code> / <code>view_list</code> / <code>view_drop</code> complete the face.</li><li>No <code>VIA</code>/<code>FIELDS</code> — in-process callers dereference and read fields directly with <code>hget</code>.</li></ul>
+<h2 id="performance">Performance</h2>
+<p>Measured envelope — the clamps live in <a href="https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh"><code>bench/viewgate.sh</code></a>, run against a real server at 1M rows:</p>
+<ul><li>Virtual <code>VIEW.QUERY</code> p99 &lt; 3ms (two-component tree).</li><li>Materialized <code>VIEW.QUERY</code> p99 &lt; 2ms (the index-read line — a materialized page IS an ordered-set read).</li><li>Write tax with 3 indexes + 4 materialized top-K views &lt; 15% vs the same workload with indexes only (measured steady-state ~2%).</li><li>Memory per member within ±20% of the formula below.</li></ul>
+<p>Memory per member ≈ <code>order_value_width + key_len + 48</code> bytes, reported live by <code>VIEW.VERIFY</code>.</p>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — the indexes views compose (declaration, backfill, the consistency envelope views inherit).</li><li><a href="../rds-workloads/">rds-workloads.md</a> — where views sit in the SQL-to-kevy mapping.</li><li><a href="https://github.com/goliajp/kevy/blob/develop/docs/verb-reference.md">verb-reference.md</a> — generated grammar for every <code>VIEW.*</code> form.</li><li><a href="../cookbook/">cookbook.md</a> — view recipes in context.</li></ul></div></main></div><div class="shell"><footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../../golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/kevy" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://www.npmjs.com/package/@goliapkg/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"></path></svg>npm<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/kevy" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer></div>
+  </body>
+</html>
