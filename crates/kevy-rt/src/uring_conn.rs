@@ -290,6 +290,18 @@ impl<C: crate::Commands> crate::shard::Shard<C> {
     /// conn with no state and drops it.
     ///
     /// `is_unix` skips `TCP_NODELAY`, which AF_UNIX does not have.
+    /// Install the connections other shards passed here since the last drain.
+    #[cold]
+    pub(crate) fn install_adopted_uring(&mut self, io: &mut kevy_map::KevyMap<u64, UringConn>) {
+        for (sock, unix) in self.balance.take_adopted() {
+            if self.max_clients_per_shard > 0 && self.conns.len() >= self.max_clients_per_shard {
+                self.rejected_connections = self.rejected_connections.saturating_add(1);
+                continue;
+            }
+            self.install_accepted(io, sock, false, unix);
+        }
+    }
+
     pub(crate) fn install_accepted(
         &mut self,
         io: &mut kevy_map::KevyMap<u64, UringConn>,

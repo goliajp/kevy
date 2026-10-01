@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod accept_in_turn;
 mod client_setname_persistence;
 mod cluster_crossslot_mget;
 mod cluster_known_nodes_count;

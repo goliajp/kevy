@@ -52,37 +52,62 @@ impl<C: Commands> Shard<C> {
             let accepted = listener.accept();
             match accepted {
                 Ok(sock) => {
-                    // Refuse client conns past max_clients_per_shard
-                    // (cluster-bus links exempt; they're infra, not user-counted).
-                    if !cluster
-                        && self.max_clients_per_shard > 0
-                        && self.conns.len() >= self.max_clients_per_shard
-                    {
-                        self.rejected_connections = self.rejected_connections.saturating_add(1);
-                        drop(sock); // close immediately; client sees EOF/RST.
-                        continue;
-                    }
-                    sock.set_nonblocking()?;
-                    // TCP_NODELAY doesn't apply to AF_UNIX; skip for UDS.
-                    if from != Accepted::Unix {
-                        let _ = sock.set_nodelay();
-                    }
-                    let fd = sock.raw();
-                    let id = self.next_conn_id;
-                    self.next_conn_id += self.conn_id_step;
-                    self.poller.add(fd, kevy_sys::Interest::READ)?;
-                    self.fd_to_conn.insert(fd, id);
-                    let mut conn = Conn::new(sock);
-                    conn.cluster = cluster;
-                    self.conns.insert(id, conn);
-                    // Client connections only — cluster-bus links are internal.
-                    if !cluster {
-                        self.commands.on_connection();
+                    let unix = from == Accepted::Unix;
+                    let sock = if cluster { Some(sock) } else { self.keep_or_pass(sock, unix) };
+                    if let Some(sock) = sock {
+                        self.install_polled(sock, cluster, unix)?;
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry accept
                 Err(_) => break,
+            }
+        }
+        Ok(())
+    }
+
+    /// Register an accepted (or passed-in) connection with this shard's poller.
+    pub(crate) fn install_polled(
+        &mut self,
+        sock: kevy_sys::Socket,
+        cluster: bool,
+        unix: bool,
+    ) -> io::Result<()> {
+        // Refuse client conns past max_clients_per_shard
+        // (cluster-bus links exempt; they're infra, not user-counted).
+        if !cluster
+            && self.max_clients_per_shard > 0
+            && self.conns.len() >= self.max_clients_per_shard
+        {
+            self.rejected_connections = self.rejected_connections.saturating_add(1);
+            drop(sock); // close immediately; client sees EOF/RST.
+            return Ok(());
+        }
+        sock.set_nonblocking()?;
+        // TCP_NODELAY doesn't apply to AF_UNIX; skip for UDS.
+        if !unix {
+            let _ = sock.set_nodelay();
+        }
+        let fd = sock.raw();
+        let id = self.next_conn_id;
+        self.next_conn_id += self.conn_id_step;
+        self.poller.add(fd, kevy_sys::Interest::READ)?;
+        self.fd_to_conn.insert(fd, id);
+        let mut conn = Conn::new(sock);
+        conn.cluster = cluster;
+        self.conns.insert(id, conn);
+        // Client connections only — cluster-bus links are internal.
+        if !cluster {
+            self.commands.on_connection();
+        }
+        Ok(())
+    }
+
+    /// Install the connections other shards passed here since the last drain.
+    pub(crate) fn install_adopted_polled(&mut self) -> io::Result<()> {
+        if self.balance.has_adopted() {
+            for (sock, unix) in self.balance.take_adopted() {
+                self.install_polled(sock, false, unix)?;
             }
         }
         Ok(())

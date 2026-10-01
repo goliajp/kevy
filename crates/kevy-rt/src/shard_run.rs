@@ -301,6 +301,7 @@ impl<C: Commands> Shard<C> {
             if self.drain_inbound()? {
                 did_work = true;
             }
+            self.install_adopted_polled()?;
             slow.mark("inbound");
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
