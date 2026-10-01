@@ -12,7 +12,7 @@ use crate::Commands;
 use crate::message::Inbound;
 use crate::shard::Shard;
 
-/// Debug-only signal that a cross-shard serve reply was processed by the
+/// A signal, counted in debug builds, that a cross-shard serve reply was processed by the
 /// origin (i.e. `origin_on_serve_resp` ran). The escrow regression uses it
 /// to tell a genuine cross-shard placement from a co-located one: with N
 /// shards a random key lands on the conn's own shard ~1/N of the time, and
@@ -27,11 +27,13 @@ use crate::shard::Shard;
 /// // monotonic, process-wide: other threads may add to it, never take away
 /// assert!(cross_shard_serves() > before);
 /// ```
-#[cfg(debug_assertions)]
+// Present in every build so its examples hold in both profiles; only a
+// debug build counts (the one call site is `cfg(debug_assertions)`), so
+// in release it costs one static that stays zero.
 pub mod counters {
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-    /// Counts cross-shard serves since process start. Debug builds only
-    /// — the test that needs it retries until this proves the cross-shard
+    /// Counts cross-shard serves since process start, in debug builds —
+    /// the test that needs it retries until this proves the cross-shard
     /// path actually ran, rather than assuming a pass meant it did.
     ///
     /// ```
