@@ -194,18 +194,22 @@ impl<'a, V: ?Sized + ArgvView> Iterator for ArgvIter<'a, V> {
 impl<V: ?Sized + ArgvView> ExactSizeIterator for ArgvIter<'_, V> {}
 
 impl ArgvView for Argv {
+    #[inline]
     fn len(&self) -> usize {
         Argv::len(self)
     }
+    #[inline]
     fn get(&self, i: usize) -> Option<&[u8]> {
         Argv::get(self, i)
     }
 }
 
 impl ArgvView for ArgvBorrowed<'_> {
+    #[inline]
     fn len(&self) -> usize {
         ArgvBorrowed::len(self)
     }
+    #[inline]
     fn get(&self, i: usize) -> Option<&[u8]> {
         ArgvBorrowed::get(self, i)
     }
