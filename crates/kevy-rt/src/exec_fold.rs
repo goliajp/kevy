@@ -25,6 +25,25 @@ impl<C: Commands> Shard<C> {
                 return; // already emitted (defensive — shouldn't happen)
             }
             let idx = (seq - conn.next_emit) as usize;
+            // The in-order single-target reply — the forwarded GET/SET of a
+            // pipeline — goes straight to the output: no aggregator, no
+            // stored copy, no materialise.
+            let part = match part {
+                Part::Reply(b)
+                    if idx == 0
+                        && matches!(
+                            conn.pending.front(),
+                            Some(PendingSlot { remaining: 1, agg: Agg::First(None), .. })
+                        ) =>
+                {
+                    conn.output.extend_from_slice(b.as_slice());
+                    conn.pending.pop_front();
+                    conn.next_emit += 1;
+                    drain_front(conn);
+                    return;
+                }
+                part => part,
+            };
             let Some(slot) = conn.pending.get_mut(idx) else {
                 return;
             };
