@@ -2,22 +2,11 @@
 //! `munmap`, `close`, `syscall`) plus the io_uring kernel ABI constants
 //! everything else in the crate references.
 
-use core::ffi::{c_int, c_long, c_void};
+use core::ffi::{c_int, c_long};
 
-unsafe extern "C" {
-    pub fn mmap(
-        addr: *mut c_void,
-        len: usize,
-        prot: c_int,
-        flags: c_int,
-        fd: c_int,
-        off: i64,
-    ) -> *mut c_void;
-    pub fn munmap(addr: *mut c_void, len: usize) -> c_int;
-    pub fn close(fd: c_int) -> c_int;
-    /// Raw syscall: io_uring has no glibc wrapper. Variadic in C.
-    pub fn syscall(num: c_long, ...) -> c_long;
-}
+// The C library calls are kevy-sys's (`kevy_sys::os`); io_uring has no
+// C library wrapper, so it goes through `syscall`.
+pub use kevy_sys::os::{close, mmap, munmap, syscall};
 
 /// Widen a `u32` syscall argument to `c_long`.
 ///
