@@ -157,7 +157,7 @@ impl<C: Commands> Shard<C> {
                     } => Some(1),
                     _ => None,
                 };
-                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: None };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: 0 };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
@@ -165,9 +165,12 @@ impl<C: Commands> Shard<C> {
                 // a nested dispatch (EXEC, scripts) sees its outer command's
                 // hint, which is for other bytes and so does not match
                 let (shard, key_hash) = match self.route_hint {
-                    _ if self.nshards == 1 => (0, None),
-                    Some(h) if h.is(key) => (h.shard, h.hash),
-                    _ => self.route_of(key),
+                    _ if self.nshards == 1 => (0, 0),
+                    Some(h) if h.is(key) => (h.shard, h.hash.unwrap_or(0)),
+                    _ => {
+                        let (shard, hash) = self.route_of(key);
+                        (shard, hash.unwrap_or(0))
+                    }
                 };
                 // Cluster conns own their shard's slots only: a wrong-shard
                 // key redirects (`-MOVED`) instead of forwarding, keeping a

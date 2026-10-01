@@ -48,12 +48,16 @@ fn find(bytes: &[u8], b: u8) -> Option<usize> {
 /// assert_eq!(kevy_hash::hashtag(b"a{}{b}"), None);
 /// assert_eq!(kevy_hash::hashtag(b"plain:key"), None);
 /// ```
-#[inline]
+// every routed key asks this, from another crate, and the call would cost
+// as much as the answer
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub fn hashtag(key: &[u8]) -> Option<&[u8]> {
     // a cluster client's tag nearly always leads the key
     let start = if key.first() == Some(&b'{') { 0 } else { find(key, b'{')? };
     let after = &key[start + 1..];
-    match find(after, b'}')? {
+    // a tag is a few bytes: its close is found sooner byte by byte
+    match after.iter().position(|&b| b == b'}')? {
         0 => None,
         len => Some(&after[..len]),
     }

@@ -190,6 +190,7 @@ pub(crate) struct DispatchMeta {
     pub(crate) verb: crate::VerbId,
     /// The keyspace hash of argv[key_idx] when routing already computed
     /// it (an untagged key, which routes by that same hash), so the
-    /// owning shard can prefetch its bucket without hashing again.
-    pub(crate) key_hash: Option<u64>,
+    /// owning shard can prefetch its bucket without hashing again; 0 when
+    /// it did not. Only a prefetch hint: a real hash of 0 is hashed again.
+    pub(crate) key_hash: u64,
 }
