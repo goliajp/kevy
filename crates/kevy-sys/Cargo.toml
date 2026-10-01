@@ -17,6 +17,10 @@ categories = ["os", "network-programming", "external-ffi-bindings"]
 workspace = true
 
 [features]
+default = ["std"]
+# Everything but `os` (the C library's memory and process declarations,
+# which no_std crates such as kevy-alloc and kevy-madvise take).
+std = []
 # `thread_usage`: a thread's CPU time, faults and context switches, read
 # around a stretch of code by instrumented builds; off in every shipped
 # build.

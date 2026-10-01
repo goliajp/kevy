@@ -1,20 +1,9 @@
 //! The OS boundary: anonymous mapping, unmapping, and returning pages.
 //!
-//! Three hand-declared `extern "C"` symbols, no `libc` crate — the house
-//! rule for OS boundaries. Linux and macOS only; elsewhere every entry
-//! point reports failure and the allocator is simply unavailable.
-//!
-//! # Why not `kevy-madvise`
-//!
-//! That crate already binds `mmap`/`munmap`/`madvise`, so reusing it was
-//! the first choice. It does not fit: it is Linux-only by construction
-//! and its contract *is* huge-page advice — every mapping it hands out
-//! has `MADV_HUGEPAGE` applied. An allocator needs mappings on macOS too
-//! (that is where this is developed), and it must be able to *return*
-//! pages, which is the property the whole experiment rests on. Widening
-//! a crate whose name is its contract costs more than three extern
-//! declarations, so the boundary lives here — which is also why
-//! `kevy-alloc` carries its own `unsafe` extern block.
+//! The C library calls are kevy-sys's (`kevy_sys::os`, which needs no
+//! `std`), no `libc` crate — the house rule for OS boundaries. Linux and
+//! macOS only; elsewhere every entry point reports failure and the
+//! allocator is simply unavailable.
 //!
 //! # Examples
 //!
@@ -31,19 +20,7 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-unsafe extern "C" {
-    fn mmap(
-        addr: *mut c_void,
-        length: usize,
-        prot: i32,
-        flags: i32,
-        fd: i32,
-        offset: i64,
-    ) -> *mut c_void;
-    fn munmap(addr: *mut c_void, length: usize) -> i32;
-    fn madvise(addr: *mut c_void, length: usize, advice: i32) -> i32;
-    fn sysconf(name: i32) -> i64;
-}
+use kevy_sys::os::{madvise, mmap, munmap, sysconf};
 
 /// `_SC_PAGESIZE`. Linux says 30, macOS says 29 — the one constant in
 /// this file that is not shared, which is itself why it is worth asking

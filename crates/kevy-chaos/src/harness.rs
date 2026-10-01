@@ -344,14 +344,11 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
     const RLIMIT_FSIZE: i32 = 1;
     #[cfg(target_os = "linux")]
     const RLIMIT_FSIZE: i32 = 1;
-    unsafe extern "C" {
-        fn setrlimit(resource: i32, rlim: *const RawRlimit) -> i32;
-    }
     if nofile > 0 {
         let lim = RawRlimit { rlim_cur: nofile, rlim_max: nofile };
         // SAFETY: lim is on the stack and stays alive for the call; FFI
         // takes a const ptr; no aliasing.
-        let rc = unsafe { setrlimit(RLIMIT_NOFILE, &lim) };
+        let rc = unsafe { kevy_sys::os::setrlimit(RLIMIT_NOFILE, (&raw const lim).cast()) };
         if rc != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -360,7 +357,7 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
         let lim = RawRlimit { rlim_cur: fsize, rlim_max: fsize };
         // SAFETY: `lim` is a live `RawRlimit` on this frame and `setrlimit(2)` only reads
         // through the pointer for the duration of the call.
-        let rc = unsafe { setrlimit(RLIMIT_FSIZE, &lim) };
+        let rc = unsafe { kevy_sys::os::setrlimit(RLIMIT_FSIZE, (&raw const lim).cast()) };
         if rc != 0 {
             return Err(io::Error::last_os_error());
         }

@@ -453,6 +453,9 @@ dependencies = [
 [[package]]
 name = "kevy-alloc"
 version = "7.0.0"
+dependencies = [
+ "kevy-sys",
+]
 
 [[package]]
 name = "kevy-bench"
@@ -479,6 +482,7 @@ dependencies = [
 name = "kevy-chaos"
 version = "7.0.0"
 dependencies = [
+ "kevy-sys",
  "kevy-testnet",
 ]
 
@@ -649,6 +653,9 @@ dependencies = [
 [[package]]
 name = "kevy-madvise"
 version = "7.0.0"
+dependencies = [
+ "kevy-sys",
+]
 
 [[package]]
 name = "kevy-map"
@@ -821,6 +828,7 @@ version = "7.0.0"
 name = "kevy-uring"
 version = "7.0.0"
 dependencies = [
+ "kevy-sys",
  "kevy-tmpdir",
 ]
 
