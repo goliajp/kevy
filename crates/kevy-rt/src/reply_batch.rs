@@ -40,6 +40,30 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// Run a local command that waits behind an earlier one still out,
+    /// its reply parked in its slot rather than copied into one of its
+    /// own.
+    pub(crate) fn run_local_behind<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        proto: RespVersion,
+        meta: DispatchMeta,
+    ) {
+        let mut out = std::mem::take(&mut self.reply_scratch);
+        out.clear();
+        self.run_dispatch_into(args, proto, meta, &mut out);
+        match self.send_ext(true) {
+            Some(t) => {
+                let part = Part::Reply(SmallReply::from_slice(&out));
+                self.hold_ext(t, crate::exec_ext::Deliver::Local { conn: conn_id, seq, part });
+            }
+            None => self.fold_bytes(conn_id, seq, &out),
+        }
+        self.reply_scratch = out;
+    }
+
     /// The owner's half: run each forwarded command and answer them all
     /// as one [`Inbound::ResponseBatch`] in `spare`. Runs from the inbox
     /// only, so it inlines into it.
@@ -137,19 +161,32 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    /// [`Shard::fold`] for a plain reply the caller still borrows: the
-    /// next reply a conn waits for, from a single target, goes straight to
-    /// its output; any other is copied out and folded.
+    /// [`Shard::fold`] for a single target's plain reply the caller still
+    /// borrows: the next reply a conn waits for goes straight to its
+    /// output, a later one waits in its slot, parked (see
+    /// [`crate::conn::Conn::park`]); any other is copied out and folded.
     #[inline]
-    fn fold_bytes(&mut self, conn_id: u64, seq: u64, reply: &[u8]) {
-        if let Some(conn) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
-            && seq == conn.next_emit
-            && matches!(conn.pending.front(), Some(PendingSlot { remaining: 1, agg: None, .. }))
-        {
+    pub(crate) fn fold_bytes(&mut self, conn_id: u64, seq: u64, reply: &[u8]) {
+        let Some(conn) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        else {
+            return;
+        };
+        let single = |s: Option<&PendingSlot>| {
+            matches!(s, Some(PendingSlot { remaining: 1, agg: None, .. }))
+        };
+        if seq == conn.next_emit && single(conn.pending.front()) {
             conn.output.extend_from_slice(reply);
             conn.pending.pop_front();
             conn.next_emit += 1;
             drain_front(conn);
+            return;
+        }
+        let idx = seq.wrapping_sub(conn.next_emit) as usize;
+        if seq > conn.next_emit && single(conn.pending.get(idx)) {
+            let done = conn.park(reply);
+            let slot = &mut conn.pending[idx];
+            slot.done = Some(done);
+            slot.remaining = 0;
             return;
         }
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(reply)));

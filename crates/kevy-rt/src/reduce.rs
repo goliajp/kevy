@@ -415,10 +415,17 @@ pub(crate) fn set_diff(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
 pub(crate) fn drain_front(conn: &mut Conn) {
     while matches!(conn.pending.front(), Some(s) if s.done.is_some()) {
         let slot = conn.pending.pop_front().expect("the front() matched Some in the loop guard");
-        if let Some(bytes) = slot.done {
-            conn.output.extend_from_slice(bytes.as_slice());
+        if let Some(reply) = slot.done {
+            let bytes = reply.bytes(&conn.parked);
+            conn.output.extend_from_slice(bytes);
+            if let SmallReply::Parked { len, .. } = reply {
+                conn.parked_live -= len as usize;
+            }
         }
         conn.next_emit += 1;
+    }
+    if conn.pending.is_empty() {
+        conn.parked.clear();
     }
 }
 

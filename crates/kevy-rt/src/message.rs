@@ -271,8 +271,18 @@ pub(crate) enum Op {
 /// in the allocator. `Inline` keeps those entirely on the stack across the
 /// ring; `Heap` carries anything bigger with the old one-alloc semantics.
 pub(crate) enum SmallReply {
-    Inline { len: u8, buf: [u8; 30] },
+    Inline {
+        len: u8,
+        buf: [u8; 30],
+    },
     Heap(Vec<u8>),
+    /// `len` bytes at `off` in the waiting conn's `parked` buffer: a reply
+    /// held in that conn's pending slot behind an earlier one (see
+    /// [`crate::conn::Conn::park`]). Means nothing outside that slot.
+    Parked {
+        off: u32,
+        len: u32,
+    },
 }
 
 impl SmallReply {
@@ -294,11 +304,13 @@ impl SmallReply {
         SmallReply::Heap(v)
     }
 
+    /// The reply's bytes; `parked` is the owning conn's parked buffer.
     #[inline]
-    pub(crate) fn as_slice(&self) -> &[u8] {
+    pub(crate) fn bytes<'a>(&'a self, parked: &'a [u8]) -> &'a [u8] {
         match self {
             SmallReply::Inline { len, buf } => &buf[..*len as usize],
             SmallReply::Heap(v) => v,
+            SmallReply::Parked { off, len } => &parked[*off as usize..(*off + *len) as usize],
         }
     }
 }
