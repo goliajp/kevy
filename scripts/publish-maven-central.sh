@@ -35,6 +35,19 @@ cd "$ROOT"
 PUBLISH=0
 [ "${1:-}" = "--publish" ] && PUBLISH=1
 
+# --status ID…: what the Portal says about earlier deployments, errors
+# included. A failed publish is only explained there.
+if [ "${1:-}" = "--status" ]; then
+  shift
+  AUTH="$(printf '%s:%s' "${CENTRAL_USERNAME:?}" "${CENTRAL_PASSWORD:?}" | base64 | tr -d '\n')"
+  for id in "$@"; do
+    echo "→ deployment ${id}"
+    curl -sS -m 60 -X POST -H "Authorization: Bearer ${AUTH}" \
+      "https://central.sonatype.com/api/v1/publisher/status?id=${id}" | python3 -m json.tool
+  done
+  exit 0
+fi
+
 for v in CENTRAL_USERNAME CENTRAL_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
   if [ -z "${!v:-}" ]; then
     echo "✗ $v is not set — this cannot sign or upload without it." >&2
@@ -217,7 +230,11 @@ curl -sS -m 120 -X POST -H "Authorization: Bearer ${AUTH}" \
 for _ in $(seq 1 60); do
   ST="$(state | field deploymentState)"
   [ "$ST" = "PUBLISHED" ] && break
-  [ "$ST" = "FAILED" ] && { echo "✗ publish failed" >&2; exit 1; }
+  if [ "$ST" = "FAILED" ]; then
+    echo "✗ publish failed (deployment ${ID})" >&2
+    state | python3 -m json.tool >&2
+    exit 1
+  fi
   sleep 20
 done
 # Not a verdict. On 2026-08-30 this was one: the Portal sat on PUBLISHING
