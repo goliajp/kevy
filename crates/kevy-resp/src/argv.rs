@@ -66,6 +66,7 @@ impl Argv {
     }
 
     /// Number of arguments.
+    #[inline]
     pub fn len(&self) -> usize {
         self.ends.len()
     }
@@ -76,6 +77,7 @@ impl Argv {
     }
 
     /// Argument `i` as a byte slice, or `None` if out of range.
+    #[inline]
     pub fn get(&self, i: usize) -> Option<&[u8]> {
         let end = *self.ends.get(i)? as usize;
         let start = if i == 0 { 0 } else { self.ends[i - 1] as usize };

@@ -105,6 +105,7 @@ mod enabled {
         /// mismatch is WRONGTYPE with zero preads. Hot/absent =
         /// `live_entry` verbatim. Inside [`Store::peek_scope`] the gate
         /// is bypassed: serve via scratch, mark untouched, no promote.
+        #[inline]
         pub(crate) fn tier_serve(
             &mut self,
             key: &[u8],
@@ -113,6 +114,16 @@ mod enabled {
             if !self.cold_backing {
                 return Ok(self.live_entry(key));
             }
+            self.tier_serve_backed(key, want)
+        }
+
+        /// [`Self::tier_serve`] with a cold tier behind the keyspace.
+        #[inline(never)]
+        fn tier_serve_backed(
+            &mut self,
+            key: &[u8],
+            want: u8,
+        ) -> Result<Option<&Entry>, StoreError> {
             let cold = match self.live_entry(key) {
                 None => return Ok(None),
                 Some(e) => match &e.value {
