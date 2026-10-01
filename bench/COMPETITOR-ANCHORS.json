@@ -186,7 +186,7 @@
       ]
     },
     "node-redis": {
-      "pinned": "6.2.1",
+      "pinned": "6.3.0",
       "role": "clientgate's Node client; its pool return path is why RESET is a MUST",
       "upstream": {
         "kind": "npm",

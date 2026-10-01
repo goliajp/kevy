@@ -25,6 +25,10 @@ const NODE_MAX_BYTES: usize = 4096;
 
 /// How many entries an approximate trim removes at most when the command
 /// names no `LIMIT`: 100 nodes' worth.
+///
+/// ```
+/// assert_eq!(kevy_store::APPROX_TRIM_LIMIT, 10_000);
+/// ```
 pub const APPROX_TRIM_LIMIT: usize = 100 * NODE_MAX_ENTRIES as usize;
 
 /// How a trim goes about it: `XTRIM`'s `=` and `~`.
@@ -51,6 +55,11 @@ pub enum TrimMode {
     /// ```
     Approximate {
         /// Entries the trim may remove, 0 for no limit.
+        ///
+        /// ```
+        /// let mode = kevy_store::TrimMode::Approximate { limit: 7 };
+        /// assert!(matches!(mode, kevy_store::TrimMode::Approximate { limit: 7 }));
+        /// ```
         limit: usize,
     },
 }
