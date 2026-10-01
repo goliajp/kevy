@@ -162,7 +162,9 @@ impl<C: Commands> Shard<C> {
             }
             Route::Single(idx) => {
                 let key = &args[idx];
-                let (shard, key_hash) = match self.route_hint.take() {
+                // a nested dispatch (EXEC, scripts) sees its outer command's
+                // hint, which is for other bytes and so does not match
+                let (shard, key_hash) = match self.route_hint {
                     Some(h) if h.is(key) => (h.shard, h.hash),
                     _ => self.route_of(key),
                 };
