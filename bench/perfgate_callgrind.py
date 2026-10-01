@@ -78,7 +78,8 @@ def one(side, angle, ops, port, work):
     out = work / f"cg.{angle}.{side['name']}"
     env = dict(side["env"], KEVY_IO_URING="0")
     proc = subprocess.Popen(["valgrind", "--tool=callgrind", "--instr-atstart=no",
-                             f"--callgrind-out-file={out}", side["bin"], "--threads", "1",
+                             f"--callgrind-out-file={out}", side["bin"], "--threads",
+                             "2" if angle.startswith("x") else "1",
                              "--port", str(port), "--no-aof", "--dir", str(work / "data")],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -128,7 +129,7 @@ def run(sides, angles, ops, port):
     for name, s in zip("AB", sides):
         s["name"] = name
         print(f"# {name}: {s['label']} — {s['version']} — {s['bin']}")
-    print(f"# callgrind, one shard, epoll reactor, {ops} requests per angle "
+    print(f"# callgrind, one shard (two for the x angles), epoll reactor, {ops} requests per angle "
           "(-c 4 -P 16), counted from the first request to the last")
     with tempfile.TemporaryDirectory(prefix="perfgate-cg-") as d:
         for angle in angles:
