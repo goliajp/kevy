@@ -10,6 +10,8 @@ the windows close, so their request count only has to outlast them.
              connections over the shards in turn
   xshard_set untagged keys on the shared port: with n shards, (n-1)/n of
              the commands belong to another shard
+  plain_*    the default deployment: no --cluster, so keys route by the
+             keyspace hash; untagged keys on the shared port
   onekey_*   redis-benchmark -t, one fixed key: one shard does all the work
   zinterstore  a two-set ZINTERSTORE, on a one-shard server
   hybrid_p95 IDX.QUERY HYBRID p95 from one closed-loop client (latency only)
@@ -36,8 +38,11 @@ PINNED = {
     "zadd": "ZADD {T}:z __rand_int__ m__rand_int__",
 }
 
-ANGLES = ([f"pinned_{v}" for v in PINNED] + ["compat_get", "compat_set", "xshard_set",
-          "onekey_get", "onekey_set", "zinterstore", "hybrid_p95"])
+PLAIN = {"get": "GET key:__rand_int__", "set": "SET key:__rand_int__ v"}
+
+ANGLES = ([f"pinned_{v}" for v in PINNED] + ["compat_get", "compat_set", "xshard_set"]
+          + [f"plain_{v}" for v in PLAIN]
+          + ["onekey_get", "onekey_set", "zinterstore", "hybrid_p95"])
 
 # single-shard shapes for the callgrind mode: (warm command or None, load command)
 CALLGRIND = {
@@ -115,6 +120,9 @@ def warm(angle, port, shards):
                  for i, t in enumerate(shard_tags(shards))]
         for p in procs:
             p.wait()
+    elif angle == "plain_get":
+        run_quiet(bench(port, "SET", "key:__rand_int__", "v", n=1_000_000, keyspace=1_000_000,
+                        pipe=64))
     elif angle == "onekey_get":
         run_quiet(bench(port, "-t", "set", n=300_000, pipe=64))
     elif angle == "zinterstore":
@@ -137,6 +145,9 @@ def generators(angle, port, shards, cli_threads):
                        *cmd.replace("{T}", "{" + t + "}").split(),
                        n=N_GEN, keyspace=1_000_000, conns=12, pipe=256, threads=per), per)
                 for i, t in enumerate(tags)]
+    if angle.startswith("plain_"):
+        return [(bench(port, *PLAIN[angle.split("_", 1)[1]].split(), n=N_GEN,
+                       keyspace=1_000_000, conns=12, pipe=256, threads=per), per) for _ in tags]
     if angle == "xshard_set":
         return [(bench(port, "SET", "key:__rand_int__", "v", n=N_GEN, keyspace=1_000_000,
                        conns=12, pipe=256, threads=per), per) for _ in tags]
