@@ -46,37 +46,33 @@ impl<C: Commands> Shard<C> {
     /// caller owns buffer bookkeeping (tail retention) and the AOF
     /// group-commit window around the batch.
     pub(crate) fn dispatch_batch(&mut self, conn_id: u64, buf: &[u8]) -> BatchOutcome {
-        let mut off = 0usize;
-        let mut cur = parse_command_borrowed(buf);
-        let mut route = match &cur {
-            Ok(Some((argv, _))) => self.prefetch_local(argv),
-            _ => None,
-        };
+        // `cur` runs while the command after it is parsed, routed and, when
+        // its key is this shard's, prefetched; one parse site keeps the
+        // parser inlined
+        let mut cur = None;
+        let (mut off, mut pos) = (0usize, 0usize);
         loop {
-            match cur {
+            let next = parse_command_borrowed(&buf[pos..]);
+            let next_route = match &next {
+                Ok(Some((ahead, _))) => self.prefetch_local(ahead),
+                _ => None,
+            };
+            if let Some((argv, consumed, route)) = cur.take() {
+                self.route_hint = route;
+                self.handle_command(conn_id, &argv);
+                self.route_hint = None;
+                drop(argv);
+                off += consumed;
+                if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+                    .is_none()
+                {
+                    return BatchOutcome { consumed: off, protocol_error: false, conn_gone: true };
+                }
+            }
+            match next {
                 Ok(Some((argv, consumed))) => {
-                    // the next command's bucket is fetched while this one
-                    // runs, when its key is this shard's
-                    let next = parse_command_borrowed(&buf[off + consumed..]);
-                    let next_route = match &next {
-                        Ok(Some((ahead, _))) => self.prefetch_local(ahead),
-                        _ => None,
-                    };
-                    self.route_hint = route;
-                    self.handle_command(conn_id, &argv);
-                    self.route_hint = None;
-                    drop(argv);
-                    off += consumed;
-                    if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
-                        .is_none()
-                    {
-                        return BatchOutcome {
-                            consumed: off,
-                            protocol_error: false,
-                            conn_gone: true,
-                        };
-                    }
-                    (cur, route) = (next, next_route);
+                    pos += consumed;
+                    cur = Some((argv, consumed, next_route));
                 }
                 Ok(None) => {
                     return BatchOutcome { consumed: off, protocol_error: false, conn_gone: false };
@@ -91,12 +87,17 @@ impl<C: Commands> Shard<C> {
     /// Route `argv`'s key (argv[1], where nearly every keyed command has
     /// it) and, if this shard owns it, start fetching its bucket. Keys of
     /// other shards are left to their owner, which prefetches its own.
-    #[inline]
+    #[inline(always)]
     fn prefetch_local<A: kevy_resp::ArgvView + ?Sized>(&self, argv: &A) -> Option<RouteHint> {
         let key = argv.get(1)?;
         if self.nshards == 1 {
             self.store.prefetch_for_key(key);
-            return None;
+            return Some(RouteHint {
+                at: key.as_ptr() as usize,
+                len: key.len(),
+                shard: 0,
+                hash: None,
+            });
         }
         let (shard, hash) = self.route_of(key);
         if shard == self.id {
