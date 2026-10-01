@@ -209,6 +209,19 @@ mod tests {
     }
 
     #[test]
+    fn a_value_loaded_over_a_collection_frees_what_the_collection_weighed() {
+        let mut s = Store::new();
+        for i in 0..50u32 {
+            s.rpush(b"list", &[format!("item-{i}-{}", "z".repeat(40)).as_bytes()]).unwrap();
+        }
+        exact(&s);
+        // a load meeting the key again overwrites it in place: what the
+        // slot's word said the list weighed is what leaves
+        s.insert_loaded(b"list".to_vec(), crate::Value::Int(7), None);
+        exact(&s);
+    }
+
+    #[test]
     fn the_halves_do_not_disturb_each_other() {
         let mut w = 0u64;
         set_clock(&mut w, 0xDEAD_BEEF);

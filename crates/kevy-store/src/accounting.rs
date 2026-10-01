@@ -106,21 +106,18 @@ impl Store {
     /// Apply a signed weight delta to `key`'s kept weight AND to the
     /// shard-wide `used_memory`. Used by in-place collection mutators (HSET
     /// adding a field, LPUSH adding an item, …) so we account in O(1)
-    /// without re-walking the container. The delta lands on the value as
-    /// it is now: a small inline collection that just grew into a kept one
-    /// had a kept half of zero, so the half becomes its new weight; one that
-    /// shrank back into inline form has its half cleared.
+    /// without re-walking the container. Only a value whose weight is kept
+    /// moves by a delta: a small inline one weighs nothing either side of a
+    /// change, and one that changes form is reweighed from scratch.
     pub(crate) fn account_delta(&mut self, key: &[u8], delta: i64) {
         if delta == 0 {
             return;
         }
         if let Some(slot) = self.map.find_slot(key) {
-            let is_kept = self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value));
-            if is_kept {
-                self.keep_words();
-            }
+            debug_assert!(self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value)), "{key:?}");
+            self.keep_words();
             if let Some(word) = self.map.word_mut(slot) {
-                if is_kept { shift(word, delta) } else { stamp(word, false, 0) }
+                shift(word, delta);
             }
         }
         apply_delta(&mut self.used_memory, delta);
