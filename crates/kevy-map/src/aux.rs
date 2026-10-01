@@ -59,6 +59,19 @@ impl<K, V> KevyMap<K, V> {
         self.aux.as_mut().map(|lane| &mut lane[slot])
     }
 
+    /// The entry at `slot` and its side word, to change: the value from the
+    /// slot array, the word from the side lane (`None` when none is kept).
+    #[inline]
+    pub fn slot_mut_aux(&mut self, slot: usize) -> Option<(&K, &mut V, Option<&mut u64>)> {
+        if !self.slot_is_full(slot) {
+            return None;
+        }
+        // SAFETY: a full slot holds an initialised pair; the word lives in a
+        // separate allocation, so the two borrows are disjoint.
+        let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_mut() };
+        Some((&kv.0, &mut kv.1, self.aux.as_mut().map(|lane| &mut lane[slot])))
+    }
+
     /// An entry has just taken `slot`: its side word starts at zero.
     #[inline]
     pub(crate) fn reset_aux(&mut self, slot: usize) {
