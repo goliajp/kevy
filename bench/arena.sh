@@ -20,6 +20,12 @@
 #     (redis-benchmark.c:52, :1653; without --threads it stops in clientDone
 #     at :425), so its rate is quantized to N/(k*250ms) and understated. Every
 #     engine exposes the same counter, so the comparison stays like-for-like;
+#   - before an engine's first cell, WARM seconds (10) of GET load that is
+#     not measured: on a freshly started engine redis-benchmark climbs for
+#     about seven seconds (kevy: 2.0M, 5.9M, then 9.0M GET/s in 3-second
+#     windows), so the first cell's windows read low and its headroom
+#     probe, run warm, reads as the load generator being the limit. GET
+#     writes nothing, so every engine still meets an empty keyspace;
 #   - after a cell's windows, one more window with 16 load threads: if it
 #     beats the cell's best window by more than 2%, the load generator was the
 #     limit for that engine, which is LOAD-BOUND there. A competitor that is
@@ -57,6 +63,7 @@ PROBE_THREADS=16
 # slowest engine and cell; the generator is killed once they close
 N=${N:-2000000000}
 RAMP=${RAMP:-1}
+WARM=${WARM:-10}
 WINDOW=${WINDOW:-3}
 CONC=${CONC:-50}
 PIPE=${PIPE:-16}
@@ -163,6 +170,9 @@ run_engine() { # round, label, start-command...
         return 0
     fi
     EPID=$(engine_pid)
+    start_load get "$CLI_THREADS"
+    sleep "$WARM"
+    stop_load
     for t in $TESTS; do
         bench_cell "$label" "$t" "$round" || { rc=$?; break; }
     done
