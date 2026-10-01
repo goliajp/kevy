@@ -729,19 +729,28 @@ fn listed_size(w: &mut Wire, name: &str) -> (u64, u64) {
     (get("entries").unwrap(), get("bytes").unwrap())
 }
 
+/// The shards' ticks so far, summed (`reactor_ticks_total`).
+fn ticks(w: &mut Wire) -> u64 {
+    let info = text(&call(w, &[b"INFO", b"stats"]));
+    let line = info.lines().find_map(|l| l.strip_prefix("reactor_ticks_total:")).expect("ticks");
+    line.trim().parse().unwrap()
+}
+
 /// `bytes` of `name` once the shard ticks' repack has stopped changing
 /// it. A tick with packing left does some within its half millisecond, so
-/// the same figure over five ticks (a tick is 100 ms) is a segment at rest.
-fn packed_size(w: &mut Wire, name: &str) -> u64 {
-    let (mut last, mut same) = (listed_size(w, name).1, 0);
-    for _ in 0..300 {
+/// the same figure across five ticks of every shard is a segment at rest.
+/// The ticks are counted, not timed: a busy machine runs a 100 ms tick
+/// late, and five polls 100 ms apart then span fewer than five ticks.
+fn packed_size(w: &mut Wire, name: &str, shards: u64) -> u64 {
+    let (mut last, mut since) = (listed_size(w, name).1, ticks(w));
+    for _ in 0..600 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let now = listed_size(w, name).1;
-        same = if now == last { same + 1 } else { 0 };
-        if same == 5 {
+        if now != last {
+            (last, since) = (now, ticks(w));
+        } else if ticks(w) >= since + 6 * shards {
             return now;
         }
-        last = now;
     }
     panic!("{name}'s bytes never settled");
 }
@@ -780,7 +789,7 @@ fn local_and_global_indexes_pack_to_the_rested_bound() {
     // four shards' segments and four partitions hold the same entries, and
     // a row's shard keeps no map to its partition: a write names the old
     // value, which names it
-    let (lb, gb) = (packed_size(&mut w, "age_l"), packed_size(&mut w, "age_g"));
+    let (lb, gb) = (packed_size(&mut w, "age_l", 4), packed_size(&mut w, "age_g", 4));
     let bound = packed_bound(20_000, 4.0);
     let per_row = |b: f64| b / 20_000.0;
     eprintln!(

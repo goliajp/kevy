@@ -155,6 +155,31 @@ fn a_rested_tree_packs_every_leaf_but_the_last_and_wakes_on_drift() {
 }
 
 #[test]
+fn a_tree_that_rested_mid_load_packs_once_the_writes_stop() {
+    let mut t = Tree::new(Shape { payloads: false, vlens: false });
+    let mut tidy = Tidy::default();
+    let mut r = Rng(11);
+    for _ in 0..20_000 {
+        t.insert(&entry(r.below(1_000_000) as u32), &[]);
+    }
+    run_to_rest(&mut t, &mut tidy);
+    let rested = t.live_leaves();
+    // too few writes to grow the leaves by an eighth: the hand stays put
+    // while they go on
+    // (a packed leaf splits on nearly every insert, so ten rows open ten
+    // half-empty leaves of the hundred and sixty)
+    for i in 0..10u32 {
+        t.insert(&entry(1_000_000 + i * 79_193 % 1_000_000), &[]);
+        assert!(!t.tidy(&mut tidy, 0), "a tree still being written rests");
+    }
+    assert!(t.live_leaves() > rested && t.live_leaves() * 8 <= rested * 9 + 8);
+    assert!(t.tidy(&mut tidy, 0), "a tree the writes have left wakes the hand");
+    run_to_rest(&mut t, &mut tidy);
+    check_packed(&t);
+    assert!(!t.tidy(&mut tidy, 1_000), "and rests again once packed");
+}
+
+#[test]
 fn a_tree_that_rested_small_still_wakes_as_it_grows() {
     let mut t = Tree::new(Shape { payloads: false, vlens: false });
     let mut tidy = Tidy::default();
