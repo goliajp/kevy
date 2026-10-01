@@ -360,7 +360,10 @@ impl<K, V> KevyMap<K, V> {
     ///
     /// Used by the [`raw_entry_mut`](Self::raw_entry_mut) API to fuse a read
     /// and a possible insert into a single probe.
-    #[inline]
+    // two callers, both the entry API: outlined, every SET pays a call and
+    // the spills around it
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn probe_by_borrow<Q>(&self, key: &Q) -> ProbeOutcome
     where
         K: Borrow<Q>,
