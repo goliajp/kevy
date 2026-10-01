@@ -5,7 +5,10 @@
 use kevy_index::IndexValue;
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
-use super::chunk::{emit_row, encode_cursor, read_hydration, read_kbytes, read_u32, value_repr};
+use super::chunk::{
+    emit_row, encode_cursor, read_hydration, read_kbytes, read_kbytes_ref, read_u32,
+    skip_hydration, value_repr,
+};
 use crate::cmd_index_query::{ComposeQuery, Hydrated, Query, decode_value, hex};
 use crate::state::CatalogState;
 
@@ -168,10 +171,12 @@ pub(super) fn reduce_compose(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
 /// 300 that lose.
 ///
 /// This decodes a head per chunk and then one row per row emitted:
-/// LIMIT + N decodes instead of N×LIMIT. The comparison is unchanged, and
-/// so is the result — `SORT` diverts to the claused reduce before here, so
-/// this path is always ascending.
-fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<(IndexValue, Vec<u8>, Hydrated)> {
+/// LIMIT + N decodes instead of N×LIMIT. A row's key is borrowed from its
+/// chunk and its fields are left encoded, so a head that loses costs no
+/// allocation, and only the rows emitted decode their fields. The
+/// comparison is unchanged, and so is the result — `SORT` diverts to the
+/// claused reduce before here, so this path is always ascending.
+fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<Row<'_>> {
     // (remaining, read position) per chunk; a chunk whose header does not
     // parse contributes nothing, exactly as the flattening version treated it.
     let mut cur: Vec<(u32, usize)> = Vec::with_capacity(chunks.len());
@@ -182,19 +187,19 @@ fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<(IndexValue, Vec<u8>, H
             None => (0, pos),
         });
     }
-    let mut head: Vec<Option<(IndexValue, Vec<u8>, Hydrated)>> =
+    let mut head: Vec<Option<Row<'_>>> =
         (0..chunks.len()).map(|i| next_row(&chunks[i], &mut cur[i])).collect();
 
     let mut out = Vec::with_capacity(limit.min(64));
     while out.len() < limit {
         let mut best: Option<usize> = None;
         for (i, h) in head.iter().enumerate() {
-            let Some((v, k, _)) = h else { continue };
+            let Some(r) = h else { continue };
             match &best {
                 None => best = Some(i),
                 Some(b) => {
-                    let (bv, bk, _) = head[*b].as_ref().expect("best is Some");
-                    if (v, k) < (bv, bk) {
+                    let w = head[*b].as_ref().expect("best is Some");
+                    if (&r.v, r.key) < (&w.v, w.key) {
                         best = Some(i);
                     }
                 }
@@ -211,16 +216,33 @@ fn merge_chunks(chunks: &[Vec<u8>], limit: usize) -> Vec<(IndexValue, Vec<u8>, H
 /// One decoded row from a chunk, advancing its cursor. `None` at the end or
 /// on a truncated frame — the flattening version also stopped at the first
 /// field it could not read.
-fn next_row(c: &[u8], state: &mut (u32, usize)) -> Option<(IndexValue, Vec<u8>, Hydrated)> {
+fn next_row<'a>(c: &'a [u8], state: &mut (u32, usize)) -> Option<Row<'a>> {
     let (left, pos) = state;
     if *left == 0 {
         return None;
     }
     *left -= 1;
-    let key = read_kbytes(c, pos)?;
+    let key = read_kbytes_ref(c, pos)?;
     let v = decode_value(c, pos)?;
-    let fv = read_hydration(c, pos)?;
-    Some((v, key, fv))
+    let fields = *pos;
+    skip_hydration(c, pos)?;
+    Some(Row { v, key, chunk: c, fields })
+}
+
+/// A merged row: its value, its key and its still-encoded fields, both
+/// borrowed from the chunk it came from.
+struct Row<'a> {
+    v: IndexValue,
+    key: &'a [u8],
+    chunk: &'a [u8],
+    fields: usize,
+}
+
+impl Row<'_> {
+    /// The row's fields, decoded; `skip_hydration` already walked them.
+    fn hydrated(&self) -> Hydrated {
+        read_hydration(self.chunk, &mut self.fields.clone()).expect("walked when the row was read")
+    }
 }
 
 /// IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
@@ -237,7 +259,7 @@ pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     let all = merge_chunks(chunks, q.limit);
     let next = if all.len() == q.limit {
-        all.last().map(|(v, k, _)| encode_cursor(v, k)).unwrap_or_else(|| b"0".to_vec())
+        all.last().map(|r| encode_cursor(&r.v, r.key)).unwrap_or_else(|| b"0".to_vec())
     } else {
         b"0".to_vec()
     };
@@ -246,14 +268,14 @@ pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     if q.fields.is_empty() {
         // legacy flat shape: *2N of key/value
         encode_array_len(&mut out, (all.len() * 2) as i64);
-        for (v, k, _) in &all {
-            encode_bulk(&mut out, k);
-            encode_bulk(&mut out, &value_repr(v));
+        for r in &all {
+            encode_bulk(&mut out, r.key);
+            encode_bulk(&mut out, &value_repr(&r.v));
         }
     } else {
         encode_array_len(&mut out, all.len() as i64);
-        for (v, k, fv) in &all {
-            emit_row(&mut out, k, Some(v), fv, &q.fields);
+        for r in &all {
+            emit_row(&mut out, r.key, Some(&r.v), &r.hydrated(), &q.fields);
         }
     }
     out
