@@ -229,9 +229,9 @@ impl<K: kevy_hash::KevyHash + Eq, V> KevyMap<K, V> {
             let before = self.footprint();
             self.grow();
             let grown = self.footprint() as isize - before as isize;
-            return (self.insert_with_room(key, value), grown);
+            return (self.insert_with_room(key, value).1, grown);
         }
-        (self.insert_with_room(key, value), 0)
+        (self.insert_with_room(key, value).1, 0)
     }
 }
 
