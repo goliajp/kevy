@@ -29,6 +29,8 @@
     "compat_get",
     "compat_set",
     "xshard_set",
+    "plain_get",
+    "plain_set",
     "onekey_get",
     "onekey_set",
     "zinterstore",
