@@ -45,6 +45,11 @@ CALLGRIND = {
     "hset": (None, "HSET h __rand_int__ v"),
     "lpush": (None, "LPUSH l v"),
     "zadd": (None, "ZADD z __rand_int__ m__rand_int__"),
+    # two shards: half the commands are forwarded, so the cross-shard
+    # request and reply path is counted. The idle loop's instructions vary
+    # with scheduling, so read these per function, not by their total.
+    "xget": ("SET k:__rand_int__ v", "GET k:__rand_int__"),
+    "xset": (None, "SET k:__rand_int__ v"),
 }
 
 
