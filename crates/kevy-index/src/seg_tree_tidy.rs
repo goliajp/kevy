@@ -7,8 +7,11 @@
 //! leaf once it empties; separators and counts move with the entries. A
 //! lap that pours nothing leaves every leaf but the last too full to take
 //! its successor's first entry. The tree then rests until it has an
-//! eighth more leaves or an eighth fewer entries than it rested with:
-//! splits have opened half-empty leaves, or deletes have hollowed them.
+//! eighth more leaves or an eighth fewer entries than it rested with —
+//! splits have opened half-empty leaves, or deletes have hollowed them —
+//! or until writes that changed it less than that have stopped: a tree
+//! that rested in the middle of a load would otherwise keep up to an
+//! eighth more leaves than packed, by how the writes fell between laps.
 
 use super::{Inner, Path, Tree};
 use crate::seg_leaf::{Probe, head16_of};
@@ -23,14 +26,19 @@ pub(crate) struct Tidy {
     moved: usize,
     /// Leaves and entries when a lap last moved nothing.
     rest: Option<(usize, usize)>,
+    /// Leaves and entries at the previous call while resting.
+    seen: (usize, usize),
 }
 
 impl Tree {
     /// Walk up to `leaves` steps of the hand; whether work remains.
     pub(crate) fn tidy(&mut self, t: &mut Tidy, leaves: usize) -> bool {
         if let Some((l0, n0)) = t.rest {
-            let drifted = self.live_leaves() * 8 > l0 * 9 + 8 || self.len * 9 < n0 * 8;
-            if !drifted {
+            let now = (self.live_leaves(), self.len);
+            let drifted = now.0 * 8 > l0 * 9 + 8 || now.1 * 9 < n0 * 8;
+            let settled = now != (l0, n0) && now == t.seen;
+            t.seen = now;
+            if !drifted && !settled {
                 return false;
             }
             t.rest = None;
@@ -41,6 +49,7 @@ impl Tree {
             if lap_done {
                 if t.moved == 0 {
                     t.rest = Some((self.live_leaves(), self.len));
+                    t.seen = (self.live_leaves(), self.len);
                     return false;
                 }
                 t.moved = 0;
