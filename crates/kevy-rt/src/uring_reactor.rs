@@ -233,7 +233,11 @@ impl<C: Commands> Shard<C> {
                                 drop(sock); // close fd immediately
                                 continue;
                             }
-                            self.install_accepted(&mut io, sock, cluster, is_unix);
+                            let sock =
+                                if cluster { Some(sock) } else { self.keep_or_pass(sock, is_unix) };
+                            if let Some(sock) = sock {
+                                self.install_accepted(&mut io, sock, cluster, is_unix);
+                            }
                         }
                     }
                     OP_WAKER => {
@@ -265,6 +269,9 @@ impl<C: Commands> Shard<C> {
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
             let did_inbound = self.uring_drain_inbound();
+            if self.balance.has_adopted() {
+                self.install_adopted_uring(&mut io);
+            }
             // `self.dirty` is no longer cleared here —
             // pub/sub deliver paths push into it and `uring_arm_conns`
             // drains it into `arm_pending` on the next iter. The prior

@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod server_bin;
+
 use std::process::{Child, Command, Stdio};
 
 struct Srv {
@@ -14,16 +16,7 @@ struct Srv {
 impl Srv {
     fn start() -> Srv {
         let port = kevy_testnet::free_port();
-        let bin =
-            std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
-        if !bin.exists() {
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let status = Command::new(cargo)
-                .args(["build", "-p", "kevy", "--bin", "kevy"])
-                .status()
-                .expect("spawn cargo build");
-            assert!(status.success(), "cargo build -p kevy --bin kevy failed");
-        }
+        let bin = server_bin::kevy_server();
         let dir = std::env::temp_dir().join(format!("kevy-tools-{port}"));
         std::fs::create_dir_all(&dir).unwrap();
         let child = Command::new(&bin)
