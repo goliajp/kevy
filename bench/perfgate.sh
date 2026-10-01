@@ -56,8 +56,9 @@
 set -eu
 [ $# -gt 0 ] || { sed -n '2,17p' "$0"; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd)
-if [ -z "${KEVY_BENCH_LOCK_HELD:-}" ]; then
-  python3 "$HERE/perfgate.py" prepare --for "${1:-}" "${@:2}"
-fi
+# builds what is missing; a second pass, after the lock, finds it all built.
+# Skipping it when a caller already holds the lock left the reference
+# unbuilt, and the run died before measuring anything.
+python3 "$HERE/perfgate.py" prepare --for "${1:-}" "${@:2}"
 . "$HERE/bench-lock.sh"
 exec python3 "$HERE/perfgate.py" "$@"
