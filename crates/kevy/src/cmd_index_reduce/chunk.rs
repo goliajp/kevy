@@ -19,6 +19,30 @@ pub(super) fn read_kbytes(c: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
     Some(b)
 }
 
+/// [`read_kbytes`] without the copy: the key, borrowed from the chunk.
+pub(super) fn read_kbytes_ref<'a>(c: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+    let n = read_u32(c, pos)? as usize;
+    let b = c.get(*pos..pos.checked_add(n)?)?;
+    *pos += n;
+    Some(b)
+}
+
+/// Walk past a hydration blob, leaving `pos` just after it, with the same
+/// checks [`read_hydration`] makes.
+pub(super) fn skip_hydration(c: &[u8], pos: &mut usize) -> Option<()> {
+    let n = *c.get(*pos)? as usize;
+    *pos += 1;
+    for _ in 0..n {
+        let len = read_u32(c, pos)?;
+        if len != u32::MAX {
+            let end = pos.checked_add(len as usize)?;
+            c.get(*pos..end)?;
+            *pos = end;
+        }
+    }
+    Some(())
+}
+
 pub(super) fn read_hydration(c: &[u8], pos: &mut usize) -> Option<Hydrated> {
     let n = *c.get(*pos)? as usize;
     *pos += 1;
