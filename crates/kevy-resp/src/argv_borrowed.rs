@@ -62,22 +62,26 @@ impl<'a> ArgvBorrowed<'a> {
     }
 
     /// Number of arguments.
+    #[inline]
     pub fn len(&self) -> usize {
         self.ranges.len()
     }
 
     /// Whether there are no arguments.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }
 
     /// Argument `i` as a byte slice into the original input, or `None`.
+    #[inline]
     pub fn get(&self, i: usize) -> Option<&[u8]> {
         let (s, e) = self.ranges.get(i)?;
         Some(&self.input[s as usize..e as usize])
     }
 
     /// The first argument (the command name), or `None` if empty.
+    #[inline]
     pub fn first(&self) -> Option<&[u8]> {
         self.get(0)
     }
@@ -113,6 +117,7 @@ impl<'a> ArgvBorrowed<'a> {
 
 impl core::ops::Index<usize> for ArgvBorrowed<'_> {
     type Output = [u8];
+    #[inline]
     fn index(&self, i: usize) -> &[u8] {
         self.get(i).expect("argv-borrowed index out of bounds")
     }
