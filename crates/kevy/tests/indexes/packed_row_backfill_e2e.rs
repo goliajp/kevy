@@ -264,8 +264,10 @@ fn a_snapshot_restore_comes_back_packed() {
         let srv = Server::start_in(&dir);
         let mut c = srv.connect();
         load_rows(&mut c);
-        assert_eq!(declare(&mut c), b"+OK\r\n");
+        // measured before the declaration: the backfill may pack the row
+        // before a measurement taken after it arrives
         let before = int(&cmd(&mut c, &[b"MEMORY", b"USAGE", b"row:5"]));
+        assert_eq!(declare(&mut c), b"+OK\r\n");
         let packed = wait_shrunk(&mut c, b"row:5", before);
         assert!(packed < before, "setup: the row must be packed before the restart");
         assert_eq!(cmd(&mut c, &[b"SAVE"]), b"+OK\r\n");
