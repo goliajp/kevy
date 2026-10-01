@@ -16,6 +16,9 @@ version = "7.0.0"
 [[package]]
 name = "kevy-madvise"
 version = "7.0.0"
+dependencies = [
+ "kevy-sys",
+]
 
 [[package]]
 name = "kevy-map"
@@ -45,3 +48,7 @@ dependencies = [
  "kevy-map",
  "kevy-ranktree",
 ]
+
+[[package]]
+name = "kevy-sys"
+version = "7.0.0"
