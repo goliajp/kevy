@@ -126,6 +126,7 @@ impl<K, V> KevyMap<K, V> {
     /// One full probe. The returned handle borrows `self` mutably; the
     /// borrow is released only when the handle is dropped (or consumed
     /// via [`RawOccupiedEntryMut::remove`] / [`RawOccupiedEntryMut::into_mut`]).
+    #[inline]
     pub fn raw_entry_mut<Q>(&mut self, key: &Q) -> RawEntryMut<'_, K, V>
     where
         K: Borrow<Q> + KevyHash + Eq,

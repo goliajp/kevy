@@ -36,9 +36,18 @@ pub(crate) fn kept(v: &Value) -> bool {
 }
 
 /// The value's weight: a kept one from the side word, any other worked out.
-#[inline]
+// every SET weighs the value it replaces and the one it writes: the three
+// string forms are answered here, without the full per-type table
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn value_weight(v: &Value, word: Option<u64>) -> u64 {
-    if kept(v) { word.map_or(0, |w| w & LOW) } else { v.weight() }
+    match v {
+        Value::Str(s) => s.heap_bytes() as u64,
+        Value::Int(_) => 0,
+        Value::ArcBulk(a) => a.len() as u64,
+        v if kept(v) => word.map_or(0, |w| w & LOW),
+        v => v.weight(),
+    }
 }
 
 /// Record `weight` as a value's weight in its side word: kept when the
