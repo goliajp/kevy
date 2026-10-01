@@ -130,14 +130,14 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::ScanPage {
+                slot.agg = crate::message_agg::slot_agg(Agg::ScanPage {
                     shard: next_shard,
                     budget,
                     pattern,
                     type_filter,
                     keys,
                     next: 0,
-                };
+                });
             }
         }
         self.dispatch_targets(conn_id, seq, vec![(next_shard, op)]);
@@ -150,7 +150,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::First(None);
+                slot.agg = None;
             }
         }
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(reply)));

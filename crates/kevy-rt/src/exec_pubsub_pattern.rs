@@ -193,7 +193,7 @@ impl<C: Commands> Shard<C> {
             let proto = c.proto;
             c.pending.push_back(crate::message::PendingSlot {
                 remaining: 1,
-                agg: crate::message::Agg::First(None),
+                agg: None,
                 done: None,
                 proto,
             });

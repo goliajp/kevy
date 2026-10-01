@@ -147,7 +147,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = Agg::SumInt(0);
+                slot.agg = crate::message_agg::slot_agg(Agg::SumInt(0));
             }
         }
     }

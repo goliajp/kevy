@@ -23,7 +23,9 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = reads.len() as u32;
-                slot.agg = Agg::XReadGather { slots: vec![None; reads.len()] };
+                slot.agg = crate::message_agg::slot_agg(Agg::XReadGather {
+                    slots: vec![None; reads.len()],
+                });
             }
         }
         self.dispatch_targets(conn_id, seq, reads);

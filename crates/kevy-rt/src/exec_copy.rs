@@ -174,7 +174,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = 1;
-                slot.agg = agg;
+                slot.agg = crate::message_agg::slot_agg(agg);
             }
         }
     }
@@ -196,12 +196,7 @@ impl<C: Commands> Shard<C> {
     fn fold_copy_reply(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
-            c.pending.push_back(PendingSlot {
-                remaining: 1,
-                agg: Agg::First(None),
-                done: None,
-                proto,
-            });
+            c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
         }
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(reply)));
     }

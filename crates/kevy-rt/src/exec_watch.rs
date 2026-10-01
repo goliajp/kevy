@@ -40,7 +40,7 @@ impl<C: Commands> Shard<C> {
             let proto = c.proto;
             c.pending.push_back(PendingSlot {
                 remaining,
-                agg: Agg::WatchCollect { pairs: Vec::new() },
+                agg: crate::message_agg::slot_agg(Agg::WatchCollect { pairs: Vec::new() }),
                 done: None,
                 proto,
             });
@@ -68,7 +68,7 @@ impl<C: Commands> Shard<C> {
             c.watched.clear();
             c.pending.push_back(PendingSlot {
                 remaining: 1,
-                agg: Agg::First(None),
+                agg: None,
                 done: None,
                 proto: c.proto,
             });
@@ -121,14 +121,14 @@ impl<C: Commands> Shard<C> {
         c.next_seq += 1 + n as u64;
         c.pending.push_back(PendingSlot {
             remaining: 1, // overwritten once we know the group count
-            agg: Agg::ExecPrep { dirty: false, queued, header_seq },
+            agg: crate::message_agg::slot_agg(Agg::ExecPrep { dirty: false, queued, header_seq }),
             done: None,
             proto,
         });
         for _ in 0..n {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
-                agg: Agg::First(None),
+                agg: None,
                 done: None,
                 proto: c.proto,
             });
@@ -348,7 +348,7 @@ impl<C: Commands> Shard<C> {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
                 slot.remaining = remaining;
-                slot.agg = agg;
+                slot.agg = crate::message_agg::slot_agg(agg);
             }
         }
         if is_quit {
