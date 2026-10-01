@@ -1,6 +1,7 @@
-//! Connections to the shared port are spread over the shards in turn, not
-//! by the kernel's hash of each connection's ports: 48 connections on four
-//! shards are 12 on each, every run.
+//! Connections to the shared port go to the shard holding the fewest, not
+//! where the kernel's hash of each connection's ports sends them: 48
+//! connections on four shards are 12 on each, give or take the readiness
+//! probe's own connection while it is still being closed.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -58,5 +59,6 @@ fn shared_port_connections_are_spread_evenly_over_the_shards() {
     }
     let _ = server.kill();
     let _ = server.wait();
-    assert_eq!(per_shard, [12; SHARDS], "{list}");
+    let (lo, hi) = (per_shard.iter().min().unwrap(), per_shard.iter().max().unwrap());
+    assert!(hi - lo <= 1 && per_shard.iter().sum::<usize>() == 48, "{per_shard:?} {list}");
 }

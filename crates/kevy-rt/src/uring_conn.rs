@@ -296,6 +296,7 @@ impl<C: crate::Commands> crate::shard::Shard<C> {
         for (sock, unix) in self.balance.take_adopted() {
             if self.max_clients_per_shard > 0 && self.conns.len() >= self.max_clients_per_shard {
                 self.rejected_connections = self.rejected_connections.saturating_add(1);
+                self.balance.left(self.id);
                 continue;
             }
             self.install_accepted(io, sock, false, unix);

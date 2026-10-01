@@ -248,7 +248,8 @@ impl<C: Commands> Runtime<C> {
             crate::port_claim::refuse_if_listened(self.ip, self.port)?;
         }
         let topo = self.cluster_topo();
-        let accept_turn = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let accept =
+            crate::accept_balance::AcceptShared::new(self.accept_shards.map_or(n, |k| k.min(n)));
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
             let arms_accept = self.accept_shards.is_none_or(|k| id < k);
@@ -401,10 +402,7 @@ impl<C: Commands> Runtime<C> {
                 notify_flags: self.commands.live_runtime_config().notify_flags.unwrap_or_default(),
                 spin_limit: self.spin_limit,
                 arms_accept: self.accept_shards.is_none_or(|n| id < n),
-                balance: crate::accept_balance::AcceptBalance::new(
-                    &accept_turn,
-                    self.accept_shards.map_or(n, |k| k.min(n)),
-                ),
+                balance: crate::accept_balance::AcceptBalance::new(&accept),
                 max_clients_per_shard: if self.max_clients == 0 {
                     0
                 } else {
