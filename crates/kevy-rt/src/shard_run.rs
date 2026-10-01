@@ -60,8 +60,18 @@ impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
+        self.route_of(key).0
+    }
+
+    /// The shard owning `key`, and its keyspace hash when routing computed
+    /// it on the way.
+    // every keyed command routes, and a call costs about as much as the
+    // routing of an untagged key
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn route_of(&self, key: &[u8]) -> (usize, Option<u64>) {
         let routing = if self.cluster.is_some() { Routing::Slots } else { Routing::KevyHash };
-        crate::reduce::shard_of(key, self.nshards, routing)
+        crate::reduce::route_of(key, self.nshards, routing)
     }
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.

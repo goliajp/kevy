@@ -157,11 +157,21 @@ impl<C: Commands> Shard<C> {
                     } => Some(1),
                     _ => None,
                 };
-                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: 0 };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
-                let shard = self.shard_of(&args[idx]);
+                let key = &args[idx];
+                // a nested dispatch (EXEC, scripts) sees its outer command's
+                // hint, which is for other bytes and so does not match
+                let (shard, key_hash) = match self.route_hint {
+                    _ if self.nshards == 1 => (0, 0),
+                    Some(h) if h.is(key) => (h.shard, h.hash.unwrap_or(0)),
+                    _ => {
+                        let (shard, hash) = self.route_of(key);
+                        (shard, hash.unwrap_or(0))
+                    }
+                };
                 // Cluster conns own their shard's slots only: a wrong-shard
                 // key redirects (`-MOVED`) instead of forwarding, keeping a
                 // cluster client's topology honest. `cluster_conn` is only
@@ -180,7 +190,8 @@ impl<C: Commands> Shard<C> {
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb };
+                let meta =
+                    DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb, key_hash };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key

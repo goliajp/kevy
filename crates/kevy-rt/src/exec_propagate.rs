@@ -67,6 +67,7 @@ impl<C: Commands> Shard<C> {
             wake_idx: None,
             key_idx: u8::try_from(key_idx).ok(),
             verb: crate::VerbId::UNKNOWN,
+            key_hash: 0,
         };
         self.post_write_housekeeping(argv, meta);
     }

@@ -319,7 +319,7 @@ impl<C: Commands> Shard<C> {
         slab: &[u8],
         input_buf: &mut Vec<u8>,
         io: &mut KevyMap<u64, UringConn>,
-    ) -> crate::inbox::BatchOutcome {
+    ) -> crate::batch_ends::BatchOutcome {
         if input_buf.is_empty() {
             // Fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which

@@ -197,6 +197,7 @@ impl<C: Commands> Shard<C> {
                 _ => None,
             },
             verb: resolved.verb,
+            key_hash: 0,
         };
         self.reply_scratch.clear();
         self.commands.dispatch_into(&mut self.store, argv, &mut self.reply_scratch);
