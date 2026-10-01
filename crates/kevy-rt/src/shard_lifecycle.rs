@@ -80,6 +80,7 @@ impl<C: Commands> Shard<C> {
             && self.conns.len() >= self.max_clients_per_shard
         {
             self.rejected_connections = self.rejected_connections.saturating_add(1);
+            self.balance.left(self.id);
             drop(sock); // close immediately; client sees EOF/RST.
             return Ok(());
         }

@@ -457,6 +457,9 @@ impl<C: Commands> Shard<C> {
     /// fd).
     pub(crate) fn close_conn(&mut self, conn_id: u64) {
         if let Some(conn) = self.conns.remove(&conn_id) {
+            if !conn.cluster {
+                self.balance.left(self.id);
+            }
             let fd = conn.sock.raw();
             let _ = self.poller.delete(fd);
             self.fd_to_conn.remove(&fd);
