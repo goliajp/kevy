@@ -6,7 +6,7 @@
 
 use kevy_resp::ArgvView;
 
-use crate::message::{Agg, Part, SmallReply};
+use crate::message::{Part, SmallReply};
 use crate::shard::Shard;
 use crate::{Commands, Route};
 
@@ -34,7 +34,7 @@ impl<C: Commands> Shard<C> {
         cluster_conn: bool,
     ) {
         if cluster_conn && is_crossslot_checked(&route) && keys_span_slots(&route, args) {
-            self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+            self.push_pending_single(conn_id, is_quit);
             self.fold(
                 conn_id,
                 seq,

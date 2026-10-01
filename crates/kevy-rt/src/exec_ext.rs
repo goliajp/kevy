@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use crate::Commands;
-use crate::message::{Agg, Inbound, Part, SmallReply};
+use crate::message::{Inbound, Part, SmallReply};
 use crate::shard::Shard;
 
 /// Replies held until their write's messages are acknowledged.
@@ -147,7 +147,7 @@ impl<C: Commands> Shard<C> {
         let reply = conn.output.split_off(out_pre_len);
         conn.next_emit -= 1;
         let seq = conn.next_emit;
-        self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+        self.push_pending_single(conn_id, false);
         let part = Part::Reply(SmallReply::from_vec(reply));
         self.hold_ext(token, Deliver::Local { conn: conn_id, seq, part });
     }
