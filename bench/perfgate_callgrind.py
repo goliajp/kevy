@@ -93,7 +93,9 @@ def one(side, angle, ops, port, work):
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_up(proc, port)
-        if warm_cmd:
+        if warm_cmd in ang.ANGLES:
+            ang.warm(warm_cmd, port, 1)
+        elif warm_cmd:
             ang.run_quiet(ang.bench(port, *warm_cmd.split(), n=100_000, keyspace=100_000, pipe=16))
         c0 = int(pm.info_field(port, "total_commands_processed"))
         control(proc.pid, "-i", "on")
@@ -142,7 +144,8 @@ def run(sides, angles, ops, port):
           "(-c 4 -P 16), counted from the first request to the last")
     with tempfile.TemporaryDirectory(prefix="perfgate-cg-") as d:
         for angle in angles:
-            got = [one(s, angle, ops, port, pathlib.Path(d)) for s in sides]
+            n = min(ops, ang.CALLGRIND_OPS.get(angle, ops))
+            got = [one(s, angle, n, port, pathlib.Path(d)) for s in sides]
             table(angle, *got)
     return 0
 

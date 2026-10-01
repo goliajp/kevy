@@ -58,7 +58,14 @@ CALLGRIND = {
     # with scheduling, so read these per function, not by their total.
     "xget": ("SET k:__rand_int__ v", "GET k:__rand_int__"),
     "xset": (None, "SET k:__rand_int__ v"),
+    # the instruction side of onekey_* and zinterstore, whose throughput
+    # rounds disagree on instructions with identical code
+    "xonekey_get": ("SET key:onekey v", "GET key:onekey"),
+    "xonekey_set": (None, "SET key:onekey v"),
+    "zinterstore": ("zinterstore", "ZINTERSTORE zalg:dst:__rand_int__ 2 zalg:a zalg:b"),
 }
+# angles whose single request costs far more than a GET count fewer
+CALLGRIND_OPS = {"zinterstore": 5_000}
 
 
 def crc16(data):

@@ -31,12 +31,17 @@ def medians(obs, key):
     return statistics.median(vals) if vals else None
 
 
-def angle_verdict(pairs, cfg):
-    """('ok'|'FAIL'|'NOISY', [metrics that decided it])"""
+def angle_verdict(angle, pairs, cfg):
+    """('ok'|'FAIL'|'NOISY', [metrics that decided it]). An angle listed in
+    instr_by_callgrind has its instructions judged by that callgrind angle,
+    not here; noise_by_angle holds the bounds A/A runs measured for it."""
     by = {}
     for m in GATED:
+        if m == "instr" and angle in cfg.get("instr_by_callgrind", {}):
+            continue
         rs = pr.ratios(pairs, m)
-        v = pr.verdict(m, rs, cfg["limits"][m], cfg["noise"][m])
+        noise = cfg.get("noise_by_angle", {}).get(angle, {}).get(m, cfg["noise"][m])
+        v = pr.verdict(m, rs, cfg["limits"][m], noise)
         by.setdefault(v, []).append(m)
     for v in ("FAIL", "NOISY"):
         if v in by:
@@ -56,7 +61,7 @@ def ratio_table(results, cfg):
         ua, ub = medians(a, "util"), medians(b, "util")
         util = "—" if ua is None or ub is None else f"{ua:.2f}|{ub:.2f}"
         fgn = max((o.get("foreign") or 0.0) for o in a + b)
-        v, why = angle_verdict(pairs, cfg)
+        v, why = angle_verdict(angle, pairs, cfg)
         worst = v if v == "FAIL" or (v == "NOISY" and worst == "ok") else worst
         print(f"{angle:<14}" + "".join(f"{c:>15}" for c in cells)
               + f"{util:>12}{fgn * 100:>6.1f}  {v}{' ' + ','.join(why) if why else ''}")
@@ -104,6 +109,14 @@ def report(mode, results, cfg):
     lim = ", ".join(f"{pr.METRICS[m][0]} {'≥' if pr.METRICS[m][1] == 'rate' else '≤'} "
                     f"{cfg['limits'][m]:.2f} (noise {cfg['noise'][m] * 100:.1f}%)" for m in GATED)
     print(f"\n# limits on B / A: {lim}")
+    by_cg = {a: c for a, c in cfg.get("instr_by_callgrind", {}).items()
+             if a in results and not a.startswith("_")}
+    if by_cg:
+        print("# instr/op not judged here for " + ", ".join(by_cg) + "; run `perfgate.sh "
+              "callgrind A B --angles \"" + " ".join(by_cg.values()) + "\"` for it")
+    for angle in results:
+        for m, n in cfg.get("noise_by_angle", {}).get(angle, {}).items():
+            print(f"# {angle}: {pr.METRICS[m][0]} noise {n * 100:.1f}% (measured by A/A runs)")
     for n in notes(results):
         print(f"# note: {n}")
     if mode != "gate":
