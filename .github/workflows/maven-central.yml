@@ -20,6 +20,10 @@ on:
         description: 'Actually publish (irreversible). Unchecked = validate only.'
         type: boolean
         default: false
+      status_ids:
+        description: 'Only report the Portal status of these deployment ids (space-separated); publishes nothing.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -52,8 +56,13 @@ jobs:
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          STATUS_IDS: ${{ inputs.status_ids }}
         run: |
-          if [ "${{ inputs.publish }}" = "true" ]; then
+          if [ -n "$STATUS_IDS" ]; then
+            # word-splitting is the point: one argument per id
+            # shellcheck disable=SC2086
+            bash scripts/publish-maven-central.sh --status $STATUS_IDS
+          elif [ "${{ inputs.publish }}" = "true" ]; then
             bash scripts/publish-maven-central.sh --publish
           else
             bash scripts/publish-maven-central.sh
