@@ -9,7 +9,7 @@
 //! cross-shard hop, or a block-and-park).
 
 use crate::Commands;
-use crate::message::{Agg, DispatchMeta};
+use crate::message::DispatchMeta;
 use crate::shard::Shard;
 use kevy_resp::{ArgvView, RespVersion};
 use kevy_store::Store;
@@ -80,7 +80,7 @@ impl<C: Commands> Shard<C> {
             self.commands.read_denied(args)
         };
         if let Some(err) = denied {
-            self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+            self.push_pending_single(conn_id, is_quit);
             let reply = crate::message::SmallReply::from_vec(err);
             self.fold(conn_id, seq, crate::message::Part::Reply(reply));
             return;
@@ -92,7 +92,7 @@ impl<C: Commands> Shard<C> {
         {
             return;
         }
-        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+        self.push_pending_single(conn_id, is_quit);
         if shard == self.id {
             // Local-but-not-fast-path (a prior cmd is still pending):
             // dispatch straight off the borrowed argv — no owned

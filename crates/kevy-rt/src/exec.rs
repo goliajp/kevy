@@ -98,12 +98,12 @@ impl<C: Commands> Shard<C> {
         // directly (immediate_reply would double-assign and wedge the
         // emit order).
         if is_write && let Some(err) = self.commands.write_denied() {
-            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.push_pending_single(conn_id, false);
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
         }
         if !is_write && let Some(err) = self.commands.read_denied(args) {
-            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.push_pending_single(conn_id, false);
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
         }
@@ -156,6 +156,9 @@ impl<C: Commands> Shard<C> {
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
+                // `Single` owns nothing: forgetting the route spares every
+                // keyed command a call into the enum's drop glue
+                core::mem::forget(route);
                 let key = &args[idx];
                 // a nested dispatch (EXEC, scripts) sees its outer command's
                 // hint, which is for other bytes and so does not match
@@ -179,7 +182,7 @@ impl<C: Commands> Shard<C> {
                 {
                     let slot = kevy_hash::key_hash_slot(&args[idx]);
                     let bytes = topo.moved(slot, shard);
-                    self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                    self.push_pending_single(conn_id, is_quit);
                     self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
                     return;
                 }
@@ -231,6 +234,19 @@ impl<C: Commands> Shard<C> {
     /// `seq - next_emit`. Captures the conn's current `proto` so a
     /// later `materialize` (run when the last sub-reply lands) shapes
     /// the bytes per the proto that was in effect at dispatch time.
+    /// [`Self::push_pending_slot`] for one target's own reply, the slot
+    /// nearly every command takes: no aggregator is built to be dropped.
+    #[inline]
+    pub(crate) fn push_pending_single(&mut self, conn_id: u64, is_quit: bool) {
+        if let Some(c) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
+            let proto = c.proto;
+            c.pending.push_back(PendingSlot { remaining: 1, agg: None, done: None, proto });
+        }
+        if is_quit {
+            self.mark_closing(conn_id);
+        }
+    }
+
     pub(crate) fn push_pending_slot(
         &mut self,
         conn_id: u64,

@@ -69,6 +69,7 @@ mod cmd_view;
 mod cmd_view_reduce;
 mod commands;
 mod commands_ext;
+mod commands_gate;
 mod dispatch;
 mod dispatch_replay;
 mod dispatch_resp3;

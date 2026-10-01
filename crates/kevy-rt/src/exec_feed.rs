@@ -22,7 +22,7 @@ use kevy_resp::CmdError;
 use kevy_resp::Argv;
 
 use crate::Commands;
-use crate::message::{Agg, Op, Part, SmallReply};
+use crate::message::{Op, Part, SmallReply};
 use crate::shard::Shard;
 
 /// Cap on frames one FEED.READ scans (COUNT is clamped to this).
@@ -92,7 +92,7 @@ impl<C: Commands> Shard<C> {
     ) {
         match route {
             crate::Route::FeedShards => {
-                self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                self.push_pending_single(conn_id, is_quit);
                 let n = self.nshards;
                 self.fold(
                     conn_id,
@@ -130,7 +130,7 @@ impl<C: Commands> Shard<C> {
         op: Op,
         is_quit: bool,
     ) {
-        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+        self.push_pending_single(conn_id, is_quit);
         if shard >= self.nshards {
             self.fold(
                 conn_id,
@@ -151,7 +151,7 @@ impl<C: Commands> Shard<C> {
 
     /// Complete a feed slot with a parse error.
     pub(crate) fn reply_feed_error(&mut self, conn_id: u64, seq: u64, msg: &str, is_quit: bool) {
-        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+        self.push_pending_single(conn_id, is_quit);
         self.fold(
             conn_id,
             seq,
