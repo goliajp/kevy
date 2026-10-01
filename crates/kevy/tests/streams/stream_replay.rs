@@ -128,7 +128,10 @@ fn generated_ids_and_idle_claims_replay_as_answered() {
     assert!(pending.contains("c2") && pending.contains("c3"), "{pending}");
     assert!(before[0].starts_with("*50\r\n"), "{}", before[0]);
     assert!(before[4] == ":50\r\n", "{}", before[4]);
-    assert!(!before[2].contains(&dropped), "the dropped entry left the list: {pending}");
+    // a whole field: under load the ids span more milliseconds, and a
+    // short sequence like `T-5` is a substring of a pending `T-51`
+    let field = format!("\r\n{dropped}\r\n");
+    assert!(!before[2].contains(&field), "the dropped entry left the list: {pending}");
 }
 
 /// The idle column of the extended `XPENDING` rows.
