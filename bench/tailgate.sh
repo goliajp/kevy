@@ -94,7 +94,9 @@ if [ -r /proc/stat ]; then
         | grep -Ev "bash |zsh |pgrep|sed |grep |tailgate|suite.py|claude" || true)
     [ -n "$LEFTOVER" ] && { echo "tailgate: REFUSED — leftover bench processes:" >&2
                             echo "$LEFTOVER" >&2; exit 2; }
+    # batch jobs step aside within ~15 s of a benchmark taking the lock
     IDLE0=$(box_idle)
+    for _ in $(seq 60); do [ "$IDLE0" -ge 80 ] && break; IDLE0=$(box_idle); done
     [ "$IDLE0" -ge 80 ] || { echo "tailgate: REFUSED — box busy (idle ${IDLE0}% < 80%)." >&2
                              echo "  A tail-latency reading taken while something else runs is not one." >&2
                              exit 2; }
