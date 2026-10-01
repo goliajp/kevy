@@ -5,7 +5,7 @@
 //! shards at once lands anywhere between half and full. Paced like the
 //! defrag tick: half a millisecond a tick, a few leaves between clock
 //! reads, each segment resting once a lap packs nothing until its leaves
-//! per entry grow by an eighth. The segment a tick starts with rotates, so
+//! per entry grow by an eighth, or until smaller writes have stopped. The segment a tick starts with rotates, so
 //! a large index being packed does not hold back the others.
 
 use std::cell::Cell;
