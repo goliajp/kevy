@@ -230,6 +230,7 @@ impl Commands for KevyCommands {
         crate::commands_ext::reduce(&self.ctx(), argv, chunks, proto)
     }
 
+    #[inline]
     fn write_denied(&self) -> Option<Vec<u8>> {
         // Two-tier verdict: the cached bit answers "certainly
         // allowed" with a single epoch load; only a raised gate walks
@@ -238,38 +239,17 @@ impl Commands for KevyCommands {
         if self.gate_bits() & crate::state::WRITE_GATED == 0 {
             return None;
         }
-        self.state().replication.write_denied_reply(|| {
-            let max_lag_ms = self.state().config().replication.min_replicas_max_lag_ms;
-            self.shard_ctx().healthy_replica_count(max_lag_ms)
-        })
+        self.write_denied_gated()
     }
 
+    #[inline]
     fn read_denied<A: ArgvView + ?Sized>(&self, args: &A) -> Option<Vec<u8>> {
         // READ_GATED = bounded-staleness replica or a replica inside a
-        // full-resync snapshot load. The staleness deadline is a time
-        // condition and the loading flag flips mid-window, so the slow
-        // path re-loads the live values on every gated read.
+        // full-resync snapshot load; nearly every read meets a clear gate
         if self.gate_bits() & crate::state::READ_GATED == 0 {
             return None;
         }
-        // PING / INFO / HELLO stay answerable while gated — health
-        // checks and monitoring must keep working during a snapshot
-        // load (and a stale replica still proves liveness). CLIENT /
-        // CONFIG / SHUTDOWN stay answerable too: an operator must be
-        // able to inspect connections, kill a misbehaving one, or
-        // stop the node while a load is in flight. Matches the verbs
-        // Redis flags loading-exempt.
-        if args.get(0).is_some_and(|v| {
-            v.eq_ignore_ascii_case(b"PING")
-                || v.eq_ignore_ascii_case(b"INFO")
-                || v.eq_ignore_ascii_case(b"HELLO")
-                || v.eq_ignore_ascii_case(b"CLIENT")
-                || v.eq_ignore_ascii_case(b"CONFIG")
-                || v.eq_ignore_ascii_case(b"SHUTDOWN")
-        }) {
-            return None;
-        }
-        self.state().replication.read_denied_reply()
+        self.read_denied_gated(args)
     }
 
     fn on_shard_tick(&self, store: &mut Store) {

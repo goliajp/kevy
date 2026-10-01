@@ -74,7 +74,7 @@ impl<C: Commands> Shard<C> {
             // One shard owns both keys: the whole move is a single atomic Op,
             // exactly Redis's semantics. `{hashtag}`-co-located keys always
             // land here.
-            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.push_pending_single(conn_id, false);
             let op = Op::ListMove { src, dst, from_left, to_left };
             self.dispatch_op(conn_id, seq, src_shard, op);
             return;

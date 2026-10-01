@@ -163,7 +163,7 @@ impl<C: Commands> Shard<C> {
     }
 
     fn fold_bitop_reply(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
-        self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+        self.push_pending_single(conn_id, false);
         self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(reply)));
     }
 }

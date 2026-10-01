@@ -110,7 +110,7 @@ impl<C: Commands> Shard<C> {
                 offsets.len(),
                 self.nshards,
             );
-            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.push_pending_single(conn_id, false);
             self.fold(
                 conn_id,
                 seq,
