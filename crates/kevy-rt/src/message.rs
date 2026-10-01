@@ -271,8 +271,18 @@ pub(crate) enum Op {
 /// in the allocator. `Inline` keeps those entirely on the stack across the
 /// ring; `Heap` carries anything bigger with the old one-alloc semantics.
 pub(crate) enum SmallReply {
-    Inline { len: u8, buf: [u8; 30] },
+    Inline {
+        len: u8,
+        buf: [u8; 30],
+    },
     Heap(Vec<u8>),
+    /// `len` bytes at `off` in the waiting conn's `parked` buffer: a reply
+    /// held in that conn's pending slot behind an earlier one (see
+    /// [`crate::conn::Conn::park`]). Means nothing outside that slot.
+    Parked {
+        off: u32,
+        len: u32,
+    },
 }
 
 impl SmallReply {
@@ -294,11 +304,13 @@ impl SmallReply {
         SmallReply::Heap(v)
     }
 
+    /// The reply's bytes; `parked` is the owning conn's parked buffer.
     #[inline]
-    pub(crate) fn as_slice(&self) -> &[u8] {
+    pub(crate) fn bytes<'a>(&'a self, parked: &'a [u8]) -> &'a [u8] {
         match self {
             SmallReply::Inline { len, buf } => &buf[..*len as usize],
             SmallReply::Heap(v) => v,
+            SmallReply::Parked { off, len } => &parked[*off as usize..(*off + *len) as usize],
         }
     }
 }
@@ -309,13 +321,7 @@ impl SmallReply {
 /// The per-entry `proto` lets a single batch carry cmds from V2 and V3
 /// conns to the same owning shard.
 pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion, DispatchMeta)>;
-/// The matching replies `(conn, seq, part)` sent back as one message.
-/// Each reply carries the request's spent `Argv` husk back to the origin,
-/// which drops it into its own [`kevy_resp::ArgvPool`] — so every shard's
-/// pool level matches its own conn demand by construction, immune to
-/// accept skew (a conn-heavy shard forwards more than it receives, so
-/// recycle-at-the-owner starves its pool while overfilling quiet shards').
-pub(crate) type RespBatch = Vec<(u64, u64, Part, Argv)>;
+pub(crate) use crate::batch_lane::RespBatch;
 
 /// Inter-core message (each core has one inbound queue carrying both).
 pub(crate) enum Inbound {

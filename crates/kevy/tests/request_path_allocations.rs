@@ -84,6 +84,17 @@ fn pipeline(value: &str) -> (Vec<u8>, Vec<u8>) {
     (out, want)
 }
 
+/// One pipelined write of `DEPTH` GETs over the keys [`pipeline`] sets,
+/// each holding `value`, and their replies.
+fn gets(value: &str) -> (Vec<u8>, Vec<u8>) {
+    let (mut out, mut want) = (Vec::new(), Vec::new());
+    for i in 0..DEPTH {
+        out.extend_from_slice(&req(&["GET", &format!("k{}", i % DEPTH.div_ceil(3) * 3)]));
+        want.extend_from_slice(format!("${}\r\n{value}\r\n", value.len()).as_bytes());
+    }
+    (out, want)
+}
+
 /// Send `rounds` pipelines and check every reply, into buffers allocated
 /// before the call.
 fn run(c: &mut std::net::TcpStream, reqs: &[u8], want: &[u8], got: &mut [u8], rounds: usize) {
@@ -135,13 +146,20 @@ fn forwarded_single_key_commands_allocate_nothing() {
     let mut got = vec![0u8; want.len()];
     run(&mut c, &reqs, &want, &mut got, 20);
     let heap = count(&mut c, &reqs, &want, &mut got);
+    // a reply too long for the inline arm, forwarded or not, allocates
+    // nothing either: the owner writes it into the batch's buffer
+    let (reqs, want) = gets(&long);
+    let mut got = vec![0u8; want.len()];
+    run(&mut c, &reqs, &want, &mut got, 20);
+    let long_gets: Vec<u64> = (0..5).map(|_| count(&mut c, &reqs, &want, &mut got)).collect();
 
     println!("allocations per {ROUNDS_PER_WINDOW}×{DEPTH} commands, by window: {inline:?}");
-    println!("with {}-byte values: {heap}", long.len());
+    println!("with {}-byte values: {heap}; GETs only, by window: {long_gets:?}", long.len());
     stop.store(true, Ordering::Relaxed);
     let _ = handle.join();
     let sets = (ROUNDS_PER_WINDOW * DEPTH.div_ceil(3)) as u64;
     assert!(heap >= sets, "the count saw nothing: {heap} < {sets}");
     // a runtime tick lands in a window now and then, never in every one
     assert_eq!(inline.iter().min(), Some(&0), "steady-state commands allocate: {inline:?}");
+    assert_eq!(long_gets.iter().min(), Some(&0), "long replies allocate: {long_gets:?}");
 }

@@ -36,7 +36,7 @@ impl<C: Commands> Shard<C> {
                             Some(PendingSlot { remaining: 1, agg: None, .. })
                         ) =>
                 {
-                    conn.output.extend_from_slice(b.as_slice());
+                    conn.output.extend_from_slice(b.bytes(&conn.parked));
                     conn.pending.pop_front();
                     conn.next_emit += 1;
                     drain_front(conn);

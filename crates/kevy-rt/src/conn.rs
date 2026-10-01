@@ -1,6 +1,6 @@
 //! Per-connection state owned by its origin shard.
 
-use crate::message::PendingSlot;
+use crate::message::{PendingSlot, SmallReply};
 use kevy_resp::{Argv, RespVersion};
 use kevy_sys::Socket;
 use std::collections::{HashSet, VecDeque};
@@ -136,6 +136,12 @@ pub(crate) struct Conn {
     pub(crate) peer: (std::net::Ipv4Addr, u16),
     /// Accept timestamp — the CLIENT LIST / CLIENT INFO `age` field.
     pub(crate) created: std::time::Instant,
+    /// Bytes of replies too long for [`SmallReply`]'s inline arm that
+    /// finished while an earlier command was still out, each held in its
+    /// slot as a [`SmallReply::Parked`] span; `parked_live` counts the
+    /// bytes not yet emitted.
+    pub(crate) parked: Vec<u8>,
+    pub(crate) parked_live: usize,
 }
 
 impl Conn {
@@ -169,9 +175,45 @@ impl Conn {
             cluster: false,
             relayed: false,
             pending_write: false,
+            parked: Vec::new(),
+            parked_live: 0,
         }
     }
+
+    /// `reply` as a pending slot's done reply: inline when short, else
+    /// appended to the parked buffer, so a pipeline waiting behind a
+    /// forwarded command allocates nothing per reply.
+    pub(crate) fn park(&mut self, reply: &[u8]) -> SmallReply {
+        if reply.len() <= 30 || self.parked.len() + reply.len() > u32::MAX as usize {
+            return SmallReply::from_slice(reply);
+        }
+        if self.parked.len() > PARKED_COMPACT_MIN && self.parked.len() > 2 * self.parked_live {
+            self.compact_parked();
+        }
+        let off = self.parked.len() as u32;
+        self.parked.extend_from_slice(reply);
+        self.parked_live += reply.len();
+        SmallReply::Parked { off, len: reply.len() as u32 }
+    }
+
+    /// Drop the emitted bytes from the parked buffer: a conn whose
+    /// pipeline never runs dry never clears it.
+    #[cold]
+    fn compact_parked(&mut self) {
+        let mut kept = Vec::with_capacity(self.parked_live);
+        for slot in &mut self.pending {
+            if let Some(SmallReply::Parked { off, len }) = &mut slot.done {
+                let at = kept.len() as u32;
+                kept.extend_from_slice(&self.parked[*off as usize..(*off + *len) as usize]);
+                *off = at;
+            }
+        }
+        self.parked = kept;
+    }
 }
+
+/// A parked buffer smaller than this is never compacted.
+const PARKED_COMPACT_MIN: usize = 64 << 10;
 
 /// The conn `conn_id`, reached through `hint` (the slot the last lookup
 /// found) when that slot still holds it, else by one probe that refreshes
@@ -199,7 +241,70 @@ pub(crate) fn conn_at<'a, T>(
 
 #[cfg(test)]
 mod tests {
-    use super::conn_at;
+    use super::{Conn, PARKED_COMPACT_MIN, conn_at};
+    use crate::message::PendingSlot;
+    use crate::reduce::drain_front;
+
+    /// A pipeline that never runs dry: replies finish out of order, the
+    /// ones behind an unfinished front park, and the output is still every
+    /// reply in seq order while the parked buffer stays bounded.
+    #[test]
+    fn parked_replies_come_out_in_order_and_the_buffer_stays_bounded() {
+        let sock = kevy_sys::Socket::tcp_listen([127, 0, 0, 1], 0, 1).unwrap();
+        let mut c = Conn::new(sock);
+        let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let reply = |seq: u64| {
+            let len = 31 + (seq * 7919 % 200) as usize;
+            vec![b'a' + (seq % 26) as u8; len]
+        };
+        let (mut pushed, mut done, mut peak) = (0u64, Vec::<bool>::new(), 0usize);
+        for _ in 0..20_000 {
+            for _ in 0..next() % 3 {
+                c.pending.push_back(PendingSlot {
+                    remaining: 1,
+                    agg: None,
+                    done: None,
+                    proto: c.proto,
+                });
+                pushed += 1;
+            }
+            done.resize(pushed as usize, false);
+            let open: Vec<u64> = (c.next_emit..pushed).filter(|&s| !done[s as usize]).collect();
+            if open.is_empty() {
+                continue;
+            }
+            // the front finishes rarely, so the pipeline stays backed up
+            let seq = if next() % 16 == 0 {
+                open[0]
+            } else {
+                open[(next() % open.len() as u64) as usize]
+            };
+            done[seq as usize] = true;
+            let idx = (seq - c.next_emit) as usize;
+            if idx == 0 {
+                c.output.extend_from_slice(&reply(seq));
+                c.pending.pop_front();
+                c.next_emit += 1;
+                drain_front(&mut c);
+            } else {
+                let r = c.park(&reply(seq));
+                c.pending[idx].done = Some(r);
+                c.pending[idx].remaining = 0;
+            }
+            peak = peak.max(c.parked.len());
+            assert!(c.parked.len() <= 2 * c.parked_live + PARKED_COMPACT_MIN + 256);
+        }
+        let want: Vec<u8> = (0..c.next_emit).flat_map(reply).collect();
+        assert_eq!(c.output, want, "emitted out of order or corrupted");
+        assert!(c.next_emit > 1000, "the run emitted little: {}", c.next_emit);
+        assert!(peak > PARKED_COMPACT_MIN, "never compacted: peak {peak}");
+    }
 
     #[test]
     fn a_stale_hint_never_answers_for_another_conn() {

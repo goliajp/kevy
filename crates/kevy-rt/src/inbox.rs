@@ -16,7 +16,6 @@ use std::io;
 use std::sync::atomic::Ordering;
 
 use crate::Commands;
-use crate::batch_ends::PREFETCH_AHEAD;
 use crate::message::{Inbound, Part};
 use crate::shard::Shard;
 
@@ -256,74 +255,14 @@ impl<C: Commands> Shard<C> {
                     // Batched single-key dispatches to this (owning) shard:
                     // exec each locally, reply as one `ResponseBatch` to the
                     // origin.
-                    Inbound::RequestBatch { origin, mut reqs, spare } => {
+                    Inbound::RequestBatch { origin, reqs, spare } => {
                         // Aggregation unit = inner requests, not envelopes.
                         did += reqs.len().saturating_sub(1);
-                        let mut resps = spare;
-                        resps.reserve(reqs.len());
-                        // Fsync-only: the batch aggregates INDEPENDENT
-                        // commands from different conns — marking them
-                        // atomic would promise more than each origin did.
-                        let w0 = self.always_hold_w0();
-                        self.aof_begin_fsync_window();
-                        // a request's bucket is fetched while the ones
-                        // PREFETCH_AHEAD before it run, so its probe finds
-                        // the line in cache rather than waiting on memory
-                        for r in reqs.iter().take(PREFETCH_AHEAD) {
-                            self.prefetch_request(&r.2, r.4);
-                        }
-                        for i in 0..reqs.len() {
-                            if let Some(r) = reqs.get(i + PREFETCH_AHEAD) {
-                                self.prefetch_request(&r.2, r.4);
-                            }
-                            let (conn, seq, ref mut argv, proto, meta) = reqs[i];
-                            let argv = std::mem::take(argv);
-                            let part = self.run_dispatch(&argv, proto, meta);
-                            let Some(part) = self.part_unless_held(origin, w0, conn, seq, part)
-                            else {
-                                continue;
-                            };
-                            // The spent argv husk rides home with the reply;
-                            // the origin pools it (see `RespBatch`).
-                            resps.push((conn, seq, part, argv));
-                        }
-                        reqs.clear();
-                        // fsync the batch's forwarded writes before replying.
-                        if DIRECT_FLUSH {
-                            self.aof_end_group()?;
-                        } else {
-                            self.aof_end_group_logged();
-                        }
-                        let batch = Inbound::ResponseBatch { resps, spare: reqs };
-                        self.send_or_hold_response(w0, origin, batch);
+                        self.run_request_batch::<DIRECT_FLUSH>(origin, reqs, spare)?;
                     }
-                    // Batched replies: fold each by seq, then flush each
-                    // touched conn once (dedup — pipelined replies share a
-                    // conn).
-                    Inbound::ResponseBatch { mut resps, spare } => {
-                        did += resps.len().saturating_sub(1);
-                        self.xshard_inflight =
-                            self.xshard_inflight.saturating_sub(resps.len() as u64);
-                        let mut to_flush = std::mem::take(&mut self.request_batch[src].to_flush);
-                        for (conn, seq, part, husk) in resps.drain(..) {
-                            self.argv_pool.put(husk);
-                            self.fold(conn, seq, part);
-                            if DIRECT_FLUSH {
-                                if !to_flush.contains(&conn) {
-                                    to_flush.push(conn);
-                                }
-                            } else {
-                                // See the `Inbound::Response`
-                                // branch above for the rationale.
-                                self.mark_pending_write_dirty(conn);
-                            }
-                        }
-                        self.request_batch[src].recycle(resps, spare);
-                        for &conn in &to_flush {
-                            self.flush_conn(conn)?;
-                        }
-                        to_flush.clear();
-                        self.request_batch[src].to_flush = to_flush;
+                    Inbound::ResponseBatch { resps, spare } => {
+                        did += resps.items.len().saturating_sub(1);
+                        self.fold_response_batch::<DIRECT_FLUSH>(src, resps, spare)?;
                     }
                     // Fire-and-forget batched pub/sub delivery; appended
                     // subscriber output is flushed via `flush_dirty` (epoll)
