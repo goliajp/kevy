@@ -170,6 +170,7 @@ mod replication_io;
 mod replication_pump;
 mod replication_secure;
 mod replication_trace;
+mod reply_batch;
 mod reshard;
 mod restore_gate;
 mod route;

@@ -97,8 +97,7 @@ impl<C: Commands> Shard<C> {
             // Local-but-not-fast-path (a prior cmd is still pending):
             // dispatch straight off the borrowed argv — no owned
             // materialise needed.
-            let part = self.run_dispatch(args, proto, meta);
-            self.fold_unless_held(conn_id, seq, part);
+            self.run_local_behind(conn_id, seq, args, proto, meta);
         } else {
             self.forward_to(shard, conn_id, seq, args, proto, meta);
         }
