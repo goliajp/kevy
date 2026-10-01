@@ -158,10 +158,10 @@ impl Store {
             let (victim, visited) = crate::evict::sample_pick_at(
                 self,
                 policy,
-                |e| {
+                |e, weight| {
                     spillable_class(&e.value)
-                        && e.weight() >= MIN_SPILL_BYTES
-                        && (cap == 0 || e.weight() <= cap)
+                        && weight >= MIN_SPILL_BYTES
+                        && (cap == 0 || weight <= cap)
                 },
                 visit_bound,
                 start,
@@ -191,6 +191,17 @@ impl Store {
         demoted
     }
 
+    /// The record a live entry at `slot` would spill as, when it fits the
+    /// spill cap (`0`: no cap) by its weight, key included.
+    fn spill_payload(&self, slot: usize, key_heap: u64, cap: u64) -> Option<(Vec<u8>, u8)> {
+        let (_, e) = self.map.slot(slot)?;
+        let weight = key_heap + crate::entry_weight::value_weight(&e.value, self.map.aux(slot));
+        if e.is_expired(self.cached_clock, self.cached_ns) || (cap != 0 && weight > cap) {
+            return None;
+        }
+        tier_codec::encode(&e.value)
+    }
+
     /// Swap `key`'s live value for a [`ColdRef`] stub, appending the
     /// codec bytes to the vlog. Re-stamps `Entry::weight` to the stub's
     /// actual footprint, applies the `used_memory` delta, preserves
@@ -203,17 +214,9 @@ impl Store {
             Some(t) => t.max_spill,
             None => return false,
         };
-        let Some((payload, tag)) = ({
-            match self.map.get(key) {
-                Some(e)
-                    if !e.is_expired(self.cached_clock, self.cached_ns)
-                        && (cap == 0 || e.weight() <= cap) =>
-                {
-                    tier_codec::encode(&e.value)
-                }
-                _ => None,
-            }
-        }) else {
+        let key_heap = key_heap_bytes_for(key);
+        let Some(slot) = self.map.find_slot(key) else { return false };
+        let Some((payload, tag)) = self.spill_payload(slot, key_heap, cap) else {
             return false;
         };
         let Some(t) = self.tier.as_mut() else { return false };
@@ -222,10 +225,9 @@ impl Store {
             // loop counts this as a miss. Never a silent value drop.
             return false;
         };
-        let key_heap = key_heap_bytes_for(key);
-        let e = self.map.get_mut_quiet(key).expect("probed above");
-        let old_w = e.weight();
-        let value_w = old_w.saturating_sub(key_heap);
+        // the vlog append moved nothing in the table: `slot` still holds the key
+        let (e, word) = self.map.entry_word_quiet(slot).expect("probed above");
+        let value_w = crate::entry_weight::value_weight(&e.value, word.as_deref().copied());
         let stub = ColdRef {
             offset: vref.offset,
             file_id: vref.file_id,
@@ -235,7 +237,9 @@ impl Store {
             touched: 0,
         };
         let old_value = core::mem::replace(&mut e.value, Value::Cold(stub));
-        e.set_weight(key_heap);
+        if let Some(word) = word {
+            crate::entry_weight::stamp(word, false, 0);
+        }
         crate::apply_delta(&mut self.used_memory, -(value_w as i64));
         let t = self.tier.as_mut().expect("still enabled");
         t.demotions_total += 1;
@@ -267,12 +271,19 @@ impl Store {
             self.share_shape(r.names());
         }
         let key_heap = key_heap_bytes_for(key);
-        let new_w = key_heap + value.weight();
-        let e = self.map.get_mut_quiet(key).expect("probed above");
+        // a cold stub weighs its key alone, so the value's whole weight is new
+        let vw = value.weight();
+        let is_kept = crate::entry_weight::kept(&value);
+        if is_kept {
+            self.keep_words();
+        }
+        let slot = self.map.find_slot(key).expect("probed above");
+        let (e, word) = self.map.entry_word_quiet(slot).expect("probed above");
         e.value = value;
-        let delta = new_w as i64 - e.weight() as i64;
-        e.set_weight(new_w);
-        crate::apply_delta(&mut self.used_memory, delta);
+        if let Some(word) = word {
+            crate::entry_weight::stamp(word, is_kept, vw);
+        }
+        crate::apply_delta(&mut self.used_memory, vw as i64);
         if cref.is_seg() {
             // The segment record is stranded now; the vlog's books
             // were never involved.

@@ -8,13 +8,15 @@
 
 use kevy_hash::KevyHash;
 
+use crate::entry_weight::{kept, kept_half, set_clock, shift, stamp, value_weight};
 use crate::{Entry, SmallBytes, Store, apply_delta, evict, key_heap_bytes_for};
 
 impl Store {
-    /// Insert a fresh entry, replacing any prior. Stamps `entry.weight` from
-    /// the live value and key, then updates `used_memory` by the weight swap
-    /// and by whatever the keyspace table grew to make room.
-    pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
+    /// Insert a fresh entry, replacing any prior. Records the value's weight
+    /// (and, under an eviction policy, its clock) in the slot's side word,
+    /// then updates `used_memory` by the weight swap and by whatever the
+    /// keyspace table grew to make room.
+    pub(crate) fn insert_entry(&mut self, key: SmallBytes, entry: Entry) -> Option<Entry> {
         // New-key event capture: the owned key copy is only paid when
         // the capture flag is on (server with `n` notifications).
         let new_key_copy =
@@ -23,26 +25,34 @@ impl Store {
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
         let key_heap = key.heap_bytes() as u64;
-        entry.set_weight(key_heap + entry.value.weight());
-        if self.clock_on() {
+        let vw = entry.value.weight();
+        let is_kept = kept(&entry.value);
+        let clock = self.clock_on().then(|| {
             self.tick_clock();
-            entry.set_lru_clock(self.clock_counter as u32);
+            self.clock_counter as u32
+        });
+        if is_kept || clock.is_some() {
+            self.keep_words();
         }
-        let new_w = entry.weight();
+        let new_w = key_heap + vw;
         let new_has_ttl = entry.expire_at_ns.is_some();
         let cap = self.map.capacity();
-        let prev = self.map.insert(key, entry);
+        let (slot, prev) = self.map.insert_slot(key, entry);
         if self.map.capacity() != cap {
             self.charge_keyspace_growth();
         }
-        match &prev {
-            Some(old) => {
+        // an overwrite keeps the slot's word, which still holds the
+        // displaced value's weight
+        let old_w =
+            prev.as_ref().map(|old| key_heap + value_weight(&old.value, self.map.aux(slot)));
+        self.stamp_slot(slot, is_kept, vw, clock);
+        match (&prev, old_w) {
+            (Some(old), Some(w)) => {
                 // A displaced cold stub's vlog record dies with it.
                 self.tier_note_dead(key_heap, &old.value);
-                self.used_memory =
-                    self.used_memory.saturating_sub(old.weight()).saturating_add(new_w);
+                self.used_memory = self.used_memory.saturating_sub(w).saturating_add(new_w);
             }
-            None => self.used_memory = self.used_memory.saturating_add(new_w),
+            _ => self.used_memory = self.used_memory.saturating_add(new_w),
         }
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
         self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
@@ -53,6 +63,18 @@ impl Store {
             self.notify_events.push((crate::notify::KeyspaceEvent::New, k));
         }
         prev
+    }
+
+    /// Record a value's weight, and the access clock when one runs, in the
+    /// side word of the entry at `slot`.
+    #[inline]
+    fn stamp_slot(&mut self, slot: usize, is_kept: bool, weight: u64, clock: Option<u32>) {
+        if let Some(word) = self.map.word_mut(slot) {
+            stamp(word, is_kept, weight);
+            if let Some(c) = clock {
+                set_clock(word, c);
+            }
+        }
     }
 
     /// Remove a key, returning the displaced entry (`None` if absent).
@@ -72,28 +94,44 @@ impl Store {
     /// it) alive under another key. Same accounting/hfttl behaviour.
     pub(crate) fn take_entry_keepalive(&mut self, key: &[u8]) -> Option<Entry> {
         self.clear_hash_key_ttls(key);
-        let old = self.map.remove(key)?;
-        self.used_memory = self.used_memory.saturating_sub(old.weight());
+        let (old, word) = self.map.remove_with_word(key)?;
+        let old_w = key_heap_bytes_for(key) + value_weight(&old.value, word);
+        self.used_memory = self.used_memory.saturating_sub(old_w);
         if old.expire_at_ns.is_some() {
             self.adjust_expires(-1);
         }
         Some(old)
     }
 
-    /// Apply a signed weight delta to `key`'s cached `Entry::weight` AND to
-    /// the shard-wide `used_memory`. Used by in-place collection mutators
-    /// (HSET adding a field, LPUSH adding an item, …) so we account in O(1)
-    /// without re-walking the container.
+    /// Apply a signed weight delta to `key`'s kept weight AND to the
+    /// shard-wide `used_memory`. Used by in-place collection mutators (HSET
+    /// adding a field, LPUSH adding an item, …) so we account in O(1)
+    /// without re-walking the container. Only a value whose weight is kept
+    /// moves by a delta: a small inline one weighs nothing either side of a
+    /// change, and one that changes form is reweighed from scratch.
     pub(crate) fn account_delta(&mut self, key: &[u8], delta: i64) {
         if delta == 0 {
             return;
         }
-        if let Some(e) = self.map.get_mut_quiet(key) {
-            e.add_to_weight(delta);
+        if let Some(slot) = self.map.find_slot(key) {
+            debug_assert!(self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value)), "{key:?}");
+            self.keep_words();
+            if let Some(word) = self.map.word_mut(slot) {
+                shift(word, delta);
+            }
         }
         apply_delta(&mut self.used_memory, delta);
         if delta > 0 {
             self.update_peak();
+        }
+    }
+
+    /// Keep side words from now on; the lane, allocated once, is charged
+    /// with the table it belongs to.
+    #[inline]
+    pub(crate) fn keep_words(&mut self) {
+        if self.map.keep_words() {
+            self.charge_keyspace_growth();
         }
     }
 
@@ -108,18 +146,37 @@ impl Store {
         apply_delta(&mut self.used_memory, delta);
     }
 
-    /// Recompute `weight` for the entry at `key` from its current value +
-    /// key, then propagate the delta to `used_memory`. Use after a wholesale
-    /// in-place value swap (SET / APPEND / INCRBYFLOAT) where the prior
-    /// `Value`'s weight was already cached on the entry.
+    /// Recompute the weight of the collection at `key` after an in-place
+    /// change, then propagate the delta to `used_memory`. The weight it had
+    /// is the kept half of its side word (zero for a small inline one).
     pub(crate) fn reweigh_entry(&mut self, key: &[u8]) {
-        let key_heap = key_heap_bytes_for(key);
-        let Some(e) = self.map.get_mut_quiet(key) else {
+        self.reweigh(key, None);
+    }
+
+    /// [`Self::reweigh_entry`] for a value whose weight is worked out when
+    /// asked (a string rewritten in place): the caller measured `old` before
+    /// the rewrite, since nothing kept it.
+    pub(crate) fn reweigh_scalar(&mut self, key: &[u8], old: u64) {
+        self.reweigh(key, Some(old));
+    }
+
+    fn reweigh(&mut self, key: &[u8], old: Option<u64>) {
+        let Some(slot) = self.map.find_slot(key) else {
             return;
         };
-        let new_w = key_heap + e.value.weight();
-        let delta = new_w as i64 - e.weight() as i64;
-        e.set_weight(new_w);
+        let is_kept = self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value));
+        if is_kept {
+            self.keep_words();
+        }
+        let Some((e, word)) = self.map.entry_word_quiet(slot) else {
+            return;
+        };
+        let vw = e.value.weight();
+        let was = old.unwrap_or_else(|| kept_half(word.as_deref().copied()));
+        if let Some(word) = word {
+            stamp(word, is_kept, vw);
+        }
+        let delta = vw as i64 - was as i64;
         apply_delta(&mut self.used_memory, delta);
         if delta > 0 {
             self.update_peak();
@@ -203,10 +260,7 @@ impl Store {
             return None;
         }
         if self.clock_on() {
-            let (c, policy) = self.tick_touch();
-            let e = self.map.entry_at_quiet(slot)?;
-            evict::touch_on_access(e, policy, c);
-            return Some(&*e);
+            self.touch_slot(slot);
         }
         self.map.slot(slot).map(|(_, e)| e)
     }
@@ -223,12 +277,26 @@ impl Store {
             return None;
         }
         if self.clock_on() {
-            let (c, policy) = self.tick_touch();
-            let e = self.map.entry_at_mut(key, slot)?;
-            evict::touch_on_access(e, policy, c);
-            return Some(e);
+            self.touch_slot(slot);
         }
         self.map.entry_at_mut(key, slot)
+    }
+
+    /// [`Self::live_entry_mut`] with the entry's side word, for a write that
+    /// replaces the value and so must know what the old one weighed.
+    pub(crate) fn live_entry_word_mut(
+        &mut self,
+        key: &[u8],
+    ) -> Option<(&mut Entry, Option<&mut u64>)> {
+        let slot = self.map.find_slot(key)?;
+        if self.slot_expired(slot) {
+            self.drop_expired(key);
+            return None;
+        }
+        if self.clock_on() {
+            self.touch_slot(slot);
+        }
+        self.map.entry_word_at_mut(key, slot)
     }
 
     /// Whether the entry at `slot` carries a TTL that has passed.
@@ -236,6 +304,16 @@ impl Store {
     fn slot_expired(&self, slot: usize) -> bool {
         let (uc, cn) = (self.cached_clock, self.cached_ns);
         self.map.slot(slot).is_some_and(|(_, e)| e.expire_at_ns.is_some() && e.is_expired(uc, cn))
+    }
+
+    /// Stamp the access clock on a live hit's side word.
+    #[inline]
+    fn touch_slot(&mut self, slot: usize) {
+        let (c, policy) = self.tick_touch();
+        self.keep_words();
+        if let Some(word) = self.map.word_mut(slot) {
+            evict::touch_on_access(word, policy, c);
+        }
     }
 
     /// Advance the access clock for a live hit; the value and policy to

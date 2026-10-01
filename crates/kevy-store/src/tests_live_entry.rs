@@ -50,7 +50,7 @@ fn a_hit_touches_the_access_clock_and_a_miss_does_not() {
     assert_eq!(s.clock_counter, tick, "a miss does not advance the clock");
     assert!(s.get(b"a").is_ok());
     assert_eq!(s.clock_counter, tick + 1);
-    let lru = |s: &Store, k: &[u8]| s.map.get(k).map(crate::Entry::lru_clock);
+    let lru = |s: &Store, k: &[u8]| s.clock_of(k);
     assert_eq!(lru(&s, b"a"), Some((tick + 1) as u32), "the read stamped its entry");
     assert_eq!(s.incr_by(b"b", 1), Ok(2));
     assert_eq!(lru(&s, b"b"), Some((tick + 2) as u32), "so did the read-modify-write");

@@ -301,11 +301,6 @@ pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
 /// ```
 pub const ENTRY_OVERHEAD: u64 = 96;
 
-#[inline]
-pub(crate) fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
-    (capacity as u64).saturating_mul(per_slot)
-}
-
 /// What a new hash field adds to its hash's weight besides the table: the
 /// allocator's footprint of the field name's heap and of the value's heap
 /// (`value_heap` bytes), each 0 when it is short enough to sit inline in

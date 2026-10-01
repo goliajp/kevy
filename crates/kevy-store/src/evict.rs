@@ -26,6 +26,7 @@
 //! assert!(s.used_memory() <= s.maxmemory());
 //! ```
 
+use crate::entry_weight::{clock as word_clock, set_clock};
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::{Entry, EvictionPolicy, Store, now_ns, remaining_ms};
@@ -65,19 +66,19 @@ const LFU_LOG_FACTOR: u32 = 10;
 /// Maximum effective counter value (`MAX_LFU_COUNTER` in Redis is 255 too).
 const LFU_COUNTER_MAX: u8 = 255;
 
-/// Per-policy access touch. Cheap when policy is Random/TTL/NoEviction
-/// (single branch, no memory write); writes the LRU clock or steps the LFU
-/// counter otherwise.
+/// Per-policy access touch on an entry's side word. Cheap when policy is
+/// Random/TTL/NoEviction (single branch, no memory write); writes the LRU
+/// clock or steps the LFU counter otherwise.
 #[inline]
-pub(crate) fn touch_on_access(e: &mut Entry, policy: EvictionPolicy, clock: u32) {
+pub(crate) fn touch_on_access(word: &mut u64, policy: EvictionPolicy, clock: u32) {
     if policy.uses_lru() {
-        e.set_lru_clock(clock);
+        set_clock(word, clock);
     } else if policy.uses_lfu() {
-        let cur = e.lru_clock();
+        let cur = word_clock(Some(*word));
         let counter = cur as u8;
         let next = lfu_log_incr(counter, clock);
         // preserve the LFU 16-bit decay-tick (upper bits), update only counter.
-        e.set_lru_clock((cur & 0xFFFF_FF00) | u32::from(next));
+        set_clock(word, (cur & 0xFFFF_FF00) | u32::from(next));
     }
 }
 
@@ -145,9 +146,12 @@ pub(crate) fn evict_until_under_limit(store: &mut Store) -> usize {
 fn evict_one(store: &mut Store) -> bool {
     let policy = store.eviction_policy;
     let volatile_only = policy.is_volatile();
-    let Some(victim) =
-        sample_pick_with(store, policy, |e| !volatile_only || e.expire_at_ns.is_some(), usize::MAX)
-    else {
+    let Some(victim) = sample_pick_with(
+        store,
+        policy,
+        |e, _| !volatile_only || e.expire_at_ns.is_some(),
+        usize::MAX,
+    ) else {
         return false;
     };
     if store.remove_entry(&victim).is_some() {
@@ -168,7 +172,7 @@ fn evict_one(store: &mut Store) -> bool {
 /// must not re-spill what is already cold. Returns `None` when no
 /// eligible candidate exists (empty map, volatile-* with zero
 /// TTL-bearing keys, or an all-cold sample window).
-pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
+pub(crate) fn sample_pick_with<F: Fn(&Entry, u64) -> bool>(
     store: &Store,
     policy: EvictionPolicy,
     eligible: F,
@@ -186,7 +190,8 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
 
 /// [`sample_pick_with`] from bucket `start`: the pick, and how many
 /// entries the walk visited.
-pub(crate) fn sample_pick_at<F: Fn(&Entry) -> bool>(
+/// `eligible` is asked with the entry and its weight (key and value).
+pub(crate) fn sample_pick_at<F: Fn(&Entry, u64) -> bool>(
     store: &Store,
     policy: EvictionPolicy,
     eligible: F,
@@ -211,15 +216,19 @@ pub(crate) fn sample_pick_at<F: Fn(&Entry) -> bool>(
     // at microseconds; a shifted start each call still finds scattered
     // hot candidates across successive ticks.
     let visit_cap = cap.saturating_mul(2).min(visit_bound);
-    let primary = store.map.iter_from_bucket(start % cap);
-    let wrap = store.map.iter_from_bucket(0);
+    // the live entries from bucket `start` round to it again, each with
+    // its slot, whose side word holds the access clock
+    let ring = (start % cap..cap)
+        .chain(0..cap)
+        .filter_map(|i| store.map.slot(i).map(|(k, e)| (k, e, store.map.aux(i))));
     let mut visited = 0;
-    for (k, e) in primary.chain(wrap).take(visit_cap) {
+    for (k, e, word) in ring.take(visit_cap) {
         visited += 1;
-        if matches!(e.value, crate::value::Value::Cold(_)) || !eligible(e) {
+        let weight = k.heap_bytes() as u64 + crate::entry_weight::value_weight(&e.value, word);
+        if matches!(e.value, crate::value::Value::Cold(_)) || !eligible(e, weight) {
             continue;
         }
-        let score = score_entry(e, policy, now, clock);
+        let score = score_entry(e, word, policy, now, clock);
         if best.as_ref().is_none_or(|(_, bs)| score < *bs) {
             best = Some((k.to_vec(), score));
         }
@@ -235,14 +244,16 @@ pub(crate) fn sample_pick_at<F: Fn(&Entry) -> bool>(
 /// callers can compare directly; we never negate-overflow because none of
 /// the inputs reach i64::MIN.
 #[inline]
-fn score_entry(e: &Entry, policy: EvictionPolicy, now: u64, clock: u32) -> i64 {
+fn score_entry(e: &Entry, word: Option<u64>, policy: EvictionPolicy, now: u64, clock: u32) -> i64 {
     match policy {
-        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => i64::from(e.lru_clock()),
-        EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => i64::from(e.lru_clock() & 0xFF),
+        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => i64::from(word_clock(word)),
+        EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => {
+            i64::from(word_clock(word) & 0xFF)
+        }
         EvictionPolicy::AllKeysRandom | EvictionPolicy::VolatileRandom => {
             // Stamp each sampled entry with a fresh splitmix bit so the
             // "lowest score" rule picks uniformly at random.
-            i64::from(splitmix32(clock ^ e.lru_clock()))
+            i64::from(splitmix32(clock ^ word_clock(word)))
         }
         EvictionPolicy::VolatileTtl => match e.expire_at_ns {
             Some(ns) => remaining_ms(ns, now) as i64,

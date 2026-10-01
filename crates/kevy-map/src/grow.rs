@@ -26,6 +26,9 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 .expect("a capacity that overflows usize could not have been allocated")
         };
         let mut new_table = Self::alloc_table(new_cap);
+        if self.aux.is_some() {
+            new_table.aux = Some(crate::aux::lane(new_cap));
+        }
         // Move every live entry over. After ptr::read'ing a slot we mark its
         // metadata DELETED, so any subsequent Drop (incl. panic unwind) won't
         // double-free; the old allocation will free with all-DELETED metadata.
@@ -46,19 +49,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             if self.mmap_backed && (i * slot_bytes) - released >= RELEASE_STEP {
                 released = self.release_moved(released, i * slot_bytes);
             }
-            // SAFETY: i < old_cap ⇒ metadata in-bounds.
-            let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
-            if meta & 0x80 == 0 {
-                // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
-                // so this byte is never re-read as occupied.
-                let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
-                // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
-                // immediately is what keeps the `ptr::read` above from being a double move:
-                // the byte is never seen as occupied again.
-                unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
-                let hash = k.kevy_hash();
-                new_table.insert_known_unique(hash, k, v);
-            }
+            self.move_slot(i, &mut new_table);
         }
         // All occupied entries are now in new_table; the old self has no live slots.
         self.occupied = 0;
@@ -66,6 +57,28 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         core::mem::swap(self, &mut new_table);
         // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
         // for previously-empty slots) ⇒ Drop walks but touches no slots.
+    }
+
+    /// Move the entry at slot `i`, if any, and its side word into `to`.
+    #[inline]
+    fn move_slot(&mut self, i: usize, to: &mut Self) {
+        // SAFETY: i < cap ⇒ metadata in-bounds.
+        let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
+        if meta & 0x80 != 0 {
+            return;
+        }
+        // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
+        // so this byte is never re-read as occupied.
+        let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
+        // SAFETY: `i < cap`, so this is inside the metadata range. Writing DELETED
+        // immediately is what keeps the `ptr::read` above from being a double move:
+        // the byte is never seen as occupied again.
+        unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
+        let hash = k.kevy_hash();
+        let at = to.insert_known_unique(hash, k, v);
+        if let (Some(old), Some(new)) = (&self.aux, &mut to.aux) {
+            new[at] = old[i];
+        }
     }
 
     /// Hand back the huge pages of slot bytes `[released, moved)` rounded
@@ -86,29 +99,29 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// Insert under the assumption that the key isn't already present (used
     /// by `grow` to repopulate the new table). Skips the duplicate-key
     /// check. Uses a 16-slot SIMD group scan to find the first EMPTY.
-    fn insert_known_unique(&mut self, hash: u64, k: K, v: V) {
+    fn insert_known_unique(&mut self, hash: u64, k: K, v: V) -> usize {
         let h2v = h2(hash);
-        let mut group_start = (hash as usize) & self.mask;
+        let mut group_start = (hash as usize) & self.mask();
         loop {
             // SAFETY: metadata is `cap + GROUP_WIDTH` bytes; group_start
             // is in `[0, cap)`; the load reads 16 bytes which lie inside the
             // buffer thanks to the mirror tail.
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 self.set_meta(slot, h2v);
                 // SAFETY: slot < cap.
                 unsafe {
                     (*self.slots_ptr.as_ptr().add(slot)).write((k, v));
                 }
                 self.occupied += 1;
-                return;
+                return slot;
             }
             // Linear probing by GROUP_WIDTH (tried triangular — at our 7/8
             // load factor and group-scan-aware probe, linear wins on cache
             // locality; triangular's anti-clustering only pays off at higher
             // load factors than we run).
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 }
