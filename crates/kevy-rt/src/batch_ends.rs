@@ -98,13 +98,13 @@ impl<C: Commands> Shard<C> {
     #[inline]
     pub(crate) fn prefetch_request(&self, argv: &crate::Argv, meta: DispatchMeta) {
         match (meta.key_hash, meta.key_idx) {
-            (Some(h), _) => self.store.prefetch_for_hash(h),
-            (None, Some(i)) => {
+            (0, Some(i)) => {
                 if let Some(key) = argv.get(usize::from(i)) {
                     self.store.prefetch_for_key(key);
                 }
             }
-            (None, None) => {}
+            (0, None) => {}
+            (h, _) => self.store.prefetch_for_hash(h),
         }
     }
 }
