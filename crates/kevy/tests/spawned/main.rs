@@ -13,6 +13,7 @@ mod failover_port_base;
 mod global_index_restart;
 mod goredis_redispy_battle;
 mod jedis_stackex_battle;
+mod key_beyond_first_arg;
 mod port_claim;
 mod scope_misdirected_client_port;
 mod secure_clients;

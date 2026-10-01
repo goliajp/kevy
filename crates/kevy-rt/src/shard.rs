@@ -337,6 +337,9 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) arms_accept: bool,
     /// The turn that spreads shared-port connections over the accepting shards.
     pub(crate) balance: crate::accept_balance::AcceptBalance,
+    /// The route the batch loop worked out for the command it is about to
+    /// run, so routing it costs nothing a second time.
+    pub(crate) route_hint: Option<crate::batch_ends::RouteHint>,
     /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.
     pub(crate) max_clients_per_shard: usize,
     /// [`crate::CLIENT_INPUT_HARD_LIMIT`], after the debug-env override.

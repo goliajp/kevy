@@ -448,6 +448,7 @@ impl<C: Commands> Shard<C> {
                         wake_idx: None,
                         key_idx,
                         verb: crate::VerbId::UNKNOWN,
+                        key_hash: 0,
                     };
                     self.post_write_housekeeping(&argv, meta);
                 }

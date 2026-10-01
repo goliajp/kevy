@@ -126,19 +126,7 @@ fn crc16_bytewise(bytes: &[u8]) -> u16 {
 /// ```
 #[inline]
 pub fn key_hash_slot(key: &[u8]) -> u16 {
-    crc16(hashtag(key)) & 0x3FFF
-}
-
-#[inline]
-fn hashtag(key: &[u8]) -> &[u8] {
-    let Some(open) = key.iter().position(|&b| b == b'{') else {
-        return key;
-    };
-    let rest = &key[open + 1..];
-    match rest.iter().position(|&b| b == b'}') {
-        Some(close) if close > 0 => &rest[..close],
-        _ => key,
-    }
+    crc16(crate::hashtag(key).unwrap_or(key)) & 0x3FFF
 }
 
 #[cfg(test)]
@@ -175,13 +163,14 @@ mod tests {
         // {user1000}.following / .followers share the slot of "user1000".
         assert_eq!(key_hash_slot(b"{user1000}.following"), key_hash_slot(b"{user1000}.followers"));
         assert_eq!(key_hash_slot(b"{user1000}.following"), key_hash_slot(b"user1000"));
+        let tag = |k: &'static [u8]| crate::hashtag(k);
         // Empty {} → whole key is hashed.
-        assert_eq!(hashtag(b"foo{}{bar}"), b"foo{}{bar}");
+        assert_eq!(tag(b"foo{}{bar}"), None);
         // Only the first { … first } after it counts.
-        assert_eq!(hashtag(b"foo{{bar}}zap"), b"{bar");
-        assert_eq!(hashtag(b"foo{bar}{zap}"), b"bar");
+        assert_eq!(tag(b"foo{{bar}}zap"), Some(&b"{bar"[..]));
+        assert_eq!(tag(b"foo{bar}{zap}"), Some(&b"bar"[..]));
         // Unclosed brace → whole key.
-        assert_eq!(hashtag(b"foo{bar"), b"foo{bar");
-        assert_eq!(hashtag(b"no_braces"), b"no_braces");
+        assert_eq!(tag(b"foo{bar"), None);
+        assert_eq!(tag(b"no_braces"), None);
     }
 }
