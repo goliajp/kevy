@@ -118,6 +118,10 @@ def observe(angle, binary, env, topo, rundir, windows, secs):
         for argv, threads in ang.generators(angle, PORT, topo["srv_threads"], topo["cli_threads"]):
             gens.append((subprocess.Popen(argv, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.DEVNULL), threads))
+            # The shared port deals connections to the shards in turn; one
+            # generator's connections all made before the next one starts
+            # gives every round the same deal, so the same share forwarded.
+            time.sleep(ang.CONNECT_GAP_SECS)
         time.sleep(CONFIG["ramp_secs"])
         ws = [pm.window(srv.proc.pid, topo["srv_cpus"], PORT, secs,
                         [(p.pid, t) for p, t in gens]) for _ in range(windows)]
