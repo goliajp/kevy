@@ -318,7 +318,7 @@ fn overwrite_in_place(
     let old_vw = value_weight(&e.value, word.as_deref().copied());
     let old = core::mem::replace(&mut e.value, new_value);
     e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
-    let new_vw = e.value.weight();
+    let new_vw = value_weight(&e.value, None);
     if let Some(word) = word {
         stamp(word, kept(&e.value), new_vw);
     }
