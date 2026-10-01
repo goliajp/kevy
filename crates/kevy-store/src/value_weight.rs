@@ -5,10 +5,7 @@
 //! tables over the enum defined there, so they move as a pair and nothing in
 //! `value.rs` calls them.
 
-use crate::value::{
-    HASH_SLOT_BYTES, HEAP_HEAVY_BYTES, LIST_SLOT_BYTES, RANKTREE_SLOT_BYTES, SET_SLOT_BYTES, Value,
-    collection_overhead,
-};
+use crate::value::{HEAP_HEAVY_BYTES, LIST_SLOT_BYTES, RANKTREE_SLOT_BYTES, Value};
 
 impl Value {
     /// Approximate heap bytes the value owns. Excludes the inline `Entry` /
@@ -40,9 +37,12 @@ impl Value {
                     + (l.len() as u64).saturating_mul(LIST_SLOT_BYTES)
                     + l.iter().map(|v| v.capacity() as u64).sum::<u64>()
             }
+            // charged like a hash: the box, the table as the allocator
+            // holds it, and each long member's heap
             Value::Set(s) => {
-                collection_overhead(s.capacity(), SET_SLOT_BYTES)
-                    + s.iter().map(|m| m.heap_bytes() as u64).sum::<u64>()
+                crate::seg_map::arc_box::<crate::value::SetData>()
+                    + s.footprint() as u64
+                    + s.iter().map(crate::hash_weight::held).sum::<u64>()
             }
             Value::SegHash(h) => h.weight_as_hash(),
             Value::SegSet(s) => s.weight_as_set(),
@@ -63,8 +63,9 @@ impl Value {
             // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
             // Members ≤23 B are inline in both slots (heap_bytes = 0).
             Value::ZSet(z) => {
-                collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
-                    + z.by_member.iter().map(|(m, _)| 2 * m.heap_bytes() as u64).sum::<u64>()
+                crate::seg_map::arc_box::<crate::value::ZSetData>()
+                    + z.by_member.footprint() as u64
+                    + z.by_member.keys().map(|m| 2 * crate::hash_weight::held(m)).sum::<u64>()
                     + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES)
             }
             Value::Stream(s) => s.weight(),

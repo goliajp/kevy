@@ -67,7 +67,7 @@ fn a_promoted_row_that_fits_its_table_comes_back_packed() {
     hot.hset(b"row:1", &pairs).unwrap();
     hot.set_packed_rows(true);
     hot.pack_row(b"row:1", &names);
-    let weight = |s: &Store| s.map.get(b"row:1".as_slice()).unwrap().weight();
+    let weight = |s: &Store| s.weight_of(b"row:1").unwrap();
     assert_eq!(weight(&s), weight(&hot), "the promoted row's charge is the packed row's");
     assert_eq!(s.used_memory(), hot.used_memory(), "and so is the store's");
 }

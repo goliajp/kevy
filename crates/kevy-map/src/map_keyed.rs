@@ -133,7 +133,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             return ProbeOutcome::NotFound { insert_at: 0, via_tombstone: false };
         }
         let h2v = h2(hash);
-        let mut group_start = (hash as usize) & self.mask;
+        let mut group_start = (hash as usize) & self.mask();
 
         // Fast path: no tombstones in the table ⇒ skip DELETED tracking
         // entirely. This trims one SIMD `match_byte` (and one branch) from
@@ -144,7 +144,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // SAFETY: see [insert_known_unique].
                 let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
                 for m in g.match_byte(h2v).iter() {
-                    let slot = (group_start + m) & self.mask;
+                    let slot = (group_start + m) & self.mask();
                     // SAFETY: matched h2 ⇒ slot is occupied ⇒ initialised.
                     let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                     if &kv.0 == key {
@@ -153,11 +153,11 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 }
                 if let Some(m) = g.match_byte(EMPTY).lowest_set() {
                     return ProbeOutcome::NotFound {
-                        insert_at: (group_start + m) & self.mask,
+                        insert_at: (group_start + m) & self.mask(),
                         via_tombstone: false,
                     };
                 }
-                group_start = (group_start + GROUP_WIDTH) & self.mask;
+                group_start = (group_start + GROUP_WIDTH) & self.mask();
             }
         }
 
@@ -168,7 +168,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             // SAFETY: see [insert_known_unique].
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 // SAFETY: matched h2 ⇒ slot is occupied ⇒ initialised.
                 let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if &kv.0 == key {
@@ -178,16 +178,16 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             if first_deleted.is_none()
                 && let Some(m) = g.match_byte(DELETED).lowest_set()
             {
-                first_deleted = Some((group_start + m) & self.mask);
+                first_deleted = Some((group_start + m) & self.mask());
             }
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
-                let probe_empty = (group_start + m) & self.mask;
+                let probe_empty = (group_start + m) & self.mask();
                 return ProbeOutcome::NotFound {
                     insert_at: first_deleted.unwrap_or(probe_empty),
                     via_tombstone: first_deleted.is_some(),
                 };
             }
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 }
@@ -308,7 +308,7 @@ impl<K, V> KevyMap<K, V> {
         // A simpler condition was tried and it lost a key:
         // `clone_after_heavy_deletion_keeps_probes_correct` found it
         // immediately, which is what that test is for.
-        let before = idx.wrapping_sub(GROUP_WIDTH) & self.mask;
+        let before = idx.wrapping_sub(GROUP_WIDTH) & self.mask();
         // SAFETY: both indices are < cap and the metadata array is
         // `cap + GROUP_WIDTH` bytes, so either group load is in bounds.
         let (gb, ga) = unsafe {
@@ -332,13 +332,13 @@ impl<K, V> KevyMap<K, V> {
         }
         let hash = key.kevy_hash();
         let h2v = h2(hash);
-        let mut group_start = (hash as usize) & self.mask;
+        let mut group_start = (hash as usize) & self.mask();
         loop {
             // SAFETY: see [insert_known_unique]; group_start ∈ [0, cap),
             // metadata length ≥ cap + GROUP_WIDTH.
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
                 let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if kv.0.borrow() == key {
@@ -349,7 +349,7 @@ impl<K, V> KevyMap<K, V> {
             if !g.match_byte(EMPTY).is_empty() {
                 return None;
             }
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 
@@ -370,7 +370,7 @@ impl<K, V> KevyMap<K, V> {
         }
         let hash = key.kevy_hash();
         let h2v = h2(hash);
-        let group_start = (hash as usize) & self.mask;
+        let group_start = (hash as usize) & self.mask();
         if self.deleted == 0 {
             self.probe_by_borrow_fast(key, h2v, group_start)
         } else {
@@ -389,7 +389,7 @@ impl<K, V> KevyMap<K, V> {
             // SAFETY: see [insert_known_unique].
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
                 let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if kv.0.borrow() == key {
@@ -398,11 +398,11 @@ impl<K, V> KevyMap<K, V> {
             }
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
                 return ProbeOutcome::NotFound {
-                    insert_at: (group_start + m) & self.mask,
+                    insert_at: (group_start + m) & self.mask(),
                     via_tombstone: false,
                 };
             }
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 
@@ -418,7 +418,7 @@ impl<K, V> KevyMap<K, V> {
             // SAFETY: see [insert_known_unique].
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
                 let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if kv.0.borrow() == key {
@@ -428,16 +428,16 @@ impl<K, V> KevyMap<K, V> {
             if first_deleted.is_none()
                 && let Some(m) = g.match_byte(DELETED).lowest_set()
             {
-                first_deleted = Some((group_start + m) & self.mask);
+                first_deleted = Some((group_start + m) & self.mask());
             }
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
-                let probe_empty = (group_start + m) & self.mask;
+                let probe_empty = (group_start + m) & self.mask();
                 return ProbeOutcome::NotFound {
                     insert_at: first_deleted.unwrap_or(probe_empty),
                     via_tombstone: first_deleted.is_some(),
                 };
             }
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 }

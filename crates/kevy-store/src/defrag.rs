@@ -182,10 +182,17 @@ impl Store {
             }
         });
         for k in &picked {
+            // a value whose weight is worked out is measured before the
+            // move; a kept one has its old weight in its side word
+            let mut before = None;
             if let Some(e) = self.map.get_mut_quiet(k) {
+                before = (!crate::entry_weight::kept(&e.value)).then(|| e.value.weight());
                 rehome(&mut e.value);
             }
-            self.reweigh_entry(k);
+            match before {
+                Some(b) => self.reweigh_scalar(k, b),
+                None => self.reweigh_entry(k),
+            }
         }
         let lap_done = next >= cap;
         self.defrag.hand = if lap_done { 0 } else { next };
@@ -242,8 +249,9 @@ mod tests {
         assert!(s.pttl(b"str") > 0, "a deadline survives the move");
         let mut sum = s.keyspace_bytes;
         s.map.scan_buckets(0, usize::MAX, |k, e| {
-            assert_eq!(e.weight(), key_heap_bytes_for(k.as_slice()) + e.value.weight(), "{k:?}");
-            sum += e.weight();
+            let full = key_heap_bytes_for(k.as_slice()) + e.value.weight();
+            assert_eq!(s.weight_of(k.as_slice()), Some(full), "{k:?}");
+            sum += full;
         });
         assert_eq!(s.used_memory(), sum);
     }

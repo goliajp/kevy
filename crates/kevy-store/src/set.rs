@@ -6,11 +6,12 @@
 //! members — a write under a live snapshot view clones one bucket, not
 //! the whole value).
 
+use crate::hash_weight::held;
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::seg_map::{HS_PROMOTE, SegMap};
 use crate::small_set::{AddResult, SmallSetData, promote};
-use crate::value::{SetData, SmallBytes, Value, set_member_weight};
+use crate::value::{SetData, SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
 use alloc::sync::Arc;
 
@@ -57,7 +58,7 @@ impl Store {
                     added += 1;
                     delta += w;
                 }
-                SaddOutcome::AlreadyPresent => {}
+                SaddOutcome::AlreadyPresent(grown) => delta += grown,
             }
         }
         self.account_delta(key, delta);
@@ -73,7 +74,7 @@ impl Store {
         match v {
             Value::SmallSetInline(s) => match s.try_add(m) {
                 AddResult::Added => Ok(SaddOutcome::AddedInline),
-                AddResult::AlreadyPresent => Ok(SaddOutcome::AlreadyPresent),
+                AddResult::AlreadyPresent => Ok(SaddOutcome::AlreadyPresent(0)),
                 AddResult::NoRoom => {
                     let outcome = promote_inline_set_and_add(v, m);
                     self.reweigh_entry(key);
@@ -86,24 +87,28 @@ impl Store {
                 let added = promote_flat_set_to_seg(v, m);
                 self.reweigh_entry(key);
                 // Reweighed from scratch — swallow the per-member delta.
-                if added { Ok(SaddOutcome::AddedHeap(0)) } else { Ok(SaddOutcome::AlreadyPresent) }
+                if added {
+                    Ok(SaddOutcome::AddedHeap(0))
+                } else {
+                    Ok(SaddOutcome::AlreadyPresent(0))
+                }
             }
             Value::Set(s) => {
                 let smb = SmallBytes::from_slice(m);
-                let w = set_member_weight(&smb) as i64;
-                if Arc::make_mut(s).insert(smb) {
-                    Ok(SaddOutcome::AddedHeap(w))
-                } else {
-                    Ok(SaddOutcome::AlreadyPresent)
+                let w = held(&smb) as i64;
+                match Arc::make_mut(s).insert_sized(smb) {
+                    (true, grown) => Ok(SaddOutcome::AddedHeap(w + grown as i64)),
+                    // the growth check runs before the lookup: a member
+                    // already there can still have grown the table
+                    (false, grown) => Ok(SaddOutcome::AlreadyPresent(grown as i64)),
                 }
             }
             Value::SegSet(s) => {
                 let smb = SmallBytes::from_slice(m);
-                let w = set_member_weight(&smb) as i64;
-                if Arc::make_mut(s).insert(smb, ()).is_none() {
-                    Ok(SaddOutcome::AddedHeap(w))
-                } else {
-                    Ok(SaddOutcome::AlreadyPresent)
+                let w = held(&smb) as i64;
+                match Arc::make_mut(s).insert_sized(smb, ()) {
+                    (None, grown) => Ok(SaddOutcome::AddedHeap(w + grown)),
+                    (Some(()), grown) => Ok(SaddOutcome::AlreadyPresent(grown)),
                 }
             }
             _ => Err(StoreError::WrongType),
@@ -143,12 +148,13 @@ impl Store {
                             }
                         }
                     }
+                    // a table does not shrink: a member takes only its heap
                     Value::Set(s) => {
                         let set_mut = Arc::make_mut(s);
                         for m in members {
                             if set_mut.remove(*m) {
                                 r += 1;
-                                d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
+                                d -= held(&SmallBytes::from_slice(m)) as i64;
                             }
                         }
                     }
@@ -157,7 +163,7 @@ impl Store {
                         for m in members {
                             if set_mut.remove(m).is_some() {
                                 r += 1;
-                                d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
+                                d -= held(&SmallBytes::from_slice(m)) as i64;
                             }
                         }
                     }
@@ -209,16 +215,15 @@ impl Store {
 }
 
 /// Inline set out of room: promote to KevySet, then insert the
-/// spilling member. Caller reweighs the entry.
+/// spilling member. The caller reweighs the entry from scratch, which
+/// counts the new member, so the member adds nothing on top.
 fn promote_inline_set_and_add(v: &mut Value, m: &[u8]) -> SaddOutcome {
     let Value::SmallSetInline(s) = v else { unreachable!("matched inline") };
     let mut promoted = promote(s);
-    let smb = SmallBytes::from_slice(m);
-    let w = set_member_weight(&smb) as i64;
-    let inserted = promoted.insert(smb);
+    let inserted = promoted.insert(SmallBytes::from_slice(m));
     debug_assert!(inserted, "promote re-inserts existing inline");
     *v = Value::Set(Arc::new(promoted));
-    if inserted { SaddOutcome::AddedHeap(w) } else { SaddOutcome::AlreadyPresent }
+    if inserted { SaddOutcome::AddedHeap(0) } else { SaddOutcome::AlreadyPresent(0) }
 }
 
 /// Flat set at the promotion threshold: re-bucket, then add `m`.
@@ -248,7 +253,7 @@ fn flat_spop_draws(set_mut: &mut SetData, draws: &[u64], count: usize) -> (Vec<V
             break;
         };
         if set_mut.remove(m.as_slice()) {
-            d -= set_member_weight(&SmallBytes::from_slice(&m)) as i64;
+            d -= held(&SmallBytes::from_slice(&m)) as i64;
         }
         o.push(m);
     }
@@ -266,7 +271,7 @@ fn seg_spop_draws(set_mut: &mut SegMap<()>, draws: &[u64], count: usize) -> (Vec
             break;
         };
         if set_mut.remove(m.as_slice()).is_some() {
-            d -= set_member_weight(&SmallBytes::from_slice(&m)) as i64;
+            d -= held(&SmallBytes::from_slice(&m)) as i64;
         }
         o.push(m);
     }
@@ -277,7 +282,8 @@ fn seg_spop_draws(set_mut: &mut SegMap<()>, draws: &[u64], count: usize) -> (Vec
 enum SaddOutcome {
     AddedInline,
     AddedHeap(i64),
-    AlreadyPresent,
+    /// What the table grew by anyway (see `KevyMap::insert_sized`).
+    AlreadyPresent(i64),
 }
 
 /// Fisher-Yates over the first `k` positions, using pre-drawn

@@ -83,7 +83,7 @@ fn without_a_lane_there_are_no_words_and_no_bytes() {
     assert_eq!((m.aux(slot), m.aux_mut(slot).is_some()), (None, false));
     let bare = m.footprint();
     m.enable_aux();
-    assert_eq!(m.footprint(), bare + crate::malloc_footprint(m.capacity() * 8));
+    assert_eq!(m.footprint(), bare + crate::aux::lane_footprint(m.capacity()));
     assert_eq!(m.aux(slot), Some(0));
 }
 

@@ -91,7 +91,6 @@ impl<K, V> KevyMap<K, V> {
             // SAFETY: `base` plus a within-layout offset, so non-null for the same reason.
             metadata_ptr: unsafe { NonNull::new_unchecked(metadata_ptr) },
             cap,
-            mask: cap - 1,
             occupied: 0,
             deleted: 0,
             mmap_backed,
@@ -153,8 +152,11 @@ impl<K, V> KevyMap<K, V> {
         let size =
             (self.cap * (kv + 1) + GROUP_WIDTH).next_multiple_of(core::mem::align_of::<(K, V)>());
         debug_assert_eq!(size, table_layout::<(K, V)>(self.cap).0.size());
-        let table =
-            if self.mmap_backed { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) };
+        let table = if self.mmap_backed {
+            size.next_multiple_of(HUGE_PAGE)
+        } else {
+            malloc_footprint(size)
+        };
         table + self.aux_footprint()
     }
 
@@ -178,7 +180,7 @@ impl<K, V> KevyMap<K, V> {
         let size = table_layout::<(K, V)>(cap).0.size();
         // `alloc_table` maps a table this large directly wherever it can
         let mapped = size >= THP_BACKED_THRESHOLD && cfg!(target_os = "linux") && !cfg!(miri);
-        let lane = if self.aux.is_some() { malloc_footprint(cap * 8) } else { 0 };
+        let lane = if self.aux.is_some() { crate::aux::lane_footprint(cap) } else { 0 };
         (if mapped { size.next_multiple_of(HUGE_PAGE) } else { malloc_footprint(size) }) + lane
     }
 

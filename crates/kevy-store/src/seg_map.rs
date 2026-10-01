@@ -414,24 +414,6 @@ impl<V: Clone> SegMap<V> {
         out
     }
 
-    /// Sum of bucket capacities — the accounting overhead walk.
-    pub(crate) fn capacity_sum(&self) -> usize {
-        self.buckets.iter().map(|b| b.map.capacity()).sum()
-    }
-
-    /// Directory length (index slots) for the accounting walk.
-    pub(crate) fn dir_len(&self) -> usize {
-        self.dirs.len()
-    }
-
-    /// Shell overhead shared by both doors: directory index slots +
-    /// one `Arc` pointer per bucket + slot bytes across buckets.
-    fn shell_weight(&self, per_slot: u64) -> u64 {
-        (self.dir_len() as u64).saturating_mul(4)
-            + (self.buckets.len() as u64).saturating_mul(8)
-            + (self.capacity_sum() as u64).saturating_mul(per_slot)
-    }
-
     /// Every bucket unique — the bio-drop gate (a view-shared drop is
     /// refcount decrements, cheap inline).
     pub(crate) fn all_unique(&self) -> bool {
@@ -446,19 +428,12 @@ impl<V: Clone> SegMap<V> {
     }
 }
 
-impl SegMap<f64> {
-    /// Shell + slot overhead only (the zset door charges member heap
-    /// bytes itself, with its ×2 dual-structure rule).
-    pub(crate) fn weight_shell_only(&self) -> u64 {
-        self.shell_weight(crate::value::HASH_SLOT_BYTES)
-    }
-}
-
 impl SegMap<()> {
     /// [`crate::Value::weight`]'s SegSet arm — the flat Set model plus
     /// the shell.
     pub(crate) fn weight_as_set(&self) -> u64 {
-        self.shell_weight(crate::value::SET_SLOT_BYTES)
-            + self.keys().map(|m| m.heap_bytes() as u64).sum::<u64>()
+        crate::seg_map::arc_box::<Self>()
+            + self.shell_bytes()
+            + self.keys().map(crate::hash_weight::held).sum::<u64>()
     }
 }

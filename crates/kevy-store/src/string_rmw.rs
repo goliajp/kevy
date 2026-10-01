@@ -18,42 +18,42 @@ impl Store {
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_STRING)?; // cold string pages in
         let outcome = match self.live_entry_mut(key) {
-            Some(e) => match &mut e.value {
-                Value::Str(v) => {
+            Some(e) => match (e.value.weight(), &mut e.value) {
+                (before, Value::Str(v)) => {
                     // SmallBytes is immutable; pop out, grow via Vec, re-wrap.
                     let mut owned = core::mem::take(v).into_vec();
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     *v = SmallBytes::from_vec(owned);
-                    AppendOutcome::Reweigh(new_len)
+                    AppendOutcome::Reweigh(new_len, before)
                 }
                 // L2: Int — materialise digits, append, re-pick the
                 // encoding (canonical results go straight back to Int).
-                Value::Int(n) => {
+                (before, Value::Int(n)) => {
                     let mut buf = itoa_i64_stack();
                     let mut owned = format_i64_into(*n, &mut buf).to_vec();
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     e.value = pick_value_for_set_owned(owned);
-                    AppendOutcome::Reweigh(new_len)
+                    AppendOutcome::Reweigh(new_len, before)
                 }
                 // L1: APPEND on Arc-backed bulk → materialise to a fresh
                 // Vec (no other reader has refs to the old Arc post-replace),
                 // append, then pick the new encoding via SET routing rules.
-                Value::ArcBulk(a) => {
+                (before, Value::ArcBulk(a)) => {
                     let mut owned: Vec<u8> = a.as_ref().to_vec();
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     e.value = pick_value_for_set_owned(owned);
-                    AppendOutcome::Reweigh(new_len)
+                    AppendOutcome::Reweigh(new_len, before)
                 }
                 _ => return Err(StoreError::WrongType),
             },
             None => AppendOutcome::Insert,
         };
         match outcome {
-            AppendOutcome::Reweigh(new_len) => {
-                self.reweigh_entry(key);
+            AppendOutcome::Reweigh(new_len, before) => {
+                self.reweigh_scalar(key, before);
                 Ok(new_len)
             }
             AppendOutcome::Insert => {
@@ -115,23 +115,23 @@ impl Store {
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
         let outcome = if let Some(e) = self.live_entry_mut(key) {
-            match &mut e.value {
-                Value::Str(v) => {
+            match (e.value.weight(), &mut e.value) {
+                (before, Value::Str(v)) => {
                     let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;
                     let bytes = float_incr_bytes(cur, delta)?;
                     *v = SmallBytes::from_slice(&bytes);
-                    FloatOutcome::Reweigh(bytes)
+                    FloatOutcome::Reweigh(bytes, before)
                 }
-                Value::Int(n) => {
+                (before, Value::Int(n)) => {
                     let bytes = float_incr_bytes(*n as f64, delta)?;
                     e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                    FloatOutcome::Reweigh(bytes)
+                    FloatOutcome::Reweigh(bytes, before)
                 }
-                Value::ArcBulk(a) => {
+                (before, Value::ArcBulk(a)) => {
                     let cur = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)?;
                     let bytes = float_incr_bytes(cur, delta)?;
                     e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                    FloatOutcome::Reweigh(bytes)
+                    FloatOutcome::Reweigh(bytes, before)
                 }
                 _ => return Err(StoreError::WrongType),
             }
@@ -143,8 +143,8 @@ impl Store {
             FloatOutcome::Insert(fmt_num(delta))
         };
         match outcome {
-            FloatOutcome::Reweigh(bytes) => {
-                self.reweigh_entry(key);
+            FloatOutcome::Reweigh(bytes, before) => {
+                self.reweigh_scalar(key, before);
                 Ok(bytes)
             }
             FloatOutcome::Insert(bytes) => {
@@ -159,12 +159,14 @@ impl Store {
 }
 
 enum AppendOutcome {
-    Reweigh(usize),
+    /// The new length, and what the value weighed before the append.
+    Reweigh(usize, u64),
     Insert,
 }
 
 enum FloatOutcome {
-    Reweigh(Vec<u8>),
+    /// The new bytes, and what the value weighed before the increment.
+    Reweigh(Vec<u8>, u64),
     Insert(Vec<u8>),
 }
 

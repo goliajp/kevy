@@ -61,29 +61,68 @@ impl Keyspace {
         self.map.slot_mut(slot).map(|(_, e)| e)
     }
 
-    /// [`Self::entry_at_mut`] for a change that keeps the row's content.
+    /// [`Self::entry_at_mut`] with the entry's side word.
     #[inline]
-    pub(crate) fn entry_at_quiet(&mut self, slot: usize) -> Option<&mut Entry> {
-        self.map.slot_mut(slot).map(|(_, e)| e)
+    pub(crate) fn entry_word_at_mut(
+        &mut self,
+        key: &[u8],
+        slot: usize,
+    ) -> Option<(&mut Entry, Option<&mut u64>)> {
+        self.note(key);
+        self.map.slot_mut_aux(slot).map(|(_, e, w)| (e, w))
     }
 
+    /// [`Self::insert`], also answering the slot the entry took: an
+    /// overwrite keeps the slot and its side word, a new key's word is zero.
     #[inline]
-    pub(crate) fn insert(&mut self, key: SmallBytes, e: Entry) -> Option<Entry> {
+    pub(crate) fn insert_slot(&mut self, key: SmallBytes, e: Entry) -> (usize, Option<Entry>) {
         self.note(key.as_slice());
-        self.map.insert(key, e)
+        self.map.insert_slot(key, e)
+    }
+
+    /// Keep side words (weights of collections, access clocks) from now on;
+    /// whether the lane was allocated just now.
+    #[inline]
+    pub(crate) fn keep_words(&mut self) -> bool {
+        self.map.enable_aux()
+    }
+
+    /// The side word of the entry at `slot`, to change (no row is recorded:
+    /// weights and clocks are not the row's content).
+    #[inline]
+    pub(crate) fn word_mut(&mut self, slot: usize) -> Option<&mut u64> {
+        self.map.aux_mut(slot)
+    }
+
+    /// The entry at `slot` and its side word, for a change that keeps the
+    /// row's content.
+    #[inline]
+    pub(crate) fn entry_word_quiet(
+        &mut self,
+        slot: usize,
+    ) -> Option<(&mut Entry, Option<&mut u64>)> {
+        self.map.slot_mut_aux(slot).map(|(_, e, w)| (e, w))
     }
 
     /// Insert a row that already exists in another form (a cold row's
     /// stub), so nothing the row holds changes.
     #[cfg_attr(not(all(feature = "std", not(target_arch = "wasm32"))), allow(dead_code))]
-    pub(crate) fn insert_quiet(&mut self, key: SmallBytes, e: Entry) -> Option<Entry> {
-        self.map.insert(key, e)
+    pub(crate) fn insert_quiet(&mut self, key: SmallBytes, e: Entry) -> (usize, Option<Entry>) {
+        self.map.insert_slot(key, e)
     }
 
+    /// [`Self::remove`], also answering the entry's side word as it was —
+    /// read in the same probe, before the slot lets it go.
     #[inline]
-    pub(crate) fn remove(&mut self, key: &[u8]) -> Option<Entry> {
+    pub(crate) fn remove_with_word(&mut self, key: &[u8]) -> Option<(Entry, Option<u64>)> {
         self.note(key);
-        self.map.remove(key)
+        match self.map.raw_entry_mut(key) {
+            RawEntryMut::Occupied(o) => {
+                let word = o.aux();
+                Some((o.remove(), word))
+            }
+            RawEntryMut::Vacant(_) => None,
+        }
     }
 
     #[inline]

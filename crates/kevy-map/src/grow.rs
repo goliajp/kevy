@@ -101,14 +101,14 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     /// check. Uses a 16-slot SIMD group scan to find the first EMPTY.
     fn insert_known_unique(&mut self, hash: u64, k: K, v: V) -> usize {
         let h2v = h2(hash);
-        let mut group_start = (hash as usize) & self.mask;
+        let mut group_start = (hash as usize) & self.mask();
         loop {
             // SAFETY: metadata is `cap + GROUP_WIDTH` bytes; group_start
             // is in `[0, cap)`; the load reads 16 bytes which lie inside the
             // buffer thanks to the mirror tail.
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
-                let slot = (group_start + m) & self.mask;
+                let slot = (group_start + m) & self.mask();
                 self.set_meta(slot, h2v);
                 // SAFETY: slot < cap.
                 unsafe {
@@ -121,7 +121,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             // load factor and group-scan-aware probe, linear wins on cache
             // locality; triangular's anti-clustering only pays off at higher
             // load factors than we run).
-            group_start = (group_start + GROUP_WIDTH) & self.mask;
+            group_start = (group_start + GROUP_WIDTH) & self.mask();
         }
     }
 }
