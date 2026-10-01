@@ -77,10 +77,19 @@ def one(side, angle, ops, port, work):
     warm_cmd, load_cmd = ang.CALLGRIND[angle]
     out = work / f"cg.{angle}.{side['name']}"
     env = dict(side["env"], KEVY_IO_URING="0")
+    argv = [side["bin"], "--port", str(port), "--no-aof", "--dir", str(work / "data")]
+    if angle.startswith("x"):
+        # Two shards spin while idle, and valgrind runs one thread at a time,
+        # so how long a shard spins before the other gets the core depends
+        # on timing: the same binary counted ±18% between runs. Parked
+        # shards count only the work and the wake-ups it causes.
+        conf = work / "parked.toml"
+        conf.write_text("[advanced]\nspin_limit = 0\n")
+        argv += ["--threads", "2", "--config", str(conf)]
+    else:
+        argv += ["--threads", "1"]
     proc = subprocess.Popen(["valgrind", "--tool=callgrind", "--instr-atstart=no",
-                             f"--callgrind-out-file={out}", side["bin"], "--threads",
-                             "2" if angle.startswith("x") else "1",
-                             "--port", str(port), "--no-aof", "--dir", str(work / "data")],
+                             f"--callgrind-out-file={out}", *argv],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_up(proc, port)

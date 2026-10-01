@@ -62,44 +62,71 @@
 //! ```
 
 #![warn(missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
 // Every `unsafe` block in this crate carries a `// SAFETY:` premise, and the
 // lint keeps it that way. This is the OS boundary: the one place where a
 // mistake is not caught by the type system, so the argument has to be written
 // down where the call is, not inferred later from the call site.
 
+#[cfg(feature = "std")]
 pub(crate) mod addr;
+#[cfg(feature = "std")]
 pub mod checksum;
+#[cfg(feature = "std")]
 pub(crate) mod ffi;
+#[cfg(feature = "std")]
 mod heap;
+#[cfg(feature = "std")]
 mod interrupt;
+#[cfg(feature = "std")]
 mod lockfile;
+#[cfg(feature = "std")]
 mod map;
+#[cfg(feature = "std")]
 mod mem;
+pub mod os;
+#[cfg(feature = "std")]
 mod pty;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(feature = "std")]
 mod random;
+#[cfg(feature = "std")]
 mod signal;
+#[cfg(feature = "std")]
 mod socket;
+#[cfg(feature = "std")]
 mod term;
+#[cfg(feature = "std")]
 mod wait;
+#[cfg(feature = "std")]
 mod waker;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(feature = "std")]
 mod poller_ep;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(feature = "std")]
 mod poller_kq;
 
+#[cfg(feature = "std")]
 pub use heap::{HeapStats, heap_stats};
+#[cfg(feature = "std")]
 pub use interrupt::{
     install_interrupt, note_interrupts, sever_on_interrupt, take_noted, take_severed,
 };
+#[cfg(feature = "std")]
 pub use lockfile::flock_try_exclusive;
+#[cfg(feature = "std")]
 pub use map::{FileMap, MapSync, preallocate};
+#[cfg(feature = "std")]
 pub use mem::{detected_memory_bound, fadvise_dontneed_all, malloc_trim_now, process_rss_bytes};
 #[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(feature = "std")]
 pub use poller_ep::Poller;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(feature = "std")]
 pub use poller_kq::Poller;
+#[cfg(feature = "std")]
 pub use pty::open_pty;
 #[cfg(any(
     target_os = "linux",
@@ -107,14 +134,20 @@ pub use pty::open_pty;
     target_os = "macos",
     target_os = "ios"
 ))]
+#[cfg(feature = "std")]
 pub use random::fill_random;
+#[cfg(feature = "std")]
 pub use signal::{SIGINT, SIGTERM, SIGXFSZ, install_signal_handler};
+#[cfg(feature = "std")]
 pub use socket::Socket;
+#[cfg(feature = "std")]
 pub use term::{RawMode, terminal_columns};
+#[cfg(feature = "std")]
 pub use wait::wait_readable;
+#[cfg(feature = "std")]
 pub use waker::Waker;
 
-#[cfg(doctest)]
+#[cfg(all(doctest, feature = "std"))]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
@@ -317,10 +350,12 @@ impl core::ops::BitOrAssign for Interest {
 }
 
 /// How many raw events to pull from the kernel per `wait` call.
+#[cfg(feature = "std")]
 const WAIT_CAPACITY: usize = 1024;
 
 // Send and Sync are part of the public contract: a change that loses
 // either fails to compile here rather than in a caller.
+#[cfg(feature = "std")]
 const _: () = {
     const fn send_sync<T: Send + Sync>() {}
     send_sync::<Event>();
@@ -334,9 +369,12 @@ const _: () = {
 };
 
 #[cfg(test)]
+#[cfg(feature = "std")]
 mod tests;
 
 #[cfg(all(feature = "thread-usage", any(target_os = "linux", target_os = "macos")))]
+#[cfg(feature = "std")]
 mod usage;
 #[cfg(all(feature = "thread-usage", any(target_os = "linux", target_os = "macos")))]
+#[cfg(feature = "std")]
 pub use usage::{ThreadUsage, thread_usage};

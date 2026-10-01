@@ -36,27 +36,9 @@ mod mapped;
 
 pub use mapped::{mapped_bytes, release_2mb};
 
+// The C library calls are kevy-sys's (`kevy_sys::os`, which needs no `std`).
 #[cfg(target_os = "linux")]
-mod ffi {
-    use core::ffi::{c_int, c_void};
-
-    // The libc symbols kevy-madvise touches; every call site is in this
-    // file. glibc resolves these via `std`'s existing linkage — no extra
-    // link directive needed.
-    unsafe extern "C" {
-        pub fn madvise(addr: *mut c_void, length: usize, advice: c_int) -> c_int;
-        pub fn sysconf(name: c_int) -> i64;
-        pub fn mmap(
-            addr: *mut c_void,
-            length: usize,
-            prot: c_int,
-            flags: c_int,
-            fd: c_int,
-            offset: i64,
-        ) -> *mut c_void;
-        pub fn munmap(addr: *mut c_void, length: usize) -> c_int;
-    }
-}
+use kevy_sys::os as ffi;
 
 /// The kernel's page size, asked once and remembered.
 ///
