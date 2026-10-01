@@ -31,12 +31,16 @@
 //! ```
 
 use core::ptr::NonNull;
+use core::sync::atomic::AtomicUsize;
 
 use crate::class::{self, NCLASSES};
 use crate::os;
 use crate::outbound::Outbound;
 use crate::segment::{self, SEGMENT_BYTES, Segment};
 use crate::spanlist::BINS;
+
+/// The next heap identity; `0` stays "not set", so it starts at 1.
+static NEXT_IDENTITY: AtomicUsize = AtomicUsize::new(1);
 
 /// Spans one class may hold at once, per heap — a runaway guard, not a
 /// policy. At 64 KiB a span, this bounds one class at roughly 4 GiB per
@@ -207,20 +211,25 @@ impl Heap {
         }
     }
 
-    /// Adopt this heap's address as its identity, once.
+    /// Take a process-unique identity, once.
     ///
     /// Segments record their owner so a free arriving on the wrong
-    /// thread can be routed home. The address of the heap itself is a
-    /// ready-made unique identifier — no counter, no registry, and it
-    /// cannot collide while the heap is alive. `0` means "not yet set",
-    /// which is why [`Heap::new`] can stay `const`.
+    /// thread can be routed home. The identity is drawn from a counter
+    /// and never reused. It used to be the heap's own address, which is
+    /// unique only while the heap lives — but a thread's segments
+    /// outlive it (they are leaked at exit, never unmapped), and a new
+    /// thread whose thread-local block landed at the same address took
+    /// the dead thread's identity. It then freed the dead thread's
+    /// slots as its own: its live-byte counter went below zero and it
+    /// rewrote span state in segments its lists never held. `0` means
+    /// "not yet set", which is why [`Heap::new`] can stay `const`.
     ///
     /// # Examples
     ///
     /// ```
     /// # use kevy_alloc::Heap;
     /// let mut heap = Heap::new(0); // 0: identity not chosen yet
-    /// heap.ensure_identity(); // now the heap's own address, fixed while it lives
+    /// heap.ensure_identity(); // now an identity no other heap in the process has had
     /// let p = heap.alloc(64, 8).ok_or("no mapping")?;
     /// // SAFETY: `p` came from this heap with this size and alignment.
     /// unsafe { heap.dealloc(p, 64, 8) };
@@ -228,7 +237,7 @@ impl Heap {
     /// ```
     pub fn ensure_identity(&mut self) {
         if self.id == 0 {
-            self.id = core::ptr::from_mut(self) as usize;
+            self.id = NEXT_IDENTITY.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
     }
 
