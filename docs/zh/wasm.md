@@ -1,6 +1,6 @@
 # kevy 上 WebAssembly
 
-kevy 在浏览器里是一个真正的 store，不是编译期玩具：npm 包 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把引擎（KV + TTL + 计数器 + 扫描 + pub/sub）编译到 `wasm32-unknown-unknown`，配一个手写的 ES module loader，持久化落 OPFS（IndexedDB 兜底），pub/sub 能跨 tab。同一批 crate 也能编译到 `wasm32-wasip1`，所以 Rust API 在 `wasmtime` / `wasmer` 和边缘运行时里同样可用。
+kevy 在浏览器里是一个真正的 store，不是编译期玩具：npm 包 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) 把引擎（KV + TTL + 计数器 + 扫描 + pub/sub、二级索引、带消费者组的 stream、geo）编译到 `wasm32-unknown-unknown`，配一个手写的 ES module loader，持久化落 OPFS（IndexedDB 兜底），pub/sub 能跨 tab。同一批 crate 也能编译到 `wasm32-wasip1`，所以 Rust API 在 `wasmtime` / `wasmer` 和边缘运行时里同样可用。
 
 在线体验：[kevy.golia.jp 的 demo](https://kevy.golia.jp/demo/) 就是跑在这个模块上的浏览器 REPL——命令行、重载不丢的 OPFS 持久化、跨 tab 的 pub/sub，全程没有后端。
 
@@ -30,7 +30,7 @@ db.publish("events", "hi from this or any other tab");
 await db.flush();                  // 耐久性屏障
 ```
 
-写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共六个文件（打包 496 KB，过网络 gzip 后 481 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README 和 manifest。边界两侧都是零依赖。
+写入以 kevy append-only 日志的形式流进存储，下次以同一个 `persist.name` 调用 `open()` 时重放。4.0 起日志说带校验和的 v2 记录格式（`KEVYAOF2`——见 [persistence.md](persistence.md)）：存储字节里的位翻转在重放时被拒绝，而不是静默应用。4.0 之前的 tab 存下的日志照常重放（v1，永久可读），并在首次 compaction 时升格 v2；从浏览器 tab 泵出的日志依旧能在原生 kevy 里原样重放，反之亦然。整个包共七个文件（打包 653 KB，过网络 gzip 后 639 KB）：wasm 模块、loader、OPFS worker、手写的 TypeScript 类型，加上常规的 README、changelog 和 manifest。边界两侧都是零依赖。
 
 ## Loader API
 
@@ -39,7 +39,7 @@ await db.flush();                  // 耐久性屏障
 | 选项 | 默认值 | 含义 |
 |---|---|---|
 | `wasm` | loader 旁边的 `kevy.wasm` | 模块来源：URL、`ArrayBuffer`、`Uint8Array`、`Response`，或已编译的 `WebAssembly.Module` |
-| `persist` | `false`（纯内存） | `{ name, backend }`：每个 `name` 一条日志；`backend` = `"auto"`（OPFS，IndexedDB 兜底）、`"opfs"` 或 `"idb"` |
+| `persist` | `false`（纯内存）| `{ name, backend }`：每个 `name` 一条日志；`backend` = `"auto"`（OPFS，IndexedDB 兜底）、`"opfs"` 或 `"idb"` |
 | `broadcast` | `true` | 走 `BroadcastChannel` 的跨 tab pub/sub 桥 |
 | `name` | `persist.name` 或 `"kevy"` | 实例名；同时圈定存储文件与广播频道的作用域 |
 | `tickMs` | `100` | TTL 清扫 + 事件轮询节奏；`0` 关掉定时器——自己调 `tick()` |
@@ -51,7 +51,7 @@ await db.flush();                  // 耐久性屏障
 | `set(key, value, { ttlMs? })` | SET，可选带过期 |
 | `get(key)` / `getText(key)` | GET，返回 `Uint8Array` / UTF-8 文本；不存在或已过期时为 `undefined` |
 | `del(key)` / `exists(key)` | DEL / EXISTS |
-| `expire(key, ttlMs)` / `persist(key)` / `pttl(key)` | PEXPIRE / PERSIST / PTTL（`-1` 无 TTL，`-2` 无 key） |
+| `expire(key, ttlMs)` / `persist(key)` / `pttl(key)` | PEXPIRE / PERSIST / PTTL（`-1` 无 TTL，`-2` 无 key）|
 | `incrby(key, delta?)` | INCRBY，返回新值 |
 | `dbsize()` / `flushall()` | DBSIZE / FLUSHALL |
 | `keys(pattern?, limit?)` | KEYS，Redis glob，可选上限 |
@@ -81,6 +81,10 @@ kevy 的零依赖法则延伸到工具链：边界两侧都没有绑定生成器
 
 浏览器没有文件系统，耐久性由宿主中介：开了持久化后，每笔写同时编码出与磁盘上 kevy AOF 相同的 RESP multi-bulk 帧（`kevy-persist` 格式——[persistence.md](persistence.md)）。loader 每个微任务把待写帧泵进存储一次，所以同步的一串写只花一次存储 append。`await db.flush()` 是耐久性屏障；`flush()` resolve 意味着后端已刷到磁盘。
 
+经 `cmd` 的写同样如此。引擎交给泵的是 native AOF 会为这条命令存下的帧，而不是它的 argv：`XADD *` 记下它选出的 id，组读取记下它做出的投递，相对过期记下绝对期限。重载之后，stream 和它的消费者组原样回来，条目、pending 列表、最后投递的 id 都一样。6.x 及以前，经 `cmd` 的写从不进日志，下次 open 时就丢了，除非中间跑过一次 compaction。
+
+声明过的索引、视图和表也会回来。每次 `IDX.CREATE`、`VIEW.CREATE`、`TABLE.DECLARE` 或删除，都会把整个 catalog 记成一帧，压缩后的镜像带着最新的那一帧；下次 open 时 catalog 先装回去，索引再从重放出来的键重建，所以重载后的查询和重载前答得一样。7.0 之前，每次重载都会丢掉它们。
+
 **浏览器 tab 写出的日志能原样在 native kevy 里重放**——同一个 magic 头、同样的帧。把 `.aof` 从 OPFS 拷出来、指给 native embedded store（或服务器），键空间就回来了。反向同样成立：入站泵接受 native 写的日志。损坏的尾巴遵循 native 重放契约——完好前缀被应用、尾巴被丢弃，下一次 compaction 从在线状态重写存储。
 
 两个后端，`backend: "auto"` 下自动挑选：
@@ -91,6 +95,21 @@ kevy 的零依赖法则延伸到工具链：边界两侧都没有绑定生成器
 Compaction 是自动的：追加日志一旦超过 `max(512 KB, 上一镜像的 4 倍)`，loader 就把存储重写为在线键空间的紧凑镜像（浏览器侧的 AOF rewrite）。`compact()` 可在快照或导出前强制执行一次。
 
 **localStorage 有意不做后端**：约 5 MB 的配额、每次写都阻塞主线程的同步 API、只能存 UTF-16 字符串——作为写日志完全不合格。
+
+## Stream、geo 与阻塞读
+
+`cmd` 能到达 stream 命令（`XADD`、`XRANGE`、`XREAD`、`XGROUP`、`XREADGROUP`、`XACK`、`XPENDING`、`XCLAIM`、`XAUTOCLAIM`、`XINFO` 等）和 geo 命令（`GEOADD`、`GEOSEARCH`、`GEODIST` 等），实现与服务器跑的是同一份。
+
+浏览器里没有任何调用会等待。模块跑在页面或 worker 唯一的线程上，一个把它停住的调用会冻结整个 tab，而能唤醒它的那笔写永远等不到。所以 `XREAD … BLOCK` 和 `XREADGROUP … BLOCK` 返回一个错误（`ERR the embedded engine cannot block; call without BLOCK`），与所有 embedded store 的回答相同；阻塞的列表弹出（`BLPOP`、`BRPOP` 等）根本不在 embedded 命令面里。不带 `BLOCK` 定时读，或者每次 `XADD` 旁边 publish 一条消息，收到消息时再读：
+
+```js
+db.subscribe("orders:new", () => {
+  const got = db.cmd("XREADGROUP", "GROUP", "workers", "tab-1", "COUNT", "10", "STREAMS", "orders", ">");
+  // … 处理，然后 XACK
+});
+db.cmd("XADD", "orders", "*", "sku", "A-1");
+db.publish("orders:new", "");
+```
 
 ## 跨 tab pub/sub
 
@@ -107,14 +126,14 @@ Compaction 是自动的：追加日志一旦超过 `max(512 KB, 上一镜像的 
 
 完整方法论、环境与原始数字见 [bench/WASM-BENCH.md](../../bench/WASM-BENCH.md)（headless Chrome 驱动，3 轮取中位，16 字节 value，1k 与 100k 条两档）。对上 Web 应用实际拥有的那些存储：
 
-| 轴（n=100k） | kevy-wasm | vs IndexedDB | vs localStorage |
+| 轴（n=100k）| kevy-wasm | vs IndexedDB | vs localStorage |
 |---|---:|---:|---:|
-| 点读（ops/s） | 1.67 M | **77×** | 0.48× |
-| 点写（ops/s） | 1.79 M | **189×** | 4.9× |
-| 批量载入（ms） | 60.8 | **快 36×** | 快 4.5× |
-| 扫描，约 10% 命中（ms） | 5.6 | **快 46×** | 快 5.7× |
-| 耐久写（ops/s） | 785 k（OPFS） | **12.6–17.4×** | 约 2× |
-| 重启到可用（ms） | 129 | **快 2.7×** | 更慢（见下） |
+| 点读（ops/s）| 1.67 M | **77×** | 0.48× |
+| 点写（ops/s）| 1.79 M | **189×** | 4.9× |
+| 批量载入（ms）| 60.8 | **快 36×** | 快 4.5× |
+| 扫描，约 10% 命中（ms）| 5.6 | **快 46×** | 快 5.7× |
+| 耐久写（ops/s）| 785 k（OPFS）| **12.6–17.4×** | 约 2× |
+| 重启到可用（ms）| 129 | **快 2.7×** | 更慢（见下）|
 
 头条与诚实的 caveat：
 
@@ -129,9 +148,9 @@ Compaction 是自动的：追加日志一旦超过 `max(512 KB, 上一镜像的 
 
 | Target | 命令 | 说明 |
 |---|---|---|
-| `wasm32-unknown-unknown` | `cargo build -p kevy-wasm --target wasm32-unknown-unknown --release` | 浏览器工件（`kevy_wasm.wasm`）；npm loader 实例化它。自己的宿主直接驱动 C ABI。 |
-| `wasm32-unknown-unknown`（Rust API） | `cargo build -p kevy-embedded --target wasm32-unknown-unknown` | 无线程、无 OS 时钟：用 `Config::with_ttl_reaper_manual()` 打开，喂 `set_clock_ns` / `set_wall_clock_ms`，宿主循环里调 `Store::tick()`。 |
-| `wasm32-wasip1` | `cargo build -p kevy-embedded --target wasm32-wasip1` | `Instant` / `SystemTime` 可用——不用喂时钟。`std::fs` 对 preopen 目录可用，所以 `Config::with_persist("/data")` + `wasmtime --dir=/data` 给出真 AOF 耐久性。线程仍缺席：继续用手动清扫器。 |
+| `wasm32-unknown-unknown` | `cargo build -p kevy-wasm --target wasm32-unknown-unknown --release` | 浏览器工件（`kevy_wasm.wasm`）；npm loader 实例化它。自己的宿主直接驱动 C ABI。|
+| `wasm32-unknown-unknown`（Rust API）| `cargo build -p kevy-embedded --target wasm32-unknown-unknown` | 无线程、无 OS 时钟：用 `Config::with_ttl_reaper_manual()` 打开，喂 `set_clock_ns` / `set_wall_clock_ms`，宿主循环里调 `Store::tick()`。|
+| `wasm32-wasip1` | `cargo build -p kevy-embedded --target wasm32-wasip1` | `Instant` / `SystemTime` 可用——不用喂时钟。`std::fs` 对 preopen 目录可用，所以 `Config::with_persist("/data")` + `wasmtime --dir=/data` 给出真 AOF 耐久性。线程仍缺席：继续用手动清扫器。|
 
 在 `wasm32-unknown-unknown` 上用 Rust 直接嵌入：
 
@@ -161,11 +180,11 @@ Cloudflare Workers 之类的边缘 isolate 照浏览器配方：每 isolate 一�
 
 ## FAQ
 
-**完整命令面在浏览器里都可用吗？**大部分可用。模块按浏览器能承载的全部 feature 构建——`core`、`persist`、`index`、`text`、`vector`——所以 `cmd` 除了 KV、TTL、计数器、扫描与 pub/sub，还能到达 `IDX.*`（二级索引、全文、向量检索）、`VIEW.*` 与 `TABLE.*`。2026-08 之前它只有较小的那一刀，项目自己的首页因此在一个没编进索引的构建上演示二级索引。
+**完整命令面在浏览器里都可用吗？**大部分可用。模块按浏览器能承载的全部 feature 构建——`core`、`persist`、`index`、`text`、`vector`、`streams-geo`——所以 `cmd` 除了 KV、TTL、计数器、扫描与 pub/sub，还能到达 `IDX.*`（二级索引、全文、向量检索）、`VIEW.*`、`TABLE.*`，以及 stream 和 geo 命令（7.0 起）。2026-08 之前它只有较小的那一刀，项目自己的首页因此在一个没编进索引的构建上演示二级索引。
 
-**哪个已发布版本有：**npm 上 5.1.0 及更早带的是较小的那一刀 —— 在那里 `IDX.*`、`VIEW.*`、`TABLE.*` 会答 `unknown command`。更宽的构建在主分支上、也在 kevy.golia.jp 上，随下一个已发布版本到达 npm。想更早拿到就从源码构建(`cargo build -p kevy-wasm --target wasm32-unknown-unknown --release`)。
+**哪个已发布版本有：**npm 上 5.1.0 及更早带的是较小的那一刀 —— 在那里 `IDX.*`、`VIEW.*`、`TABLE.*` 会答 `unknown command`。stream 和 geo 从 7.0.0 起在包里；更早的版本对它们答 `unknown command`。
 
-被留在外面的东西缺的不是字节，而是浏览器给不了的东西：`replicate` 要网络对端，`listener` 要 TCP socket，`tier` 要磁盘目录。流、事务、geo 与脚本在任何平台上都不在嵌入式引擎的动词面里——边界是 ESTORE_OPS manifest，不是这个构建。
+被留在外面的东西缺的不是字节，而是浏览器给不了的东西：`replicate` 要网络对端，`listener` 要 TCP socket，`tier` 要磁盘目录。事务与脚本在任何平台上都不在嵌入式引擎的动词面里；阻塞读会被拒绝（见上文）。
 
 wasm target 上的 Rust API 则暴露你编译进来的 `kevy-embedded` feature 的全部能力。
 

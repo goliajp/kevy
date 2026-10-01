@@ -23,32 +23,19 @@ fn open_with_empty_channels_rejected() {
 }
 
 // The RESP wire-frame classifier is canonical in `kevy_resp_client`
-// (`classify_pubsub`) and unit-tested there; the sync `recv` path just
+// (`PubsubEvent::try_from`) and unit-tested there; the sync `recv` path just
 // routes through it. Only the embedded-only + URL-routing surface is
 // tested locally.
 
-// ----- remote_host_port -----
+// ----- check_no_userinfo -----
 
 #[test]
-fn remote_host_port_default_6379() {
-    let (h, p) = remote_host_port("kevy://example.com").unwrap();
-    assert_eq!(h, "example.com");
-    assert_eq!(p, 6379);
-}
-
-#[test]
-fn remote_host_port_explicit() {
-    let (h, p) = remote_host_port("redis://example.com:1234/0").unwrap();
-    assert_eq!(h, "example.com");
-    assert_eq!(p, 1234);
-}
-
-#[test]
-fn remote_host_port_userinfo_rejected() {
-    assert!(matches!(
-        remote_host_port("kevy://u:p@h:6379").unwrap_err(),
-        KevyError::Unsupported(_)
-    ));
+fn userinfo_is_refused_only_in_the_host_part() {
+    assert!(matches!(check_no_userinfo("kevy://u:p@h:6379"), Err(KevyError::Unsupported(_))));
+    assert!(check_no_userinfo("kevy://h:6379/0").is_ok());
+    let key = "ab".repeat(32);
+    let url = format!("kevys://h:6404?server_key={key}&client_key_file=/home/a@b/k");
+    assert!(check_no_userinfo(&url).is_ok());
 }
 
 // ----- embedded end-to-end -----

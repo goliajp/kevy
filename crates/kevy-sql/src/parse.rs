@@ -5,7 +5,7 @@
 
 use crate::ast::{ColumnDef, CreateIndex, CreateTable, Stmt};
 use crate::lex::{Tok, Token};
-use crate::{KevyType, SqlError, typemap};
+use crate::{SqlError, ValType, typemap};
 
 /// Token cursor. Never advances past `Eof`.
 pub(crate) struct P<'a> {
@@ -14,6 +14,11 @@ pub(crate) struct P<'a> {
 }
 
 impl<'a> P<'a> {
+    /// A cursor at the first token.
+    pub(crate) fn new(toks: &'a [Token]) -> P<'a> {
+        P { toks, i: 0 }
+    }
+
     pub(crate) fn peek(&self) -> &'a Token {
         &self.toks[self.i]
     }
@@ -102,7 +107,7 @@ impl<'a> P<'a> {
 
 /// Parse a whole script into statements.
 pub(crate) fn parse_script(toks: &[Token]) -> Result<Vec<Stmt>, SqlError> {
-    let mut p = P { toks, i: 0 };
+    let mut p = P::new(toks);
     let mut out = Vec::new();
     loop {
         while p.eat_sym(';') {}
@@ -357,7 +362,7 @@ fn parse_column_def(p: &mut P<'_>, t: &mut CreateTable) -> Result<(), SqlError> 
 }
 
 /// Parse one SQL type (with optional `(n[, m])` args) and map it.
-fn parse_type(p: &mut P<'_>) -> Result<(Option<KevyType>, String), SqlError> {
+fn parse_type(p: &mut P<'_>) -> Result<(Option<ValType>, String), SqlError> {
     let t = p.peek();
     let Tok::Ident(first) = &t.tok else {
         return Err(p.err_here("expected a column type"));

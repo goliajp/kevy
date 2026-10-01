@@ -19,11 +19,11 @@ legacy encodings:
 - `#![forbid(unsafe_code)]`, zero dependencies.
 
 ```rust
-use kevy_store::Store;
+use kevy_store::{SetCondition, Store};
 
 let mut s = Store::new();
-s.set(b"k", b"v".to_vec(), None, false, false);
-assert_eq!(s.get(b"k").unwrap(), Some(&b"v"[..]));
+s.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"v"[..]));
 ```
 
 ## License

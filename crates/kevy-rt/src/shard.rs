@@ -14,9 +14,10 @@
 
 use crate::Commands;
 use crate::NotificationFlags;
+use crate::batch_lane::BatchLane;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
+use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg};
 use crate::park_fence::ParkFlag;
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
@@ -40,6 +41,8 @@ pub(crate) struct Shard<C: Commands> {
     /// multi-shard owner-starvation regression; see the legacy8sh
     /// owner-starvation PERF-DECOMP note in bench/).
     pub(crate) xshard_inflight: u64,
+    /// Replies held until their write's hook messages are applied.
+    pub(crate) ext_waits: crate::exec_ext::ExtWaits,
     pub(crate) id: usize,
     pub(crate) nshards: usize,
     /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash
@@ -73,10 +76,12 @@ pub(crate) struct Shard<C: Commands> {
     /// re-pushed (in order) by `flush_backlog` once the peer drains.
     pub(crate) backlog: Vec<VecDeque<Inbound>>,
     pub(crate) wakers: Vec<Arc<Waker>>,
-    // Fx-hashed: these are looked up per command (`conns` twice — start_command
-    // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
+    // Fx-hashed: looked up per event, and per command through
+    // `conn_slot_hint`; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
     pub(crate) conns: KevyMap<u64, Conn>,
+    /// Slot of the conn looked up last, for [`crate::conn::conn_at`].
+    pub(crate) conn_slot_hint: usize,
     /// Per-iter "needs arm work" queue
     /// for the io_uring reactor. Populated by:
     ///   - accept handler (new conn, needs recv arm)
@@ -167,6 +172,8 @@ pub(crate) struct Shard<C: Commands> {
     /// `debug_assert` in [`Self::run`].
     pub(crate) inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>>,
     pub(crate) data_dir: PathBuf,
+    /// Held until every shard has restored (see [`crate::restore_gate`]).
+    pub(crate) restore_gate: std::sync::Arc<crate::restore_gate::RestoreGate>,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
     /// Two-phase rewrite handoff state. `Some` between the worker's
@@ -213,6 +220,12 @@ pub(crate) struct Shard<C: Commands> {
     /// Accepted connections enter the [`crate::replication::ReplicaConn`]
     /// state machine — handshake → live frame streaming.
     pub(crate) replication_listener: Option<Socket>,
+    /// `Some`: every accepted replica link must complete a Noise handshake
+    /// before anything it sends is read.
+    pub(crate) repl_security: Option<std::sync::Arc<crate::ReplicationSecurity>>,
+    /// `Some`: `CLIENT SETPEER` with this token rewrites a connection's
+    /// peer address.
+    pub(crate) peer_token: Option<[u8; 32]>,
     /// Active replica connections (handshake-pending or streaming).
     /// Vec rather than KevyMap — N < 16 in practice, linear scan
     /// beats hashing at that size.
@@ -271,7 +284,7 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) auto_aof_rewrite_bytes: u64,
     /// `auto_aof_rewrite_interval_secs`: staleness trigger (0 = rule off).
     pub(crate) auto_aof_rewrite_interval_secs: u64,
-    /// Best-effort boot replay (see `Runtime::with_replay_resync`).
+    /// Best-effort boot replay (see `Runtime::with_replay_mode`).
     pub(crate) replay_resync: bool,
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
@@ -300,10 +313,10 @@ pub(crate) struct Shard<C: Commands> {
     /// (`flush_requests`) so a -c50 flood costs one cross-core send per shard,
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
-    pub(crate) request_batch: Vec<ReqBatch>,
+    pub(crate) request_batch: Vec<BatchLane>,
     /// Per-shard cached `notify_keyspace_events` flags — hot-reloaded
     /// off the [`crate::Commands::live_runtime_config`] tick. Empty
-    /// (default) = OFF: every write checks `notify_flags.is_empty()`
+    /// (default) = OFF: every write checks `notify_flags.is_active()`
     /// and skips the publish hot-path. `Copy` so the per-cmd check
     /// fits in a register pair.
     pub(crate) notify_flags: NotificationFlags,
@@ -318,6 +331,8 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
+    /// Entries in this shard's io_uring provided-buffer ring.
+    pub(crate) recv_buffers: u16,
     /// `false` = compute-only shard (no accept SQE).
     pub(crate) arms_accept: bool,
     /// Per-shard cap (`max_clients / nshards`). `0` = unlimited.

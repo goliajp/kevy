@@ -49,8 +49,23 @@ pub(crate) fn emit<W: Write, A: kevy_resp::ArgvView + ?Sized>(
 
 /// Serialize `src`'s whole state to a fresh compacted AOF at `path`
 /// (fsynced): the rewrite image — always the v2 checksummed-record
-/// format. Returns `(keys, bytes)`.
-pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u64, u64)> {
+/// format. Returns the keys written and the file's size.
+///
+/// ```
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// let dir = kevy_tmpdir::unique_dir("dump-aof-doc");
+/// let path = dir.join("compact.aof");
+/// let stats = kevy_persist::dump_aof(&path, &store)?;
+/// assert_eq!((stats.keys, stats.bytes), (1, std::fs::metadata(&path)?.len()));
+/// let replayed = kevy_persist::replay_aof_quiet(&path, Default::default(), |_| {})?;
+/// assert_eq!(replayed.commands, 1);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<crate::RewriteStats> {
     // Drop-behind stride — a multi-GB image left dirty floods the page
     // cache into direct reclaim inside the server's own fault paths
     // (5.2M pages scanned vs 6.6k without; the S5-E/F finding).
@@ -59,6 +74,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
     let mut scratch = Vec::new();
     w.write_all(crate::record::AOF2_MAGIC)?;
+    crate::log_base::write_image_base(&mut w, &mut scratch)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
     let mut cold_seqs: Vec<u32> = Vec::new();
@@ -106,14 +122,17 @@ fn finish_dump<S: crate::SnapshotSource>(
     cold_seqs: &[u32],
     scratch: &mut Vec<u8>,
     keys: u64,
-) -> io::Result<(u64, u64)> {
+) -> io::Result<crate::RewriteStats> {
     write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
     crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
+    if let Some(frame) = src.aux_frame() {
+        emit(&mut w, &frame, crate::AofFormat::V2, scratch)?;
+    }
     w.flush()?;
     let inner = w.into_inner().map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = inner.metadata().map_or(0, |m| m.len());
     inner.sync_all()?;
-    Ok((keys, bytes))
+    Ok(crate::RewriteStats { keys, bytes })
 }
 
 /// Hash field TTLs re-emitted as absolute HPEXPIREAT frames (after the
@@ -154,6 +173,19 @@ fn write_hash_ttl_frames<W: Write, S: crate::SnapshotSource>(
 /// host-mediated persistence (targets without a filesystem hand the image
 /// to the host to store). `Vec<u8>` is an infallible `Write`, so no error
 /// path exists.
+///
+/// ```
+/// use kevy_persist::{AofFormat, dump_store_to_buf};
+/// use kevy_store::{SetCondition, Store};
+///
+/// let mut store = Store::new();
+/// store.set(b"k", b"v".to_vec(), None, SetCondition::Always);
+/// // a host without a filesystem stores the image itself
+/// let (image, keys) = dump_store_to_buf(&store, AofFormat::V1);
+/// assert_eq!(keys, 1);
+/// let text = String::from_utf8_lossy(&image);
+/// assert!(text.contains("SET\r\n$1\r\nk\r\n$1\r\nv"));
+/// ```
 pub fn dump_store_to_buf<S: crate::SnapshotSource>(
     src: &S,
     fmt: crate::AofFormat,
@@ -164,11 +196,26 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
         crate::AofFormat::V2 => crate::record::AOF2_MAGIC,
     });
     let mut scratch = Vec::new();
+    if fmt == crate::AofFormat::V2 {
+        let _ = crate::log_base::write_image_base(&mut buf, &mut scratch);
+    }
     let mut keys = 0u64;
     src.for_each_entry(|key, value, ttl_ms| {
-        let _ = write_value_as_commands(&mut buf, key, value, ttl_ms, fmt, &mut scratch);
+        let _ = crate::rewrite_frames::write_value_into_vec(
+            &mut buf,
+            key,
+            value,
+            ttl_ms,
+            fmt,
+            &mut scratch,
+        );
         keys += 1;
     });
+    // the per-field deadlines, as `dump_aof` writes them after the values
+    let _ = write_hash_ttl_frames(&mut buf, src, fmt, &mut scratch);
+    if let Some(frame) = src.aux_frame() {
+        let _ = emit(&mut buf, &frame, fmt, &mut scratch);
+    }
     (buf, keys)
 }
 
@@ -357,7 +404,16 @@ fn decimal_digits(mut x: u64) -> u32 {
 /// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
 /// producers (host-mediated persistence pumps) emit frames byte-compatible
 /// with kevy-written logs.
-pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(w: &mut W, args: &A) -> io::Result<()> {
+///
+/// ```
+/// use kevy_persist::{Argv, write_multibulk};
+///
+/// let mut frame = Vec::new();
+/// write_multibulk(&mut frame, &Argv::from(vec![b"GET".to_vec(), b"k".to_vec()]))?;
+/// assert_eq!(frame, b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(mut w: W, args: &A) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
     for i in 0..args.len() {
         let a = &args[i];

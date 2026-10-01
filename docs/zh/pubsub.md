@@ -105,20 +105,20 @@ run("kevy://prod-cache:6379")?;
 嵌入方代码手里已经有 `Store` 时，可以跳过 URL 这层间接，直接跟总线打交道：
 
 ```rust
-use kevy_embedded::{Config, PubsubFrame, Store};
+use kevy_embedded::{Config, PubsubEvent, Store};
 
 let store = Store::open(Config::default().with_ttl_reaper_manual())?;
 
 // Subscriber owns the receive queue.
 let sub = store.subscribe(&[b"jobs"]);
-let _ack = sub.recv()?; // PubsubFrame::Subscribe
+let _ack = sub.recv()?; // PubsubEvent::Subscribe
 
 // Any clone of `store` reaches the same bus.
 let writer = store.clone();
 assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
 
 match sub.recv()? {
-    PubsubFrame::Message { channel, payload } => {
+    PubsubEvent::Message { channel, payload } => {
         assert_eq!(channel, b"jobs");
         assert_eq!(payload, b"compute-pi");
     }
@@ -207,7 +207,7 @@ redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
 
 匿名 `mem://` 收不到发布的消息——别的代码根本够不到同一个底层 `Store`，所以 `Subscriber::connect_channels` 会以 `KevyError::Unsupported` 拒绝它。只要打算发布，就用 `mem://<some-name>`。
 
-`rediss://`、`kevys://` 和 `redis://user:pass@…` 被拒绝也是同一个原因：kevy 不带 TLS，也不带 `AUTH`。需要这两样时，在网络边界用 stunnel 加 IP allowlist 把 socket 挡在前面。
+`rediss://` 和 `redis://user:pass@…` 同样会被拒绝：kevy 不带 TLS，也不带 `AUTH`。需要这两样时，在网络边界用 stunnel 加 IP allowlist 把 socket 挡在前面。`kevys://` 经服务端的加密客户端端口订阅（[encrypted-links.md](encrypted-links.md)）。
 
 `mem://<name>` 和 `file:///` 的注册表都是**进程级**的：两个互不相干的 OS 进程打开同一个名字，看到的是两条彼此独立的总线。要跨进程投递，就得跑一台 kevy 服务器，两边都连 `kevy://host:port`。
 

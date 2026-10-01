@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The READMEs' benchmark tables come from the ledger, not from memory.
+"""The READMEs' benchmark tables come from PERFORMANCE.md, not from memory.
 
 Three READMEs carry the same two tables — kevy against valkey, and kevy's
 lead over each of four engines. They were written by hand from a v4-era
@@ -7,11 +7,10 @@ measurement and were still showing it under a 5.1.0 release: GET 7.24 M/s
 where the current measurement says 7.37, and a ratio against Redis 8 that
 had moved with it.
 
-This reads the most recent `arena bare face` entry in
-bench/PERF-LEDGER.md and rewrites those rows in all three files. Nothing
-here invents a number, and a row the ledger does not cover is left alone
-rather than extrapolated — the pub/sub and embedded rows come from other
-harnesses and are not in an arena run.
+This reads the `Key-value throughput` table in PERFORMANCE.md and
+rewrites those rows in all three files. Nothing here invents a number, and
+a row that table does not cover is left alone rather than extrapolated —
+the pub/sub and embedded rows come from other harnesses.
 
 Run: python3 tools/sync_readme_bench.py [--check]
 """
@@ -22,39 +21,23 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-LEDGER = ROOT / "bench/PERF-LEDGER.md"
-ANCHORS = ROOT / "bench/COMPETITOR-ANCHORS.json"
-
-
-def pins():
-    """Which version of each competitor the READMEs are allowed to name.
-
-    These labels used to be spelled out in this file, hardcoded to whatever
-    was current when it was written — a fourth place a competitor version
-    lived, and the one that writes it into three READMEs and the site. bench/COMPETITOR-ANCHORS.json is the
-    only place a competitor version is written down now."""
-    import json
-    return {k: v["pinned"] for k, v in json.loads(
-        ANCHORS.read_text(encoding="utf-8"))["anchors"].items()}
+RESULTS = ROOT / "PERFORMANCE.md"
 READMES = ["README.md", "README.zh-CN.md", "README.ja.md"]
 
 
 def latest_arena():
-    """The most recent arena table in the ledger, as {verb: {engine: n}}."""
-    text = LEDGER.read_text(encoding="utf-8")
+    """The key-value throughput table in PERFORMANCE.md, as {verb: {engine: n}}."""
+    text = RESULTS.read_text(encoding="utf-8")
     blocks = re.findall(
-        r"## arena bare face — (\d{4}-\d{2}-\d{2}) — kevy ([\d.]+).*?\n\n(\| verb.*?)\n\nGap rule",
+        r"## Key-value throughput — (\d{4}-\d{2}-\d{2}) — kevy ([\d.]+)\n.*?\n\n(\| verb.*?)\n\n",
         text,
         re.S,
     )
-    if not blocks:
-        sys.exit("sync_readme_bench: no arena table in bench/PERF-LEDGER.md")
-    # By date, not by position. It was `blocks[-1]`, which means "last in
-    # the file" — true only while entries are appended in order, and the
-    # ledger reads newest-first. Adding a newer entry at the top therefore
-    # left this reading the OLD one and reporting success with the version
-    # it had just not used.
-    date, version, table = max(blocks, key=lambda b: b[0])
+    if len(blocks) != 1:
+        sys.exit(f"sync_readme_bench: expected one key-value throughput table in "
+                 f"PERFORMANCE.md, found {len(blocks)}")
+    date, version, table = blocks[0]
+    names = measured_against(table.split("\n")[0], date, version)
     rows = {}
     for line in table.split("\n")[2:]:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -63,10 +46,10 @@ def latest_arena():
         verb = cells[0]
         try:
             rows[verb] = {
-                "kevy": int(cells[1].replace(",", "")),
-                "redis8": int(cells[2].replace(",", "")),
-                "valkey": int(cells[3].replace(",", "")),
-                "dragonfly": int(cells[4].replace(",", "")),
+                "kevy": cell(cells[1]),
+                "redis8": cell(cells[2]),
+                "valkey": cell(cells[3]),
+                "dragonfly": cell(cells[4]),
             }
         except ValueError:
             # Say which table and which cell, rather than raising
@@ -75,28 +58,66 @@ def latest_arena():
             # release re-measurement was in fact an A/B with a different
             # table under it. That is exactly what happened on 2026-08-30.
             sys.exit(
-                f"sync_readme_bench: the newest `arena bare face` entry "
+                f"sync_readme_bench: the key-value throughput table "
                 f"({date}, kevy {version}) has a row this cannot read:\n"
                 f"  {line.strip()}\n"
-                f"A bare-face entry's table is five columns — verb, kevy, "
-                f"redis, valkey, dragonfly — and nothing else. An A/B or a "
-                f"decomposition belongs under a heading that is not "
-                f"`arena bare face — <date> — kevy <version>`, because that "
-                f"heading is what this tool reads to rewrite three READMEs."
+                f"Its columns are verb, kevy, redis, valkey, dragonfly, and "
+                f"a ratio."
             )
     if not rows:
         sys.exit("sync_readme_bench: the arena table parsed to nothing")
-    return date, version, rows
+    return date, version, names, rows
+
+
+class Cell(int):
+    """A cell's throughput. `floor` when the load generator, not the
+    engine, set it (`≥ n` in the table): the engine does at least that."""
+
+    floor = False
+
+
+def cell(text):
+    floor = text.startswith("≥")
+    c = Cell(int(text.lstrip("≥ ").replace(",", "")))
+    c.floor = floor
+    return c
+
+
+def ratio(kevy, other, fmt="{:.2f}×"):
+    """kevy / other as written: a floor when kevy's number is one, and no
+    ratio at all when the other's is, since it could do more than it did."""
+    if other.floor:
+        return None
+    return ("≥ " if kevy.floor else "") + fmt.format(kevy / other)
+
+
+def measured_against(header, date, version):
+    """The version of each opponent the table was measured against, read
+    from its own heading. A label taken from the current pins would put a
+    newer release's name on an older release's number the day an anchor
+    is raised; the table heading is what was actually run."""
+    names = {}
+    for key, word in (("redis", "Redis"), ("valkey", "valkey"), ("dragonfly", "Dragonfly")):
+        found = re.search(rf"\| {word} ([0-9]+\.[0-9][0-9.]*) \|", header)
+        if not found:
+            sys.exit(f"sync_readme_bench: the key-value throughput table ({date}, "
+                     f"kevy {version}) does not name the {word} version it measured:\n"
+                     f"  {header.strip()}")
+        names[key] = found.group(1)
+    return names
 
 
 def m(n):
-    return f"{n / 1e6:.2f} M/s"
+    return ("≥ " if n.floor else "") + f"{n / 1e6:.2f} M/s"
 
 
-def build(date, version, rows):
+def bold(r):
+    return f"**{r}**" if r else "—"
+
+
+def build(date, version, names, rows):
     """The two tables, and the sentence that dates them."""
     get, setv = rows["GET"], rows["SET"]
-    pin = pins()
     head = {
         "README.md": ("Workload", "Ratio"),
         "README.zh-CN.md": ("负载", "倍数"),
@@ -113,19 +134,19 @@ def build(date, version, rows):
         c, d = lead[f]
         out[f] = {
             "vs": (
-                f"| {a} | kevy | valkey {pin['valkey']} | {b} |\n"
+                f"| {a} | kevy | valkey {names['valkey']} | {b} |\n"
                 f"|---|---:|---:|---|\n"
                 f"| `GET -c 50 -P 16` | {m(get['kevy'])} | {m(get['valkey'])} | "
-                f"**{get['kevy'] / get['valkey']:.2f}×** |\n"
+                f"{bold(ratio(get['kevy'], get['valkey']))} |\n"
                 f"| `SET -c 50 -P 16` | {m(setv['kevy'])} | {m(setv['valkey'])} | "
-                f"**{setv['kevy'] / setv['valkey']:.2f}×** |"
+                f"{bold(ratio(setv['kevy'], setv['valkey']))} |"
             ),
             "lead": (
                 f"| {c} | {d} |\n"
                 f"|---|---:|\n"
-                f"| valkey {pin['valkey']} | **{get['kevy'] / get['valkey']:.2f}×** |\n"
-                f"| redis {pin['redis']} | **{get['kevy'] / get['redis8']:.2f}×** |\n"
-                f"| dragonfly {pin['dragonfly']} | **{get['kevy'] / get['dragonfly']:.2f}×** |"
+                f"| valkey {names['valkey']} | {bold(ratio(get['kevy'], get['valkey']))} |\n"
+                f"| redis {names['redis']} | {bold(ratio(get['kevy'], get['redis8']))} |\n"
+                f"| dragonfly {names['dragonfly']} | {bold(ratio(get['kevy'], get['dragonfly']))} |"
             ),
             "rate": m(get["kevy"]),
         }
@@ -135,7 +156,7 @@ def build(date, version, rows):
 
 # ── the site quotes the same run, in five more places ────────────────────
 #
-# The three READMEs were tied to the ledger; the site was not. Its
+# The three READMEs were tied to PERFORMANCE.md; the site was not. Its
 # four-engine table lives in tools/site_content/{en,zh,ja}.py, and the
 # landing page carries a shorter table, a hero figure and a sentence of
 # prose with the ratios written into it — all typed. After the 5.2.0
@@ -150,13 +171,16 @@ I18N = "web/src/i18n.tsx"
 
 def _m(n):
     """7,421,434 -> '7.42 M' — the landing page's shorter form."""
-    return f"{n / 1_000_000:.2f} M"
+    return ("≥ " if n.floor else "") + f"{n / 1_000_000:.2f} M"
 
 
-def write_site(rows, version, check):
+def _n(n):
+    return ("≥ " if n.floor else "") + f"{n:,}"
+
+
+def write_site(rows, version, names, check):
     """rows: {verb: {engine: int}}. Returns a list of complaints."""
     bad = []
-    pin = pins()
     order = ["GET", "SET", "INCR", "SADD", "HSET", "LPUSH", "ZADD"]
 
     def headings(text):
@@ -167,9 +191,9 @@ def write_site(rows, version, check):
         — which argues about margins and needs a human — is left alone."""
         def one_row(m):
             row = m.group(0)
-            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {pin['redis']}", row)
-            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {pin['valkey']}", row)
-            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {pin['dragonfly']}", row)
+            row = re.sub(r"Redis [0-9][0-9.]*", f"Redis {names['redis']}", row)
+            row = re.sub(r"valkey [0-9][0-9.]*", f"valkey {names['valkey']}", row)
+            row = re.sub(r"Dragonfly( [0-9][0-9.]*)?", f"Dragonfly {names['dragonfly']}", row)
             return row
         return re.sub(r'"head": \[[^\]]*\]', one_row, text)
 
@@ -177,14 +201,28 @@ def write_site(rows, version, check):
         p = ROOT / rel
         text = p.read_text(encoding="utf-8")
         before = text
+        num = r'"(?:≥ )?[\d,]+"'
         for verb in order:
             r = rows[verb]
-            ratio = r["kevy"] / r["redis8"]
-            mark = "!" if ratio < 1.2 else "*"
-            new = (f'["{verb}", "{r["kevy"]:,}", "{r["redis8"]:,}", '
-                   f'"{r["valkey"]:,}", "{r["dragonfly"]:,}", "{mark}{ratio:.2f}×"]')
-            text = re.sub(rf'\["{verb}", "[\d,]+", "[\d,]+", "[\d,]+", "[\d,]+", "[!*][\d.]+×"\]',
+            mark = "!" if r["kevy"] / r["redis8"] < 1.2 else "*"
+            vs = ratio(r["kevy"], r["redis8"]) or "—"
+            new = (f'["{verb}", "{_n(r["kevy"])}", "{_n(r["redis8"])}", '
+                   f'"{_n(r["valkey"])}", "{_n(r["dragonfly"])}", "{mark}{vs}"]')
+            text = re.sub(rf'\["{verb}", {num}, {num}, {num}, {num}, "[!*](?:≥ )?(?:[\d.]+×|—)"\]',
                           new.replace("\\", "\\\\"), text)
+        # the landing page's bar chart against Redis: [verb, kevy, redis,
+        # ratio, thin]; a thin row is one under 1.2x, drawn as a warning
+        for verb in order:
+            r = rows[verb]
+            vs = ratio(r["kevy"], r["redis8"]) or "—"
+            thin = "True" if r["kevy"] / r["redis8"] < 1.2 else "False"
+
+            def bar(m, r=r, vs=vs, thin=thin):
+                q = m.group(1)
+                return f"[{q}{m.group(2)}{q}, {int(r['kevy'])}, {int(r['redis8'])}, {q}{vs}{q}, {thin}]"
+            text = re.sub(rf"\[([\"'])({verb})\1, \d+, \d+, [\"'](?:≥ )?(?:[\d.]+×|—)[\"'], (?:True|False)\]",
+                          bar, text)
+        text = re.sub(r'"them": "Redis [0-9][0-9.]*"', f'"them": "Redis {names["redis"]}"', text)
         text = re.sub(r'"kevy \d+\.\d+\.\d+"', f'"kevy {version}"', text)
         text = headings(text)
         if text != before:
@@ -200,11 +238,11 @@ def write_site(rows, version, check):
     for verb in ["GET", "SET", "INCR", "HSET"]:
         r = rows[verb]
         new = (f"{{ op: '{verb}', kevy: '{_m(r['kevy'])}', "
-               f"valkey: '{_m(r['valkey'])}', ratio: '{r['kevy'] / r['valkey']:.2f}×' }}")
+               f"valkey: '{_m(r['valkey'])}', ratio: '{ratio(r['kevy'], r['valkey']) or '—'}' }}")
         text = re.sub(rf"\{{ op: '{verb}', kevy: '[^']+', valkey: '[^']+', ratio: '[^']+' \}}",
                       new.replace("\\", "\\\\"), text)
-    set_ratio = f"{rows['SET']['kevy'] / rows['SET']['valkey']:.2f}×"
-    text = re.sub(r'<div className="v">[\d.]+×</div>', f'<div className="v">{set_ratio}</div>', text)
+    set_ratio = ratio(rows["SET"]["kevy"], rows["SET"]["valkey"]) or "—"
+    text = re.sub(r'<div className="v">(?:≥ )?[\d.]+×</div>', f'<div className="v">{set_ratio}</div>', text)
     if text != before:
         if check:
             bad.append(f"{APP} does not carry the {version} numbers")
@@ -214,11 +252,19 @@ def write_site(rows, version, check):
     # the abstract, which states both ratios to one decimal in three languages
     p = ROOT / I18N
     text = p.read_text(encoding="utf-8")
-    g = rows["GET"]["kevy"] / rows["GET"]["valkey"]
-    st = rows["SET"]["kevy"] / rows["SET"]["valkey"]
-    new_text = re.sub(r"[\d.]+× on GET, [\d.]+× on SET", f"{g:.1f}× on GET, {st:.1f}× on SET", text)
-    new_text = re.sub(r"GET 快 [\d.]+ 倍、SET 快 [\d.]+ 倍", f"GET 快 {g:.1f} 倍、SET 快 {st:.1f} 倍", new_text)
-    new_text = re.sub(r"GET は [\d.]+ 倍、SET は [\d.]+ 倍", f"GET は {g:.1f} 倍、SET は {st:.1f} 倍", new_text)
+    # a floor reads "at least" in each language; valkey is never load-bound here
+    words = {
+        "en": ("{r}× on {v}", "at least {r}× on {v}", r"(?:at least )?[\d.]+× on {v}"),
+        # the optional words are escaped: no ASCII mark sits against CJK text
+        "zh": ("{v} 快 {r} 倍", "{v} 至少快 {r} 倍", r"{v} (?:\u81f3\u5c11)?\u5feb [\d.]+ 倍"),
+        "ja": ("{v} は {r} 倍", "{v} は {r} 倍以上", r"{v} は [\d.]+ \u500d(?:\u4ee5\u4e0a)?"),
+    }
+    new_text = text
+    for plain, floor, pat in words.values():
+        for verb in ("GET", "SET"):
+            k, o = rows[verb]["kevy"], rows[verb]["valkey"]
+            said = (floor if k.floor else plain).format(r=f"{k / o:.1f}", v=verb)
+            new_text = re.sub(pat.format(v=verb), said, new_text)
     if new_text != text:
         if check:
             bad.append(f"{I18N} does not carry the {version} ratios")
@@ -258,10 +304,45 @@ def export_site_json(check):
     )
 
 
+def patterns(name, t, date, version):
+    """(what, regex, replacement) for one README; each must match once."""
+    rows = "\n".join(t["vs"].split("\n")[2:])
+    lead = "\n".join(t["lead"].split("\n")[2:]).replace("\\", "\\\\")
+    ver = r"[\d.]+"
+    lead_cell = r"(?:\*\*(?:≥ )?[\d.]+×\*\*|—)"
+    common = [
+        # matched on their own two rows so this cannot land on the lead table
+        ("kevy-vs-valkey rows",
+         r"\| `GET -c 50 -P 16` \|[^\n]*\n\| `SET -c 50 -P 16` \|[^\n]*", rows),
+        ("four-engine lead table",
+         rf"\| valkey {ver} \| {lead_cell} \|\n\| redis {ver} \| {lead_cell} \|\n"
+         rf"\| dragonfly {ver} \| {lead_cell} \|", lead),
+    ]
+    rate = t["rate"]
+    own = {
+        "README.md": [
+            ("dated sentence", r"re-measured \d{4}-\d{2}-\d{2} \(kevy [\d.]+\)",
+             f"re-measured {date} (kevy {version})"),
+            ("quoted rate", r"(kevy at\s*)(?:≥ )?[\d.]+ M/s( against each)", rf"\g<1>{rate}\g<2>"),
+        ],
+        "README.zh-CN.md": [
+            ("dated sentence", r"\d{4}-\d{2}-\d{2} 重测（kevy [\d.]+）",
+             f"{date} 重测（kevy {version}）"),
+            ("quoted rate", r"(kevy\s*以 )(?:≥ )?[\d.]+ M/s", rf"\g<1>{rate}"),
+        ],
+        "README.ja.md": [
+            ("dated sentence", r"を\d{4}-\d{2}-\d{2}に再測定した値（kevy [\d.]+）",
+             f"を{date}に再測定した値（kevy {version}）"),
+            ("quoted rate", r"(kevyは)(?:≥ )?[\d.]+ M/s(で)", rf"\g<1>{rate}\g<2>"),
+        ],
+    }
+    return common + own[name]
+
+
 def main():
     check = "--check" in sys.argv
-    date, version, rows = latest_arena()
-    tables = build(date, version, rows)
+    date, version, names, rows = latest_arena()
+    tables = build(date, version, names, rows)
     stale = []
 
     for name in READMES:
@@ -270,24 +351,16 @@ def main():
         before = s
         t = tables[name]
 
-        # The kevy-vs-valkey rows. Matched on their own two rows so the
-        # replacement cannot land on the four-engine table below.
-        s = re.sub(
-            r"\| `GET -c 50 -P 16` \|[^\n]*\n\| `SET -c 50 -P 16` \|[^\n]*",
-            "\n".join(t["vs"].split("\n")[2:]),
-            s,
-        )
-        # The four-engine lead table.
-        s = re.sub(
-            r"\| valkey 9\.1 \| \*\*[\d.]+×\*\* \|\n\| redis 8 \| \*\*[\d.]+×\*\* \|\n"
-            r"\| dragonfly \| \*\*[\d.]+×\*\* \|",
-            "\n".join(t["lead"].split("\n")[2:]),
-            s,
-        )
-        # The rate quoted in the prose beside it.
-        s = re.sub(r"kevy at\n?\s*[\d.]+ M/s against each", f"kevy at {t['rate']} against each", s)
-        s = re.sub(r"[\d.]+ M/s で各エンジンに対し", f"{t['rate']} で各エンジンに対し", s)
-        s = re.sub(r"kevy 以 [\d.]+ M/s", f"kevy 以 {t['rate']}", s)
+        # Every pattern must land exactly once. A pattern that matches
+        # nothing rewrites nothing, and the check then reports the stale
+        # text as current: the lead table kept an older run's ratios beside
+        # the 6.3.0 rows that way, once its engine labels gained full
+        # versions and stopped matching.
+        for what, pat, rep in patterns(name, t, date, version):
+            s, n = re.subn(pat, rep, s)
+            if n != 1:
+                sys.exit(f"sync_readme_bench: {name}: the {what} pattern matched "
+                         f"{n} times, not once — the prose moved; update patterns()")
 
         if s != before:
             if check:
@@ -295,13 +368,13 @@ def main():
             else:
                 p.write_text(s, encoding="utf-8")
 
-    stale += write_site(rows, version, check)
+    stale += write_site(rows, version, names, check)
     stale += export_site_json(check)
 
     if check:
         if stale:
             print(f"sync_readme_bench: STALE — {', '.join(stale)}")
-            print(f"  The ledger's latest arena run is {date} (kevy {version}).")
+            print(f"  PERFORMANCE.md's key-value table is {date} (kevy {version}).")
             print("  Regenerate with: python3 tools/sync_readme_bench.py")
             sys.exit(1)
         print(f"ok: 3 READMEs and the site carry the {date} arena numbers (kevy {version})")

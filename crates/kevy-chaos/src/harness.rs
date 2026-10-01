@@ -7,117 +7,86 @@
 
 use std::io;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// How to terminate the kevy child for crash simulation.
-#[derive(Debug, Clone, Copy)]
-pub enum KillSignal {
-    /// `SIGKILL` — abrupt, no graceful shutdown. The standard chaos signal.
-    Sigkill,
-    /// `SIGTERM` — graceful. For comparison tests asserting that
-    /// graceful shutdown loses NOTHING even at `everysec` fsync.
-    Sigterm,
-}
-
-/// Config for one chaos run.
-#[derive(Debug, Clone)]
-pub struct HarnessConfig {
-    /// Path to the kevy binary. Default: `$KEVY_BIN` env var or
-    /// `target/release/kevy` relative to the workspace root.
-    pub kevy_bin: PathBuf,
-    /// TCP port for kevy to bind. Default: ephemeral via `pick_free_port`.
-    pub port: u16,
-    /// kevy shard count (`--threads N`). Default: 2.
-    pub threads: usize,
-    /// kevy data directory (AOF + snapshots persist here across restart).
-    /// Use a temp dir per test; harness does NOT clean up (the test owns it).
-    pub data_dir: PathBuf,
-    /// AOF fsync policy. `"always"` / `"everysec"` / `"no"`. Default: `"always"`.
-    pub appendfsync: String,
-    /// Optional: force frequent AOF rewrites by setting this low. Bytes.
-    /// `None` keeps the kevy default (64 MiB).
-    pub aof_rewrite_min_size: Option<u64>,
-    /// Optional: percentage growth-since-last-rewrite that triggers an
-    /// auto-rewrite. `None` keeps the kevy default (100 = 2× growth).
-    pub aof_rewrite_pct: Option<u32>,
-    /// Free-form TOML appended to the spawned kevy's
-    /// `kevy.toml`. Empty by default. Use to set `[replication]`
-    /// sections for primary/replica chaos tests, or any other section
-    /// not yet covered by typed fields above. NOTE: appended after
-    /// `[persistence]`; lines without a section header attach to
-    /// persistence. Use `[server]\n` etc. prefix if needed.
-    pub extra_toml: String,
-    /// `[server] max_clients = N`. `0` keeps the kevy
-    /// default (10 000). Set explicitly for the maxclients chaos test.
-    pub max_clients: usize,
-    /// `RLIMIT_NOFILE` for the spawned kevy. `0` = inherit
-    /// from parent. Use to test fd-exhaustion behavior.
-    pub rlimit_nofile: u64,
-    /// `RLIMIT_FSIZE` for the spawned kevy. `0` = inherit.
-    /// Use to test disk-full / quota-exhaustion behavior. kevy writes
-    /// past this limit get `SIGXFSZ` from the kernel; kevy must
-    /// catch / report cleanly without panicking.
-    pub rlimit_fsize: u64,
-    /// Timeout for "kevy ready" wait after spawn. Default: 10 s.
-    pub spawn_timeout: Duration,
-}
-
-impl HarnessConfig {
-    /// Build a config with the named data dir + port. Caller picks port to
-    /// avoid collisions in parallel tests.
-    #[must_use]
-    pub fn new(data_dir: PathBuf, port: u16) -> Self {
-        Self {
-            kevy_bin: default_kevy_bin(),
-            port,
-            threads: 2,
-            data_dir,
-            appendfsync: "always".to_string(),
-            aof_rewrite_min_size: None,
-            aof_rewrite_pct: None,
-            extra_toml: String::new(),
-            max_clients: 0,
-            rlimit_nofile: 0,
-            rlimit_fsize: 0,
-            spawn_timeout: Duration::from_secs(10),
-        }
-    }
-
-    /// Builder for `extra_toml`.
-    #[must_use]
-    pub fn with_extra_toml(mut self, extra: impl Into<String>) -> Self {
-        self.extra_toml = extra.into();
-        self
-    }
-    /// Override the AOF fsync policy.
-    #[must_use]
-    pub fn with_fsync(mut self, fsync: &str) -> Self {
-        self.appendfsync = fsync.to_string();
-        self
-    }
-    /// Override the shard count.
-    #[must_use]
-    pub fn with_threads(mut self, n: usize) -> Self {
-        self.threads = n;
-        self
-    }
-}
-
-fn default_kevy_bin() -> PathBuf {
-    if let Ok(p) = std::env::var("KEVY_BIN") {
-        return PathBuf::from(p);
-    }
-    // Fall back to release binary at workspace root. Caller can override.
-    PathBuf::from("target/release/kevy")
-}
+use crate::config::{HarnessConfig, KillSignal};
 
 /// Active kevy child + ready port.
+///
+/// ```
+/// # use std::io::{Read, Write};
+/// # use std::os::unix::fs::PermissionsExt as _;
+/// # let port = kevy_chaos::pick_free_port();
+/// # let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// # std::thread::spawn(move || {
+/// #     for mut s in listener.incoming().flatten() {
+/// #         let mut b = [0u8; 64];
+/// #         while matches!(s.read(&mut b), Ok(n) if n > 0) {
+/// #             if s.write_all(b"+PONG\r\n").is_err() { break; }
+/// #         }
+/// #     }
+/// # });
+/// # let dir = std::env::temp_dir().join(format!("kevy-chaos-doc-{}-{port}", std::process::id()));
+/// # std::fs::create_dir_all(&dir)?;
+/// # let bin = dir.join("kevy.sh");
+/// # std::fs::write(&bin, "#!/bin/sh\nexec sleep 60\n")?;
+/// # std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+/// // `bin` stands in for the kevy binary; the PING it answers comes from a
+/// // listener in this process
+///
+/// use kevy_chaos::{Harness, HarnessConfig, KillSignal};
+///
+/// let cfg = HarnessConfig { kevy_bin: bin, ..HarnessConfig::new(dir.join("data"), port) };
+/// let mut h = Harness::spawn(cfg)?;
+/// assert_eq!(h.port(), port);
+/// // crash, then recover on the same data dir
+/// h.kill(KillSignal::Sigkill)?;
+/// h.restart()?;
+/// h.kill(KillSignal::Sigterm)?;
+///
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct Harness {
     /// The settings this child was started from. Kept rather than consumed
     /// so a test can read back the port and paths it was given — including
     /// the ones the config chose for itself.
+    ///
+    /// ```
+    /// # use std::io::{Read, Write};
+    /// # use std::os::unix::fs::PermissionsExt as _;
+    /// # let port = kevy_chaos::pick_free_port();
+    /// # let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    /// # std::thread::spawn(move || {
+    /// #     for mut s in listener.incoming().flatten() {
+    /// #         let mut b = [0u8; 64];
+    /// #         while matches!(s.read(&mut b), Ok(n) if n > 0) {
+    /// #             if s.write_all(b"+PONG\r\n").is_err() { break; }
+    /// #         }
+    /// #     }
+    /// # });
+    /// # let dir = std::env::temp_dir().join(format!("kevy-chaos-doc-{}-{port}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir)?;
+    /// # let bin = dir.join("kevy.sh");
+    /// # std::fs::write(&bin, "#!/bin/sh\nexec sleep 60\n")?;
+    /// # std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
+    /// // `bin` stands in for the kevy binary; the PING it answers comes from a
+    /// // listener in this process
+    ///
+    /// use kevy_chaos::{Harness, HarnessConfig};
+    ///
+    /// let cfg = HarnessConfig { kevy_bin: bin, ..HarnessConfig::new(dir.join("data"), port) };
+    /// let h = Harness::spawn(cfg)?;
+    /// assert_eq!(h.config.port, port);
+    /// // the child's config and stderr log live in the data dir it was given
+    /// assert!(h.config.data_dir.join("kevy.toml").exists());
+    /// assert!(h.config.data_dir.join("kevy.stderr.log").exists());
+    /// # drop(h);
+    ///
+    /// # std::fs::remove_dir_all(&dir)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub config: HarnessConfig,
     child: Option<Child>,
 }
@@ -202,30 +171,84 @@ impl Harness {
         toml
     }
 
-    fn wait_ready(&self) -> io::Result<()> {
+    /// Wait until the child answers PING.
+    ///
+    /// A child that died and a child that is slow are not the same failure,
+    /// and a probe that only connects reports them as one. Two primaries
+    /// timed out here in a parallel `cargo test --workspace` and left an
+    /// empty stderr log and a data dir holding nothing, so "kevy ready
+    /// timeout" was the whole of what ten seconds could be asked about. Each
+    /// round now asks the child whether it is still running, and an exit is
+    /// reported as an exit.
+    fn wait_ready(&mut self) -> io::Result<()> {
         let deadline = Instant::now() + self.config.spawn_timeout;
         let addr = (format!("127.0.0.1:{}", self.config.port).as_str())
             .to_socket_addrs()?
             .next()
             .expect("addr resolves");
         loop {
-            if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-                use std::io::{Read, Write};
-                let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
-                if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
-                    let mut buf = [0u8; 16];
-                    if let Ok(n) = s.read(&mut buf)
-                        && n > 0
-                        && buf.starts_with(b"+PONG")
-                    {
-                        return Ok(());
-                    }
+            if self.answers_ping(&addr) {
+                return Ok(());
+            }
+            match self.child.as_mut().map(Child::try_wait) {
+                Some(Ok(Some(status))) => {
+                    return Err(io::Error::other(format!(
+                        "kevy exited with {status} before it listened on {}: {}",
+                        self.config.port,
+                        self.stderr_tail()
+                    )));
                 }
+                // Not "still starting": we asked and were refused, and a probe
+                // that cannot ask is not a probe that got a no.
+                Some(Err(e)) => {
+                    return Err(io::Error::other(format!(
+                        "cannot tell whether kevy is still running: {e}"
+                    )));
+                }
+                Some(Ok(None)) | None => {}
             }
             if Instant::now() > deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "kevy ready timeout"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "kevy ready timeout: still running after {:?}, never answered PING \
+                         on {}: {}",
+                        self.config.spawn_timeout,
+                        self.config.port,
+                        self.stderr_tail()
+                    ),
+                ));
             }
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// One PING round trip; false for any failure, which is a reason to keep
+    /// waiting rather than a diagnosis.
+    fn answers_ping(&self, addr: &std::net::SocketAddr) -> bool {
+        use std::io::{Read, Write};
+        let Ok(mut s) = TcpStream::connect_timeout(addr, Duration::from_millis(200)) else {
+            return false;
+        };
+        let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+        if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 16];
+        matches!(s.read(&mut buf), Ok(n) if n > 0 && buf.starts_with(b"+PONG"))
+    }
+
+    /// The last of what the child wrote to stderr, or that it wrote nothing
+    /// — which is itself worth reading, and was the case both times.
+    fn stderr_tail(&self) -> String {
+        let path = self.config.data_dir.join("kevy.stderr.log");
+        match std::fs::read_to_string(&path) {
+            Ok(text) if !text.trim().is_empty() => {
+                let tail: Vec<&str> = text.trim().lines().rev().take(3).collect();
+                format!("stderr: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" | "))
+            }
+            Ok(_) => "stderr empty".into(),
+            Err(e) => format!("stderr unreadable: {e}"),
         }
     }
 
@@ -335,10 +358,23 @@ fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Pick an ephemeral free port (bind 127.0.0.1:0 → return port → drop).
-pub fn pick_free_port() -> io::Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
+/// A port for a server this process is about to start.
+///
+/// [`kevy_testnet::free_port`], which is the one implementation of this
+/// question in the workspace. What stood here was the other one: bind
+/// `127.0.0.1:0`, read the port, drop the listener — which leaves the port
+/// unowned between that drop and the server's own bind, and under a parallel
+/// `cargo test --workspace` something else can be in the gap. free_port hands
+/// out from a block this process owns alone and probes by connecting, so it
+/// holds nothing it hands over.
+///
+/// ```
+/// let port = kevy_chaos::pick_free_port();
+/// let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// assert_eq!(server.local_addr()?.port(), port);
+/// assert_ne!(kevy_chaos::pick_free_port(), port, "never handed out twice");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn pick_free_port() -> u16 {
+    kevy_testnet::free_port()
 }

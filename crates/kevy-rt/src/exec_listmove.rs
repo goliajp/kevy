@@ -122,8 +122,7 @@ impl<C: Commands> Shard<C> {
     /// as a cross-core request. Both arms land in `fold`.
     fn dispatch_op(&mut self, conn_id: u64, seq: u64, shard: usize, op: Op) {
         if shard == self.id {
-            let part = self.exec_op(op);
-            self.fold(conn_id, seq, part);
+            self.exec_local(conn_id, seq, op);
         } else {
             self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
         }
@@ -332,7 +331,9 @@ impl<C: Commands> Shard<C> {
     /// `lpop` / `rpop` / `lpush` / `rpush` keyspace events, matching the
     /// names Redis fires for the same effects.
     pub(crate) fn notify_list_event(&mut self, key: &[u8], left: bool, popped: bool) {
-        if self.notify_flags.is_empty() || !self.notify_flags.list {
+        if !self.notify_flags.is_active()
+            || !self.notify_flags.contains(crate::NotificationFlags::LIST)
+        {
             return;
         }
         let event: &[u8] = match (popped, left) {

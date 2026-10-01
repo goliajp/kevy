@@ -8,7 +8,22 @@
 //! issuing the same command, so feeding it through the existing
 //! [`parse_command_into`] reconstructs the same [`Argv`] the primary
 //! applied.
+//!
+//! ```
+//! use kevy_replicate::wire::{decode_frame, encode_frame};
+//!
+//! let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+//! let bytes = encode_frame(7, &set);
+//! assert!(bytes.starts_with(b"*2\r\n:7\r\n")); // envelope, then the offset
+//! // the payload is the request a client would have sent
+//! let mut argv = kevy_resp::Argv::default();
+//! kevy_resp::parse_command_into(&bytes[8..], &mut argv)?;
+//! assert_eq!(argv, set);
+//! assert_eq!(decode_frame(&bytes)?.0.argv, set);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
+use crate::replica::DecodedFrame;
 use kevy_resp::{Argv, ArgvView, ProtocolError, parse_command_into};
 
 // Snapshot ship helpers live in [`crate::wire_snapshot`] (split out
@@ -24,19 +39,82 @@ pub use crate::wire_snapshot::{
 /// the caller (read more bytes and retry); the other variants signal
 /// a corrupt or protocol-violating peer and call for dropping the
 /// connection.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_replicate::wire::{WireError, decode_frame, encode_frame};
+///
+/// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// let bytes = encode_frame(0, &set);
+/// // a partial read: keep the bytes and read more
+/// assert_eq!(decode_frame(&bytes[..10]).unwrap_err(), WireError::Truncated);
+/// // garbage: drop the peer
+/// let err = decode_frame(b"+OK\r\n").unwrap_err();
+/// assert_eq!(err, WireError::BadEnvelope);
+/// assert_eq!(err.to_string(), "wire envelope not *2");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WireError {
     /// Buffer ended before a complete frame; accumulate more bytes
     /// and call [`decode_frame`] again.
+    ///
+    /// ```
+    /// use kevy_replicate::wire::{WireError, decode_frame, encode_frame};
+    ///
+    /// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+    /// let bytes = encode_frame(3, &set);
+    /// let (mut buf, mut decoded) = (Vec::new(), None);
+    /// for chunk in bytes.chunks(8) {
+    ///     buf.extend_from_slice(chunk); // bytes arrive a few at a time
+    ///     match decode_frame(&buf) {
+    ///         Err(WireError::Truncated) => continue,
+    ///         Ok((frame, used)) => decoded = Some((frame.offset, used)),
+    ///         Err(e) => panic!("{e}"),
+    ///     }
+    /// }
+    /// assert_eq!(decoded, Some((3, bytes.len())));
+    /// ```
     Truncated,
     /// Outer envelope did not start with `*2\r\n` (the only legal
     /// envelope length).
+    ///
+    /// ```
+    /// use kevy_replicate::wire::{WireError, decode_frame};
+    ///
+    /// // a three-element envelope is not a frame
+    /// let err = decode_frame(b"*3\r\n:1\r\n*0\r\n:0\r\n").unwrap_err();
+    /// assert_eq!(err, WireError::BadEnvelope);
+    /// ```
     BadEnvelope,
     /// Offset element did not parse as a RESP integer (`:N\r\n`).
+    ///
+    /// ```
+    /// use kevy_replicate::wire::{WireError, decode_frame};
+    ///
+    /// // the offset arrives as a bulk string instead of an integer
+    /// let err = decode_frame(b"*2\r\n$2\r\n42\r\n*1\r\n$4\r\nPING\r\n").unwrap_err();
+    /// assert_eq!(err, WireError::BadOffset);
+    /// ```
     BadOffset,
     /// RESP integer parsed but is negative. Offsets are `u64`.
+    ///
+    /// ```
+    /// use kevy_replicate::wire::{WireError, decode_frame};
+    ///
+    /// let err = decode_frame(b"*2\r\n:-7\r\n*1\r\n$4\r\nPING\r\n").unwrap_err();
+    /// assert_eq!(err, WireError::NegativeOffset(-7));
+    /// ```
     NegativeOffset(i64),
     /// Inner multi-bulk argv was malformed at the RESP layer.
+    ///
+    /// ```
+    /// use std::error::Error;
+    /// use kevy_replicate::wire::{WireError, decode_frame};
+    ///
+    /// let err = decode_frame(b"*2\r\n:1\r\n*1\r\n!nope\r\n").unwrap_err();
+    /// assert!(matches!(err, WireError::BadPayload(_)));
+    /// assert!(err.source().is_some()); // the RESP parser's own error
+    /// ```
     BadPayload(ProtocolError),
 }
 
@@ -47,20 +125,17 @@ impl std::fmt::Display for WireError {
             Self::BadEnvelope => write!(f, "wire envelope not *2"),
             Self::BadOffset => write!(f, "wire offset element not RESP integer"),
             Self::NegativeOffset(n) => write!(f, "wire offset is negative: {n}"),
-            Self::BadPayload(e) => write!(f, "wire inner payload malformed: {e:?}"),
+            Self::BadPayload(e) => write!(f, "wire inner payload malformed: {e}"),
         }
     }
 }
 
-impl std::error::Error for WireError {}
-
-impl PartialEq for WireError {
-    fn eq(&self, other: &Self) -> bool {
-        // ProtocolError carries `&'static str` reasons; comparing
-        // discriminants is enough for test assertions. Avoids
-        // forcing PartialEq onto ProtocolError just for the test
-        // surface here.
-        core::mem::discriminant(self) == core::mem::discriminant(other)
+impl std::error::Error for WireError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BadPayload(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
@@ -76,6 +151,13 @@ impl PartialEq for WireError {
 /// exabytes of frames; at 10M writes/s that is ~30,000 years, so no
 /// real deployment is at risk. In debug builds we assert; release
 /// builds emit a frame the peer will reject with `BadOffset`.
+///
+/// ```
+/// use kevy_replicate::wire::encode_frame;
+///
+/// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// assert_eq!(encode_frame(99, &set), b"*2\r\n:99\r\n*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n");
+/// ```
 pub fn encode_frame<A: ArgvView + ?Sized>(offset: u64, argv: &A) -> Vec<u8> {
     debug_assert!(
         i64::try_from(offset).is_ok(),
@@ -111,12 +193,23 @@ pub fn encode_frame<A: ArgvView + ?Sized>(offset: u64, argv: &A) -> Vec<u8> {
 
 /// Decode the first complete frame at the front of `buf`.
 ///
-/// Returns `(offset, argv, used)` on success; `used` is the number of
-/// bytes the frame consumed (advance the caller's read cursor by that
-/// much). On [`WireError::Truncated`], the caller should read more
+/// Returns the frame and the number of bytes it consumed (advance the
+/// caller's read cursor by that much). On [`WireError::Truncated`], the caller should read more
 /// bytes and retry; any other error signals an unrecoverable peer
 /// violation.
-pub fn decode_frame(buf: &[u8]) -> Result<(u64, Argv, usize), WireError> {
+///
+/// ```
+/// use kevy_replicate::wire::{decode_frame, encode_frame};
+///
+/// let set = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// let mut stream = encode_frame(0, &set);
+/// stream.extend(encode_frame(1, &set));
+/// let (first, used) = decode_frame(&stream)?;
+/// let (second, _) = decode_frame(&stream[used..])?; // advance past the first
+/// assert_eq!((first.offset, second.offset), (0, 1));
+/// # Ok::<(), kevy_replicate::wire::WireError>(())
+/// ```
+pub fn decode_frame(buf: &[u8]) -> Result<(DecodedFrame, usize), WireError> {
     // Outer envelope: must be exactly `*2\r\n`.
     let after_env = parse_envelope_header(buf)?;
     // Offset line: `:<u64>\r\n`.
@@ -129,7 +222,7 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u64, Argv, usize), WireError> {
         Ok(None) => return Err(WireError::Truncated),
         Err(e) => return Err(WireError::BadPayload(e)),
     };
-    Ok((offset, argv, after_offset + consumed_inner))
+    Ok((DecodedFrame { offset, argv }, after_offset + consumed_inner))
 }
 
 /// Verify the outer `*2\r\n` header and return the cursor position just
@@ -259,178 +352,5 @@ fn argv_byte_estimate_view<A: ArgvView + ?Sized>(argv: &A) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv_from(args: &[&[u8]]) -> Argv {
-        let mut a = Argv::default();
-        for arg in args {
-            a.push(arg);
-        }
-        a
-    }
-
-    #[test]
-    fn roundtrip_simple_set() {
-        let argv = argv_from(&[b"SET", b"foo", b"bar"]);
-        let bytes = encode_frame(42, &argv);
-        let (offset, decoded, used) = decode_frame(&bytes).expect("decode");
-        assert_eq!(offset, 42);
-        assert_eq!(decoded, argv);
-        assert_eq!(used, bytes.len());
-    }
-
-    #[test]
-    fn roundtrip_offset_zero_and_max() {
-        // Offset is u64 in the API but wire envelope (RESP integer) caps
-        // at i64::MAX. See docs/wire.md + encode_frame's doc comment.
-        for offset in [0u64, 1, i64::MAX as u64] {
-            let argv = argv_from(&[b"PING"]);
-            let bytes = encode_frame(offset, &argv);
-            let (back, _, _) = decode_frame(&bytes).expect("decode");
-            assert_eq!(back, offset);
-        }
-    }
-
-    #[test]
-    #[cfg(debug_assertions)] // the trip wire is a debug_assert! — release builds skip the panic by design
-    #[should_panic(expected = "exceeds i64::MAX")]
-    fn encoding_offset_above_i64_max_panics_in_debug() {
-        // Catches accidental over-encoding before the frame goes on the
-        // wire. In release builds the assert is gone and the peer would
-        // see a BadOffset; we test the debug-build trip wire here.
-        let argv = argv_from(&[b"PING"]);
-        let _ = encode_frame(u64::MAX, &argv);
-    }
-
-    #[test]
-    fn roundtrip_argv_with_binary_and_empty_args() {
-        let bin: Vec<u8> = (0u8..=255).collect();
-        let argv = argv_from(&[b"HSET", b"key", b"field", &bin, b""]);
-        let bytes = encode_frame(7, &argv);
-        let (_, decoded, _) = decode_frame(&bytes).expect("decode");
-        assert_eq!(decoded.len(), 5);
-        assert_eq!(decoded.get(3), Some(bin.as_slice()));
-        assert_eq!(decoded.get(4), Some(&b""[..]));
-    }
-
-    #[test]
-    fn two_concatenated_frames_decode_in_order() {
-        let a = encode_frame(1, &argv_from(&[b"SET", b"k", b"a"]));
-        let b = encode_frame(2, &argv_from(&[b"DEL", b"k"]));
-        let mut buf = a.clone();
-        buf.extend_from_slice(&b);
-
-        let (off1, argv1, used1) = decode_frame(&buf).expect("frame 1");
-        assert_eq!(off1, 1);
-        assert_eq!(argv1, argv_from(&[b"SET", b"k", b"a"]));
-        assert_eq!(used1, a.len());
-
-        let (off2, argv2, used2) = decode_frame(&buf[used1..]).expect("frame 2");
-        assert_eq!(off2, 2);
-        assert_eq!(argv2, argv_from(&[b"DEL", b"k"]));
-        assert_eq!(used1 + used2, buf.len());
-    }
-
-    #[test]
-    fn offsets_are_strictly_increasing_when_emitted_in_order() {
-        let mut bytes = Vec::new();
-        for o in 0u64..16 {
-            bytes.extend(encode_frame(o, &argv_from(&[b"PING"])));
-        }
-        let mut pos = 0;
-        let mut last: Option<u64> = None;
-        while pos < bytes.len() {
-            let (offset, _, used) = decode_frame(&bytes[pos..]).expect("decode");
-            if let Some(prev) = last {
-                assert!(offset > prev, "offset {offset} not > prev {prev}");
-            }
-            last = Some(offset);
-            pos += used;
-        }
-        assert_eq!(last, Some(15));
-        assert_eq!(pos, bytes.len());
-    }
-
-    #[test]
-    fn truncated_envelope_is_truncated_not_bad() {
-        // Empty.
-        assert_eq!(decode_frame(&[]), Err(WireError::Truncated));
-        // Just `*` no header end.
-        assert_eq!(decode_frame(b"*"), Err(WireError::Truncated));
-        // `*2\r\n` then nothing.
-        assert_eq!(decode_frame(b"*2\r\n"), Err(WireError::Truncated));
-        // Offset start with no CRLF.
-        assert_eq!(decode_frame(b"*2\r\n:42"), Err(WireError::Truncated));
-        // Header + offset but inner argv missing.
-        assert_eq!(decode_frame(b"*2\r\n:42\r\n"), Err(WireError::Truncated));
-        // Header + offset + partial inner array.
-        assert_eq!(decode_frame(b"*2\r\n:42\r\n*1\r\n$3\r\nfo"), Err(WireError::Truncated));
-    }
-
-    #[test]
-    fn wrong_envelope_count_rejected() {
-        // *1 instead of *2.
-        let bad = b"*1\r\n:42\r\n";
-        assert!(matches!(decode_frame(bad), Err(WireError::BadEnvelope)));
-        // *3 (future-extension shape) is rejected too.
-        let bad3 = b"*3\r\n:42\r\n*0\r\n:0\r\n";
-        assert!(matches!(decode_frame(bad3), Err(WireError::BadEnvelope)));
-    }
-
-    #[test]
-    fn non_array_envelope_rejected() {
-        // Starts with `:` instead of `*`.
-        let bad = b":42\r\n*1\r\n$4\r\nPING\r\n";
-        assert!(matches!(decode_frame(bad), Err(WireError::BadEnvelope)));
-    }
-
-    #[test]
-    fn offset_not_integer_rejected() {
-        // Second element is a bulk string, not an integer.
-        let bad = b"*2\r\n$2\r\n42\r\n*1\r\n$4\r\nPING\r\n";
-        assert!(matches!(decode_frame(bad), Err(WireError::BadOffset)));
-    }
-
-    #[test]
-    fn negative_offset_rejected_with_value() {
-        let bad = b"*2\r\n:-7\r\n*1\r\n$4\r\nPING\r\n";
-        match decode_frame(bad) {
-            Err(WireError::NegativeOffset(n)) => assert_eq!(n, -7),
-            other => panic!("expected NegativeOffset, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn malformed_inner_payload_surfaces_bad_payload() {
-        // Outer envelope + offset OK, inner claims `*1` but follows with
-        // an unknown type byte (`!`) — the inner parser rejects.
-        let bad = b"*2\r\n:1\r\n*1\r\n!nope\r\n";
-        assert!(matches!(decode_frame(bad), Err(WireError::BadPayload(_))));
-    }
-
-    #[test]
-    fn offset_with_extra_digits_overflow_rejected() {
-        // 21 nines — bigger than u64::MAX (20 digits). parse_decimal
-        // returns None on the checked-multiply overflow, and parse_signed
-        // returns None on top of that, so we see BadOffset.
-        let mut bad = b"*2\r\n:".to_vec();
-        bad.extend(std::iter::repeat_n(b'9', 21));
-        bad.extend_from_slice(b"\r\n*1\r\n$4\r\nPING\r\n");
-        assert!(matches!(decode_frame(&bad), Err(WireError::BadOffset)));
-    }
-
-    // Snapshot-wire tests live in `tests/wire_snapshot.rs`
-    // as an integration test so this file stays under the 500-LOC
-    // project ceiling. Only public API there.
-
-    #[test]
-    fn encoded_bytes_are_exactly_what_spec_says() {
-        // Hand-spell the spec's example so any future refactor that
-        // changes byte order trips this test.
-        let argv = argv_from(&[b"SET", b"foo", b"bar"]);
-        let bytes = encode_frame(99, &argv);
-        let expected = b"*2\r\n:99\r\n*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
-        assert_eq!(bytes, expected);
-    }
-}
+#[path = "wire_tests.rs"]
+mod tests;

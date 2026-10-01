@@ -59,6 +59,11 @@ pub(crate) fn publish_gauges(shard: &ShardCtx, store: &Store) {
             s.tier.vlog_bytes.store(ts.vlog_bytes, Relaxed);
             s.tier.vlog_live_bytes.store(ts.vlog_live_bytes, Relaxed);
             s.tier.vlog_epoch.store(ts.vlog_epoch, Relaxed);
+            let c = store.tier_compression();
+            s.tier.vlog_raw_bytes.store(c.raw_bytes, Relaxed);
+            s.tier.vlog_payload_bytes.store(c.payload_bytes, Relaxed);
+            s.tier.vlog_frame_header_bytes.store(c.frame_header_bytes, Relaxed);
+            s.tier.vlog_dict_bytes.store(c.dict_bytes, Relaxed);
         }
         publish_alloc_gauges(s);
     });

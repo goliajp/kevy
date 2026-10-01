@@ -15,6 +15,13 @@ use crate::error::ProtocolError;
 /// multi-gigabyte `Vec::with_capacity` and abort the process
 /// (`handle_alloc_error`). Untrusted, so this is a hard protocol
 /// limit, not a tunable.
+///
+/// ```
+/// use kevy_resp::{MAX_MULTIBULK_LEN, parse_command};
+///
+/// let frame = format!("*{}\r\n", MAX_MULTIBULK_LEN + 1);
+/// assert!(parse_command(frame.as_bytes()).is_err());
+/// ```
 pub const MAX_MULTIBULK_LEN: usize = 1024 * 1024;
 
 /// Upper bound on a single bulk-string length, matching Redis's
@@ -22,6 +29,14 @@ pub const MAX_MULTIBULK_LEN: usize = 1024 * 1024;
 /// string is rejected at parse time, so neither the parser's
 /// capacity reservation nor the connection's input buffer can be
 /// driven unbounded by a declared-but-never-sent length.
+///
+/// ```
+/// use kevy_resp::{MAX_BULK_LEN, parse_command};
+///
+/// // rejected from the header alone, before any payload arrives
+/// let frame = format!("*1\r\n${}\r\n", MAX_BULK_LEN + 1);
+/// assert!(parse_command(frame.as_bytes()).is_err());
+/// ```
 pub const MAX_BULK_LEN: usize = 512 * 1024 * 1024;
 
 /// Attempt to parse one command from the front of `buf`.
@@ -34,6 +49,19 @@ pub const MAX_BULK_LEN: usize = 512 * 1024 * 1024;
 /// This is the convenience form that allocates a fresh `Argv` per call. The
 /// reactor's hot path uses [`parse_command_into`] with a reused scratch
 /// `Argv` to keep per-cmd malloc rate at 0.
+///
+/// ```
+/// use kevy_resp::parse_command;
+///
+/// let buf = b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\nPING\r\n";
+/// let (cmd, used) = parse_command(buf)?.expect("complete frame");
+/// assert_eq!(cmd, vec![b"GET".to_vec(), b"k".to_vec()]);
+/// // the rest of the buffer holds the next (inline) command
+/// let (next, _) = parse_command(&buf[used..])?.expect("complete frame");
+/// assert_eq!(next, vec![b"PING".to_vec()]);
+/// assert_eq!(parse_command(b"*1\r\n$4\r\nPI")?, None);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn parse_command(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError> {
     let mut argv = Argv::default();
     match parse_command_into(buf, &mut argv)? {
@@ -50,6 +78,19 @@ pub fn parse_command(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolErr
 ///
 /// `dst` is cleared at the start of every call; on `Ok(None)` and `Err`, `dst`
 /// is left empty (so the caller doesn't see partial state).
+///
+/// ```
+/// use kevy_resp::{Argv, parse_command_into};
+///
+/// let mut scratch = Argv::default();
+/// let buf = b"*1\r\n$4\r\nPING\r\n*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n";
+/// let used = parse_command_into(buf, &mut scratch)?.expect("complete frame");
+/// assert_eq!(scratch, vec![b"PING".to_vec()]);
+/// // the same scratch argv is refilled for the next command
+/// parse_command_into(&buf[used..], &mut scratch)?;
+/// assert_eq!(scratch, vec![b"ECHO".to_vec(), b"hi".to_vec()]);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn parse_command_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, ProtocolError> {
     // Empty parses are consumed silently and parsing continues — the
     // Redis semantics the borrowed twin documents (see

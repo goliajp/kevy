@@ -3,8 +3,9 @@
 WebAssembly bindings for [kevy](https://github.com/goliajp/kevy) — the embedded Redis-compatible KV engine behind a hand-written C ABI for browsers and JS runtimes. No binding generator, no JS-side dependencies: a bare `wasm32-unknown-unknown` module plus a small hand-written ES-module loader.
 
 - **KV + TTL** — `set` / `get` / `del` / `expire` / counters / scans, same engine as the kevy server.
+- **Streams and geo** — `XADD` / `XREADGROUP` / `XACK` / `XAUTOCLAIM` and the rest of the stream commands with consumer groups, and `GEOADD` / `GEOSEARCH` / `GEODIST`, through the raw `cmd` channel. Nothing blocks: a read with `BLOCK` answers an error, since a browser tab has one thread to park.
 - **Pub/sub** — in-instance subscriptions with a polling drain; the JS loader bridges tabs over `BroadcastChannel`.
-- **Host-mediated persistence** — writes emit standard kevy AOF frames; the loader pumps them into OPFS (or IndexedDB) and replays them on the next open. The log is byte-compatible with a native kevy AOF.
+- **Host-mediated persistence** — writes, typed or through `cmd`, emit standard kevy AOF frames; the loader pumps them into OPFS (or IndexedDB) and replays them on the next open. The log is byte-compatible with a native kevy AOF.
 
 ## Use from JavaScript
 

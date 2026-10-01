@@ -3,7 +3,7 @@
 //!
 //! `cargo run -p kevy-bytes --example bench_sso --release`
 
-use kevy_bench::{bench, black_box, report};
+use kevy_bench::{bench, black_box};
 use kevy_bytes::SmallBytes;
 
 const SAMPLES: usize = 60;
@@ -22,11 +22,11 @@ fn main() {
     let sb_short = bench(SAMPLES, INNER, || {
         black_box(SmallBytes::from_slice(black_box(&short)));
     });
-    report("SmallBytes::from_slice (12B, inline)", sb_short);
+    sb_short.report("SmallBytes::from_slice (12B, inline)");
     let vec_short = bench(SAMPLES, INNER, || {
         black_box(Vec::<u8>::from(black_box(short.as_slice())));
     });
-    report("Vec::from           (12B)         ", vec_short);
+    vec_short.report("Vec::from           (12B)         ");
     println!(
         "  ratio (Vec / SmallBytes inline) = {:.2}×\n",
         vec_short.median_ns as f64 / sb_short.median_ns as f64
@@ -35,11 +35,11 @@ fn main() {
     let sb_long = bench(SAMPLES, INNER, || {
         black_box(SmallBytes::from_slice(black_box(&long)));
     });
-    report("SmallBytes::from_slice (64B, heap) ", sb_long);
+    sb_long.report("SmallBytes::from_slice (64B, heap) ");
     let vec_long = bench(SAMPLES, INNER, || {
         black_box(Vec::<u8>::from(black_box(long.as_slice())));
     });
-    report("Vec::from           (64B)         ", vec_long);
+    vec_long.report("Vec::from           (64B)         ");
 
     println!("\n== clone (deep copy) ==");
     let sb12 = SmallBytes::from_slice(&short);
@@ -47,11 +47,11 @@ fn main() {
     let cl_sb = bench(SAMPLES, INNER, || {
         black_box(black_box(&sb12).clone());
     });
-    report("SmallBytes clone (12B, inline)    ", cl_sb);
+    cl_sb.report("SmallBytes clone (12B, inline)    ");
     let cl_vec = bench(SAMPLES, INNER, || {
         black_box(black_box(&vec12).clone());
     });
-    report("Vec clone        (12B)            ", cl_vec);
+    cl_vec.report("Vec clone        (12B)            ");
     println!(
         "  ratio (Vec / SmallBytes inline) = {:.2}×\n",
         cl_vec.median_ns as f64 / cl_sb.median_ns as f64
@@ -61,19 +61,19 @@ fn main() {
     let sb_as = bench(SAMPLES, INNER, || {
         black_box(black_box(&sb12).as_slice());
     });
-    report("SmallBytes as_slice (inline)      ", sb_as);
+    sb_as.report("SmallBytes as_slice (inline)      ");
     let v_as = bench(SAMPLES, INNER, || {
         black_box(black_box(&vec12).as_slice());
     });
-    report("Vec as_slice                      ", v_as);
+    v_as.report("Vec as_slice                      ");
 
     println!("\n== len ==");
     let sb_len = bench(SAMPLES, INNER, || {
         black_box(black_box(&sb12).len());
     });
-    report("SmallBytes len   (inline)         ", sb_len);
+    sb_len.report("SmallBytes len   (inline)         ");
     let v_len = bench(SAMPLES, INNER, || {
         black_box(black_box(&vec12).len());
     });
-    report("Vec len                           ", v_len);
+    v_len.report("Vec len                           ");
 }

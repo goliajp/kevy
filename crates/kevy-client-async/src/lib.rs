@@ -4,7 +4,7 @@
 //! # Status
 //!
 //! Surface is intentionally a near-1:1 mirror of the blocking
-//! [`kevy_client::Connection`], plus pipeline-first sugar (batching is
+//! [`kevy_client::Connection`](https://docs.rs/kevy-client/latest/kevy_client/enum.Connection.html), plus pipeline-first sugar (batching is
 //! where async actually pays off). See `docs/async.md` for the full
 //! guide.
 //!
@@ -53,6 +53,28 @@
 //! Wider error context (the RESP error string, the unexpected
 //! variant name) is carried in the `io::Error`'s message — fetch with
 //! `.to_string()` / `.into_inner()`.
+//!
+//! # Example
+//!
+//! ```
+//! # include!("doc_serve.rs");
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() -> std::io::Result<()> {
+//! # let addr = serve(&[
+//! #     ("SET greeting hello", "+OK\r\n"),
+//! #     ("GET greeting", "$5\r\nhello\r\n"),
+//! #     ("INCR hits", ":1\r\n"),
+//! #     ("INCR hits", ":2\r\n"),
+//! # ]).await?;
+//! use kevy_client_async::AsyncConnection;
+//!
+//! let mut c = AsyncConnection::connect(&format!("kevy://{addr}")).await?;
+//! c.set(b"greeting", b"hello").await?;
+//! assert_eq!(c.get(b"greeting").await?.as_deref(), Some(&b"hello"[..]));
+//! let replies = c.pipeline().incr(b"hits").incr(b"hits").run(&mut c).await?;
+//! assert_eq!(replies.len(), 2);
+//! # Ok(()) }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -69,6 +91,7 @@ pub mod conn;
 pub mod pipeline;
 pub mod pubsub;
 mod reply;
+mod secure;
 pub mod subscriber;
 pub mod transport;
 pub mod url;
@@ -84,7 +107,29 @@ pub mod rt_async_std;
 
 pub use codec::AsyncRespCodec;
 pub use conn::AsyncConnection;
+pub use kevy_noise::Keypair;
+pub use secure::AsyncSecure;
 pub use transport::{AsyncRead, AsyncTransport, AsyncWrite, read, write_all};
+
+// the README's examples talk to the tokio stand-in server
+#[cfg(all(doctest, feature = "tokio"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<AsyncConnection>();
+    send_sync::<AsyncRespCodec<conn::DefaultTransport>>();
+    send_sync::<AsyncSecure<conn::DefaultTransport>>();
+    send_sync::<cluster::AsyncClusterClient>();
+    send_sync::<subscriber::AsyncSubscriber>();
+    send_sync::<pipeline::Pipeline>();
+    send_sync::<transport::Read<'static, conn::DefaultTransport>>();
+    send_sync::<transport::WriteAll<'static, conn::DefaultTransport>>();
+    // a transport can be erased behind a trait object
+    const fn object_safe(_: Option<&dyn AsyncTransport>) {}
+    object_safe(None);
+};
 
 // Compile-time runtime selection gate. We enforce
 // **exactly-one**: zero enabled = no IO substrate (silent shell);

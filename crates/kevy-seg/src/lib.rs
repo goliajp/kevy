@@ -4,6 +4,27 @@
 //! what their records MEAN; how records are laid out, located,
 //! checksummed and retired is identical, so it lives here once.
 //!
+//! ```
+//! use kevy_seg::{Manifest, ManifestEntry, Seg, SegBuilder};
+//!
+//! # let dir = std::env::temp_dir().join(format!("kevy-seg-crate-doc-{}", std::process::id()));
+//! # std::fs::create_dir_all(&dir)?;
+//! // keys go in strictly ascending; the footer seals the file
+//! let mut b = SegBuilder::create(&dir.join("s1.seg"))?;
+//! b.push(b"a", b"1")?;
+//! b.push(b"b", b"2")?;
+//! let meta = b.finish()?;
+//!
+//! // the manifest makes the sealed segment part of the live set
+//! Manifest::open(&dir)?.add(ManifestEntry::new("s1.seg", meta))?;
+//!
+//! let seg = Seg::open(&dir.join("s1.seg"))?;
+//! assert_eq!(seg.get(b"b")?, Some(b"2".to_vec()));
+//! assert_eq!(seg.count_range(b"a", b"z")?, 2);
+//! # std::fs::remove_dir_all(&dir).ok();
+//! # Ok::<(), kevy_seg::SegError>(())
+//! ```
+//!
 //! # Model
 //!
 //! [`SegBuilder`] appends records in strictly ascending key order,
@@ -38,34 +59,143 @@
 mod builder;
 mod layout;
 mod manifest;
+mod manifest_entry;
 mod reader;
 
 pub use builder::SegBuilder;
-pub use manifest::{Manifest, ManifestEntry};
+pub use manifest::Manifest;
+pub use manifest_entry::ManifestEntry;
 pub use reader::{RangeIter, Seg};
 
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Seg>();
+    send_sync::<SegBuilder>();
+    send_sync::<SegMeta>();
+    send_sync::<Manifest>();
+    send_sync::<ManifestEntry>();
+    send_sync::<SegError>();
+};
+
 /// Sealed-segment summary, from the footer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ```
+/// # let dir = std::env::temp_dir().join(format!("kevy-segmeta-doc-{}", std::process::id()));
+/// # std::fs::create_dir_all(&dir)?;
+/// let mut b = kevy_seg::SegBuilder::create(&dir.join("a.seg"))?;
+/// b.push(b"k1", b"v")?;
+/// b.push(b"k2", b"v")?;
+/// let meta = b.finish()?;
+/// assert_eq!((meta.records, meta.min_key.as_slice(), meta.max_key.as_slice()), (2, &b"k1"[..], &b"k2"[..]));
+/// # std::fs::remove_dir_all(&dir).ok();
+/// # Ok::<(), kevy_seg::SegError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct SegMeta {
     /// Records in the segment.
+    ///
+    /// ```
+    /// # let dir = kevy_tmpdir::TmpDir::new("segmeta-records");
+    /// let mut b = kevy_seg::SegBuilder::create(&dir.path().join("a.seg"))?;
+    /// for k in [b"a", b"b", b"c"] {
+    ///     b.push(k, b"v")?;
+    /// }
+    /// assert_eq!(b.finish()?.records, 3);
+    /// # Ok::<(), kevy_seg::SegError>(())
+    /// ```
     pub records: u64,
     /// Data pages (excluding overflow and footer pages).
+    ///
+    /// A record too large for one page spills into overflow pages, which
+    /// this count leaves out:
+    ///
+    /// ```
+    /// # let dir = kevy_tmpdir::TmpDir::new("segmeta-pages");
+    /// let mut b = kevy_seg::SegBuilder::create(&dir.path().join("a.seg"))?;
+    /// b.push(b"big", &vec![7u8; 64 * 1024])?;
+    /// assert_eq!(b.finish()?.data_pages, 1);
+    /// # Ok::<(), kevy_seg::SegError>(())
+    /// ```
     pub data_pages: u32,
     /// Smallest key.
+    ///
+    /// ```
+    /// # let dir = kevy_tmpdir::TmpDir::new("segmeta-min");
+    /// let mut b = kevy_seg::SegBuilder::create(&dir.path().join("a.seg"))?;
+    /// b.push(b"apple", b"1")?;
+    /// b.push(b"pear", b"2")?;
+    /// assert_eq!(b.finish()?.min_key, b"apple");
+    /// # Ok::<(), kevy_seg::SegError>(())
+    /// ```
     pub min_key: Vec<u8>,
     /// Largest key.
+    ///
+    /// ```
+    /// # let dir = kevy_tmpdir::TmpDir::new("segmeta-max");
+    /// let mut b = kevy_seg::SegBuilder::create(&dir.path().join("a.seg"))?;
+    /// b.push(b"apple", b"1")?;
+    /// b.push(b"pear", b"2")?;
+    /// assert_eq!(b.finish()?.max_key, b"pear");
+    /// # Ok::<(), kevy_seg::SegError>(())
+    /// ```
     pub max_key: Vec<u8>,
 }
 
 /// Why a segment file was refused at open. Corruption is a refusal,
 /// never a silent partial read.
+///
+/// ```
+/// use kevy_seg::{Seg, SegError};
+/// # let dir = kevy_tmpdir::TmpDir::new("segerror");
+/// let path = dir.path().join("junk.seg");
+/// std::fs::write(&path, b"not a segment")?;
+/// let err = Seg::open(&path).unwrap_err();
+/// assert!(matches!(err, SegError::Corrupt(_)));
+/// assert!(err.to_string().starts_with("corrupt segment"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SegError {
     /// OS-level failure.
+    ///
+    /// ```
+    /// use kevy_seg::{Seg, SegError};
+    /// # let dir = kevy_tmpdir::TmpDir::new("segerror-io");
+    /// let err = Seg::open(&dir.path().join("missing.seg")).unwrap_err();
+    /// assert!(matches!(err, SegError::Io(ref e) if e.kind() == std::io::ErrorKind::NotFound));
+    /// ```
     Io(std::io::Error),
     /// Not a segment / truncated / bit-rotted — the named reason.
+    ///
+    /// ```
+    /// use kevy_seg::{Seg, SegBuilder, SegError};
+    /// # let dir = kevy_tmpdir::TmpDir::new("segerror-corrupt");
+    /// let path = dir.path().join("a.seg");
+    /// let mut b = SegBuilder::create(&path)?;
+    /// b.push(b"k", b"v")?;
+    /// b.finish()?;
+    /// // cut the file short: the trailer no longer locates the footer
+    /// let bytes = std::fs::read(&path)?;
+    /// std::fs::write(&path, &bytes[..bytes.len() - 1])?;
+    /// assert!(matches!(Seg::open(&path), Err(SegError::Corrupt(_))));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     Corrupt(&'static str),
     /// Builder misuse: keys not strictly ascending.
+    ///
+    /// ```
+    /// use kevy_seg::{SegBuilder, SegError};
+    /// # let dir = kevy_tmpdir::TmpDir::new("segerror-unsorted");
+    /// let mut b = SegBuilder::create(&dir.path().join("a.seg"))?;
+    /// b.push(b"b", b"1")?;
+    /// assert!(matches!(b.push(b"a", b"2"), Err(SegError::Unsorted)));
+    /// assert!(matches!(b.push(b"b", b"2"), Err(SegError::Unsorted)));
+    /// # Ok::<(), SegError>(())
+    /// ```
     Unsorted,
 }
 

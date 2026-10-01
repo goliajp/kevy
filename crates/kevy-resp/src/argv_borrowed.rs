@@ -25,6 +25,19 @@ use crate::inline_ranges::InlineRanges;
 /// `malloc`/`free` for the ranges. `perf c2c` profiling confirmed libc
 /// cfree on the per-request `Vec` allocation showed up in cross-thread
 /// contention; the inline tier removes that source.
+///
+/// ```
+/// use kevy_resp::{ArgvView, parse_command_borrowed};
+///
+/// let input = b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n";
+/// let (argv, used) = parse_command_borrowed(input)?.expect("complete frame");
+/// assert_eq!(used, input.len());
+/// assert_eq!(argv.get(1), Some(b"k".as_slice()));
+/// // copy out only when the argv must outlive `input`
+/// let owned = argv.into_owned();
+/// assert_eq!(owned, vec![b"GET".to_vec(), b"k".to_vec()]);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 #[derive(Clone, Debug)]
 pub struct ArgvBorrowed<'a> {
     input: &'a [u8],

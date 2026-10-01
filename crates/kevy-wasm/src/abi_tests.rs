@@ -298,6 +298,9 @@ fn aof_v1_log_feeds_and_outbound_stays_v1() {
     // contract, plus: outbound frames follow the stored log's format so
     // the host's verbatim appends never mix formats in one log.
     let mut log = kevy_persist::AOF_MAGIC.to_vec();
+    // the record that opens a native log, carried over as bare RESP: skipped
+    // and not counted, as in a v2 log
+    log.extend_from_slice(b"*2\r\n$12\r\n\0KEVYLOGBASE\r\n$8\r\n\0\0\0\0\0\0\0\0\r\n");
     log.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n");
     let h = kevy_open(OPEN_CAPTURE_AOF);
     // SAFETY: live handle and live locals — see the module note.
@@ -388,7 +391,7 @@ fn cmd_universal_path_reaches_the_compiled_surface() {
     // feature-unifies kevy-embedded with the ffi/server crates' defaults, so
     // IDX.CREATE may resolve to the real verb here. Both worlds are correct
     // answers for the universal cmd path; the minimal-closure claim itself is
-    // enforced structurally by CI's wasm job (`cargo check --target wasm32-*
+    // enforced structurally by CI's iot + wasm job (`cargo check --target wasm32-*
     // -p kevy-wasm` — single-package selection, nothing to unify with).
     let (s, reply) = cmd(h, &[b"IDX.CREATE", b"i"]);
     assert!(s >= 0);

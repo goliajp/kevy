@@ -188,7 +188,7 @@ sleep 2
 LAG=$($CLI -p $RPORT INFO replication | grep -oE "slave_lag_frames:[0-9]+" | grep -oE "[0-9]+")
 [ "$LAG" = "0" ] || fail "lag did not converge ($LAG)"
 V=$($CLI -p $RPORT GET k200)
-echo "$V" | grep -q '"v"' || fail "data plane not converged (k200=$V)"
+echo "$V" | grep -qx v || fail "data plane not converged (k200=$V)"
 note "lag 0 + data plane converged"
 
 # ---- clamp 5: primary-side slave0 truth — acked catches up to sent
@@ -320,7 +320,7 @@ done
 note "crash failover: $NEWP won and opened writes"
 CONV=0
 for _ in $(seq 120); do
-    echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -q '"v1"' && { CONV=1; break; }
+    echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -qx v1 && { CONV=1; break; }
     sleep 0.5
 done
 [ $CONV = 1 ] || {
@@ -338,7 +338,7 @@ note "restart-role clamp holds writes"
 REJOIN=0
 for _ in $(seq 60); do
     if [ "$(role_of $N1)" = "slave" ]; then
-        echo "$($CLI -p $N1 GET postfail 2>/dev/null)" | grep -q '"v1"' && { REJOIN=1; break; }
+        echo "$($CLI -p $N1 GET postfail 2>/dev/null)" | grep -qx v1 && { REJOIN=1; break; }
     fi
     sleep 0.5
 done

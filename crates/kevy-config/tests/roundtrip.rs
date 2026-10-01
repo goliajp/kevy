@@ -64,8 +64,27 @@ fn precedence_chain_cli_beats_env_beats_file_beats_default() {
     assert_eq!(cfg.server.port, 7001);
 
     // CLI overlay (port = 7002) > env.
-    cfg.merge_cli(CliOverrides { port: Some(7002), ..CliOverrides::default() }).unwrap();
+    let mut cli = CliOverrides::default();
+    cli.port = Some(7002);
+    cfg.merge_cli(cli).unwrap();
     assert_eq!(cfg.server.port, 7002);
+}
+
+#[test]
+fn cluster_announce_keys_parse_and_reject_a_non_ipv4() {
+    let cfg = Config::from_toml_str(
+        "[cluster]\nenabled = true\nannounce_ip = \"203.0.113.7\"\nannounce_port_base = 17001\n",
+        None,
+    )
+    .unwrap();
+    assert_eq!(cfg.cluster.announce_ip, Some([203, 0, 113, 7]));
+    assert_eq!(cfg.cluster.announce_port_base, 17001);
+    let re = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
+    assert_eq!(re.cluster, cfg.cluster);
+    assert!(Config::from_toml_str("[cluster]\nannounce_ip = \"db.example\"\n", None).is_err());
+    assert!(Config::from_toml_str("[cluster]\nannounce_ip = 5\n", None).is_err());
+    assert!(Config::from_toml_str("[cluster]\nannounce_port_base = \"x\"\n", None).is_err());
+    assert_eq!(Config::default().cluster.announce_ip, None);
 }
 
 #[test]
@@ -128,7 +147,9 @@ fn log_output_file_path_round_trips() {
 #[test]
 fn cli_no_aof_overrides_file_aof_true() {
     let mut cfg = Config::from_toml_str("[persistence]\naof = true\n", None).unwrap();
-    cfg.merge_cli(CliOverrides { aof: Some(false), ..CliOverrides::default() }).unwrap();
+    let mut cli = CliOverrides::default();
+    cli.aof = Some(false);
+    cfg.merge_cli(cli).unwrap();
     assert!(!cfg.persistence.aof);
 }
 
@@ -182,4 +203,73 @@ fn replication_unknown_role_errors() {
         }
         other => panic!("expected Schema, got {other:?}"),
     }
+}
+
+#[test]
+fn secure_links_config_round_trips_and_refuses_malformed_keys() {
+    let (a, b) = ("ab".repeat(32), "cd".repeat(32));
+    let src = format!(
+        "[secure]\nprivate_key_file = \"/etc/kevy/node.key\"\nlisten_port = 6404\nclient_keys = [\"{b}\"]\ncluster_port_base = 6410\nannounce_cluster_port_base = 7410\n\
+         [cluster]\nsecure = true\npeer_keys = [\"n2={a}\", \"n3={b}\"]\n\
+         [replication]\nsecure = true\nupstream_key = \"{a}\"\nreplica_keys = [\"{b}\"]\n"
+    );
+    let cfg = Config::from_toml_str(&src, None).unwrap();
+    assert!(cfg.cluster.secure && cfg.replication.secure);
+    assert_eq!(cfg.cluster.peer_keys, vec![("n2".into(), [0xab; 32]), ("n3".into(), [0xcd; 32])]);
+    assert_eq!(cfg.replication.upstream_key, Some([0xab; 32]));
+    assert_eq!(cfg.replication.replica_keys, vec![[0xcd; 32]]);
+    assert_eq!((cfg.secure.listen_port, cfg.secure.client_keys.clone()), (6404, vec![[0xcd; 32]]));
+    assert_eq!((cfg.secure.cluster_port_base, cfg.secure.announce_cluster_port_base), (6410, 7410));
+    let again = Config::from_toml_str(&cfg.to_toml_string(), None).unwrap();
+    assert_eq!(
+        (again.cluster, again.replication, again.secure),
+        (cfg.cluster, cfg.replication, cfg.secure)
+    );
+
+    for bad in [
+        "[cluster]\npeer_keys = [\"n2=abc\"]\n".to_string(),
+        format!("[cluster]\npeer_keys = [\"{a}\"]\n"),
+        "[replication]\nupstream_key = \"zz\"\n".to_string(),
+        "[secure]\nkey_file = \"x\"\n".to_string(),
+    ] {
+        assert!(Config::from_toml_str(&bad, None).is_err(), "accepted: {bad}");
+    }
+    let off = Config::default();
+    assert!(
+        !off.cluster.secure && !off.replication.secure && off.secure.private_key_file.is_none()
+    );
+}
+
+#[test]
+fn non_ascii_string_values_survive_parsing() {
+    let src = "[secure]\nprivate_key_file = \"/srv/データ/鍵\\t.key\"\n";
+    let cfg = Config::from_toml_str(src, None).unwrap();
+    assert_eq!(cfg.secure.private_key_file, Some(PathBuf::from("/srv/データ/鍵\t.key")));
+}
+
+#[test]
+fn secure_keys_of_the_wrong_shape_are_schema_errors() {
+    let good = "ab".repeat(32);
+    for (src, names) in [
+        ("[secure]\nprivate_key_file = 5\n".to_string(), "private_key_file"),
+        ("[cluster]\nsecure = \"yes\"\n".to_string(), "secure"),
+        ("[cluster]\npeer_keys = 5\n".to_string(), "peer_keys"),
+        ("[replication]\nsecure = 1\n".to_string(), "secure"),
+        ("[replication]\nupstream_key = 5\n".to_string(), "upstream_key"),
+        (format!("[replication]\nreplica_keys = [\"{good}\", \"zz\"]\n"), "replica_keys"),
+        ("[replication]\nreplica_keys = \"x\"\n".to_string(), "replica_keys"),
+        ("[secure]\nlisten_port = \"x\"\n".to_string(), "listen_port"),
+        ("[secure]\nclient_keys = [\"ab\"]\n".to_string(), "client_keys"),
+        ("[secure]\ncluster_port_base = \"x\"\n".to_string(), "cluster_port_base"),
+        ("[secure]\nannounce_cluster_port_base = -1\n".to_string(), "announce_cluster_port_base"),
+    ] {
+        let err = Config::from_toml_str(&src, None).unwrap_err();
+        assert!(matches!(err, ConfigError::Schema { .. }), "{src}: {err:?}");
+        assert!(err.to_string().contains(names), "{src}: {err}");
+    }
+    let ok = format!("[replication]\nreplica_keys = [\"{good}\"]\n");
+    assert_eq!(
+        Config::from_toml_str(&ok, None).unwrap().replication.replica_keys,
+        vec![[0xab; 32]]
+    );
 }

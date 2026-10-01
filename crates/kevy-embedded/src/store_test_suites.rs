@@ -11,13 +11,24 @@ mod tests;
 mod tests_atomic;
 #[path = "store_tests_atomic_all.rs"]
 mod tests_atomic_all;
-#[cfg(all(test, feature = "index"))]
+#[cfg(test)]
+#[cfg(feature = "index")]
 #[path = "store_tests_atomic_index.rs"]
 mod tests_atomic_index;
 #[path = "store_tests_bitmap.rs"]
 mod tests_bitmap;
 #[path = "store_tests_bonus.rs"]
 mod tests_bonus;
+#[cfg(all(feature = "text", feature = "vector"))]
+#[path = "store_tests_catalog.rs"]
+mod tests_catalog;
+#[path = "store_tests_facade.rs"]
+mod tests_facade;
+#[cfg(feature = "index")]
+#[path = "store_tests_index_drain.rs"]
+mod tests_index_drain;
+#[path = "store_tests_index_paths.rs"]
+mod tests_index_paths;
 #[path = "store_tests_keyspace.rs"]
 mod tests_keyspace;
 #[path = "store_tests_more.rs"]

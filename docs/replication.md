@@ -164,6 +164,9 @@ Server-side TOML keys under `[replication]`:
 | `min_replicas_to_write` | `0` (off) | The primary refuses writes with `-NOREPLICAS` when fewer than N replicas are healthy (live connection that has ACKed). Ladder rung 4. |
 | `min_replicas_max_lag_ms` | `10000` | Freshness window for `min_replicas_to_write`: a replica counts as healthy only if its latest ACK is younger than this bound, so a stalled replica ages out of the count even while its connection stays up. |
 | `single_source` | `false` | The upstream is ONE stream on one port (an embedded writer) instead of the per-shard fleet — see *Embedded-as-primary* below. |
+| `secure` | `false` | Encrypt and authenticate this node's replication links with Noise — see [`docs/encrypted-links.md`](encrypted-links.md). Needs `[secure] private_key_file`. |
+| `upstream_key` | unset | The primary's public key, required on a secure replica. |
+| `replica_keys` | empty | On a secure primary: the replica public keys allowed to connect. Empty admits any replica, still encrypted. |
 
 Because both roles bind the replication range, co-hosting several instances on one machine requires client ports at least `nshards` apart — otherwise their default replication ranges (`client port + 10000 … + 10000 + nshards − 1`) collide.
 
@@ -173,7 +176,9 @@ When [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-ele
 |---|---|---|
 | `node_id` | unset | Stable id of this node (≤ 32 B ASCII). Used as the tie-breaker in elections. |
 | `elect_port_base` | `0` (= client port + 200) | Control-plane TCP port for heartbeats and ballots — one listener per node. |
-| `peers` | empty | `id@host:elect_port:client_port,…` for every node in the cluster including self. Empty means the elector is dormant. |
+| `peers` | empty | `id@host:elect_port:client_port[:repl_port_base],…` for every node in the cluster including self. Empty means the elector is dormant. |
+| `secure` | `false` | Encrypt and authenticate the election links; needs a `peer_keys` entry for every other node. |
+| `peer_keys` | empty | `["id=<public key>", …]` — each node's public key, from `kevy keygen`. |
 
 Use the extended three-field peer syntax: election traffic rides the elect port, while retargeting and `-MISDIRECTED` replies use the client port. The legacy `id@host:port` form assumes both are equal, which is almost never what you want.
 
@@ -190,7 +195,7 @@ One consequence to plan for: in an elect quorum, `[replication] role = "primary"
 
 Two paths move the primary role, both built on the stream mechanics above; the operational detail (steps, timings, error contract) lives in [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md).
 
-**Planned: `FAILOVER host port [TIMEOUT ms] | ABORT`** (v3.15). Run on the primary with the target replica's *client* address; it answers `+OK` and hands over on a background thread: quiesce writes (`-QUIESCED`), poll the target's `INFO replication` until drained (`slave_lag_frames:0`), promote it (`REPLICAOF NO ONE`), then follow it as a replica. The handover retargets to `client port + 10000`, so the target must run with the default `listen_port_base`. Timeout (default 10 000 ms) rolls the quiesce back.
+**Planned: `FAILOVER host port [TIMEOUT ms] | ABORT`** (v3.15). Run on the primary with the target replica's *client* address; it answers `+OK` and hands over on a background thread: quiesce writes (`-QUIESCED`), poll the target's `INFO replication` until drained (`slave_lag_frames:0`), promote it (`REPLICAOF NO ONE`), then follow it as a replica. The handover follows the replication base the target reports as `repl_port_base` in `INFO replication`. Timeout (default 10 000 ms) rolls the quiesce back.
 
 **Crash: quorum election** (v3.15). With the `[cluster]` block on every node, peers detect a dead primary and elect the replica with the highest applied replication offset (lowest `node_id` breaks ties); the winner opens writes and bumps its feed generation, losers retarget automatically. A rejoining ex-primary whose stream is *ahead* of the new primary (a forked suffix of never-replicated writes) gets a **replacing** snapshot resync — `FLUSHALL` before load — instead of a corrupt-close: the fork is discarded and the node converges on the majority's history.
 
@@ -201,11 +206,12 @@ Replication is **asynchronous by default**. The primary commits and replies befo
 | concern | answer |
 |---|---|
 | Write durability | Acknowledged by the primary as soon as it lands in the local store and the backlog ring. Replicas catch up afterwards; `WAIT n timeout` blocks until ≥ n have acknowledged (a replica ack is not an fsync — see availability.md). |
-| Read consistency | Replicas may lag. Send `request_read(…, consistent = true)` through `kevy-cluster-rw` to force a read at the primary, or use `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on the replica itself. |
+| Read consistency | Replicas may lag. Send `request_read(…, ReadConsistency::Primary)` through `kevy-cluster-rw` to force a read at the primary, or use `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on the replica itself. |
 | Replica falls behind | If the reconnect needs an offset that has aged out of the ring, the primary in-line-ships a snapshot of that shard and resumes live frames at the snapshot's end offset — no gap, no operator action. While the ship is replacing the replica's keyspace, client reads on the replica answer `-LOADING` (`PING` / `INFO` / `HELLO` stay answerable, so health checks keep passing). |
 | Sizing the backlog | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`. Oversize is harmless; undersize falls back to snapshot ship. |
 | What fails over | Writes to the new primary, automatically when `kevy-elect` is configured, by hand otherwise. Existing `kevy-cluster-rw` clients re-route writes once they learn the new primary; in-flight writes during the gap fail loudly. |
 | What does not fail over | Cross-DC traffic, gossip-discovered peers, online resharding, AUTH/TLS — kevy does not ship any of these. Single-DC only. |
+| Indexes, views, tables | The primary's catalog replicates like its keys: a replica gets it in its full sync and every change on the stream, and restarts with it. A read-only replica refuses `IDX.CREATE` / `DROP` / `REBUILD`, `VIEW.CREATE` / `DROP` / `REBUILD` and `TABLE.DECLARE` / `ENSURE` / `REPLACE` / `DROP` with `-READONLY`; declare on the primary. |
 | Chain replication | Not on the wire. A replica's apply path will not re-emit downstream; a misconfiguration is rejected defensively. |
 | Minority writes during partition | Bounded, then lost. A quorum primary that cannot see a strict majority fences its own writes (`-NOREPLICAS primary lost quorum; writes fenced`) within one lease window, so the silent-absorption window is ~5 s, and every write inside it fails loudly. A partitioned minority cannot promote; when the partition heals it demotes, its un-replicated forked suffix is discarded, and it resyncs to the majority's history via snapshot. |
 
@@ -240,9 +246,9 @@ Do nothing. The primary detects that the replica's requested offset is no longer
 ## Embedded-as-primary (v3.2)
 
 An embedded application can be the PRIMARY, with a kevy server as its
-replica — read scaling and a full query surface (the replica declares
-its own indexes/views/aggregates over the replicated data) for an
-in-process store:
+replica — read scaling and a full query surface (the indexes, views
+and tables the application declares reach the replica and answer
+there over the replicated data) for an in-process store:
 
 ```rust
 // the application (primary)
@@ -278,6 +284,7 @@ offset) cursors, prefix filters, at-least-once). Unifying them would
 tie app-facing CDC semantics to the replica protocol.
 
 Gate: `bench/repligate.sh` — true two-process: snapshot ship to a
-fresh replica, quiesced digest stability, restart re-sync, and
-replica-local `IDX.CREATE`/`IDX.QUERY` over replicated data.
+fresh replica, quiesced digest stability, restart re-sync, the
+primary's index answering `IDX.QUERY` on the replica, and the replica
+refusing an `IDX.CREATE` of its own.
 

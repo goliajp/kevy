@@ -50,14 +50,18 @@ impl<C: Commands> Shard<C> {
             match listener.accept() {
                 Ok(sock) => {
                     sock.set_nonblocking()?;
-                    self.poller.add(sock.raw(), true, false)?;
+                    self.poller.add(sock.raw(), kevy_sys::Interest::READ)?;
                     // Capture the replica's peer addr at
                     // accept time so `INFO replication` / `ROLE` can
                     // report it. `peer_addr` errs on a peer that
                     // already vanished — fall back to 0.0.0.0:0,
                     // the connection will reap on the next read.
                     let peer = sock.peer_addr().unwrap_or((std::net::Ipv4Addr::UNSPECIFIED, 0));
-                    self.replicas.push(ReplicaConn::with_peer(sock, peer));
+                    let mut conn = ReplicaConn::with_peer(sock, peer);
+                    if self.repl_security.is_some() {
+                        conn.noise = Some(crate::replication_secure::ReplNoise::pending());
+                    }
+                    self.replicas.push(conn);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
                 Err(e) => return Err(e),
@@ -88,53 +92,14 @@ impl<C: Commands> Shard<C> {
                     self.replicas[idx].close();
                     return Ok(());
                 }
-                Ok(n) => match &self.replicas[idx].state {
-                    ReplicaState::HandshakePending => {
-                        let conn = &mut self.replicas[idx];
-                        if conn.input.len() + n > HANDSHAKE_MAX_INPUT {
-                            conn.close();
-                            return Ok(());
-                        }
-                        conn.input.extend_from_slice(&scratch[..n]);
-                        let feed_gen = self.replicate.as_ref().map_or(0, |f| f.generation());
-                        let conn = &mut self.replicas[idx];
-                        if let Err(e) = advance_handshake(conn, feed_gen) {
-                            eprintln!("kevy: replica handshake rejected on fd {}: {e}", conn.fd,);
-                            conn.close();
-                            return Ok(());
-                        }
-                        if !matches!(self.replicas[idx].state, ReplicaState::HandshakePending) {
-                            if crate::repl_trace() {
-                                self.trace_handshake(idx);
-                            }
-                            return Ok(());
-                        }
+                Ok(n) => {
+                    let Some(plain) = self.replica_plaintext(idx, &scratch[..n]) else {
+                        return Ok(());
+                    };
+                    if !self.replica_consume(idx, &plain) {
+                        return Ok(());
                     }
-                    ReplicaState::Streaming { .. } => {
-                        // The replica→primary direction is
-                        // the ACK channel — this readable handler is
-                        // its SINGLE reader (an earlier design had a
-                        // second reader in the pump that raced this
-                        // one and lost most ACKs).
-                        let conn = &mut self.replicas[idx];
-                        if conn.input.len() + n > STREAMING_INPUT_DISCARD_CAP {
-                            eprintln!(
-                                "kevy: streaming replica {} sent > {} B \
-                                 of unparseable input; dropping link",
-                                conn.fd, STREAMING_INPUT_DISCARD_CAP,
-                            );
-                            conn.close();
-                            return Ok(());
-                        }
-                        conn.input.extend_from_slice(&scratch[..n]);
-                        self.parse_replica_acks(idx);
-                    }
-                    ReplicaState::AckSent { .. }
-                    | ReplicaState::SnapshotShipping { .. }
-                    | ReplicaState::Closed { .. } => {
-                        // No input expected; drain into the void.
-                    }
-                },
+                }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
@@ -142,21 +107,83 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Drain `output[write_off..]` non-blocking. When fully drained
-    /// in `AckSent`, transition to [`ReplicaState::Streaming`]
-    /// (carrying the handshake's replica id + from-offset).
+    /// The plaintext carried by `raw`: itself on a plain link, whatever the
+    /// Noise layer decrypts on a secure one. `None` when the link was closed
+    /// for failing the handshake or authentication.
+    fn replica_plaintext(&mut self, idx: usize, raw: &[u8]) -> Option<Vec<u8>> {
+        let (Some(sec), Some(noise)) =
+            (self.repl_security.as_ref(), self.replicas[idx].noise.as_mut())
+        else {
+            return Some(raw.to_vec());
+        };
+        let mut plain = Vec::new();
+        if let Err(e) = noise.on_bytes(sec, raw, &mut plain) {
+            eprintln!("kevy: replica link on fd {} refused: {e}", self.replicas[idx].fd);
+            self.replicas[idx].close();
+            return None;
+        }
+        Some(plain)
+    }
+
+    /// Feed plaintext to the connection's state machine. `false` when the
+    /// read loop should stop (the connection closed, or the handshake just
+    /// completed and its reply must be written first).
+    fn replica_consume(&mut self, idx: usize, bytes: &[u8]) -> bool {
+        if bytes.is_empty() {
+            return true;
+        }
+        match &self.replicas[idx].state {
+            ReplicaState::HandshakePending => {
+                let conn = &mut self.replicas[idx];
+                if conn.input.len() + bytes.len() > HANDSHAKE_MAX_INPUT {
+                    conn.close();
+                    return false;
+                }
+                conn.input.extend_from_slice(bytes);
+                let feed_gen = self.replicate.as_ref().map_or(0, |f| f.generation());
+                let conn = &mut self.replicas[idx];
+                if let Err(e) = advance_handshake(conn, feed_gen) {
+                    eprintln!("kevy: replica handshake rejected on fd {}: {e}", conn.fd,);
+                    conn.close();
+                    return false;
+                }
+                if !matches!(self.replicas[idx].state, ReplicaState::HandshakePending) {
+                    if crate::repl_trace() {
+                        self.trace_handshake(idx);
+                    }
+                    return false;
+                }
+                true
+            }
+            ReplicaState::Streaming { .. } => {
+                let conn = &mut self.replicas[idx];
+                if conn.input.len() + bytes.len() > STREAMING_INPUT_DISCARD_CAP {
+                    eprintln!(
+                        "kevy: streaming replica {} sent > {} B \
+                         of unparseable input; dropping link",
+                        conn.fd, STREAMING_INPUT_DISCARD_CAP,
+                    );
+                    conn.close();
+                    return false;
+                }
+                conn.input.extend_from_slice(bytes);
+                self.parse_replica_acks(idx);
+                true
+            }
+            ReplicaState::AckSent { .. }
+            | ReplicaState::SnapshotShipping { .. }
+            | ReplicaState::Closed { .. } => true,
+        }
+    }
+
     pub(crate) fn replica_writable(&mut self, idx: usize) -> io::Result<()> {
+        if self.replicas[idx].noise.is_some() {
+            return replica_writable_sealed(&mut self.replicas[idx]);
+        }
         loop {
             let conn = &mut self.replicas[idx];
             if conn.write_off >= conn.output.len() {
-                conn.output.clear();
-                conn.write_off = 0;
-                if let ReplicaState::AckSent { replica_id, from_offset, generation } = &conn.state {
-                    let rid = replica_id.clone();
-                    let (off, generation) = (*from_offset, *generation);
-                    conn.state =
-                        ReplicaState::Streaming { replica_id: rid, sent_offset: off, generation };
-                }
+                conn.drained();
                 return Ok(());
             }
             match conn.sock.write(&conn.output[conn.write_off..]) {
@@ -241,6 +268,36 @@ impl<C: Commands> Shard<C> {
                 self.id,
                 dropped.len(),
             );
+        }
+    }
+}
+
+/// Seal whatever plaintext is pending, then write sealed bytes until the
+/// socket would block.
+fn replica_writable_sealed(conn: &mut ReplicaConn) -> io::Result<()> {
+    let Some(noise) = conn.noise.as_mut() else { return Ok(()) };
+    if let Err(e) = noise.seal(&conn.output[conn.write_off..]) {
+        eprintln!("kevy: replica link on fd {} failed to seal: {e}", conn.fd);
+        conn.close();
+        return Ok(());
+    }
+    conn.write_off = conn.output.len();
+    loop {
+        let Some(noise) = conn.noise.as_mut() else { return Ok(()) };
+        let wire = noise.wire();
+        if wire.is_empty() {
+            conn.drained();
+            return Ok(());
+        }
+        match conn.sock.write(wire) {
+            Ok(0) => {
+                conn.close();
+                return Ok(());
+            }
+            Ok(n) => noise.wrote(n),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
         }
     }
 }

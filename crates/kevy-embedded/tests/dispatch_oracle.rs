@@ -30,8 +30,13 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
 }
 
-/// `target/debug/kevy`, building it first if absent.
+/// `target/debug/kevy`, built once per test process.
 fn server_binary() -> PathBuf {
+    static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BUILT.get_or_init(build_server).clone()
+}
+
+fn build_server() -> PathBuf {
     let root = workspace_root();
     // ALWAYS run the build — cargo is incremental, so a fresh binary
     // costs nothing and a stale one costs an afternoon: build-if-absent

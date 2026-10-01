@@ -46,7 +46,7 @@ Supporting verbs work on text indexes like on every other kind:
 - `IDX.VERIFY posts` / `IDX.LIST` — entries / bytes / postings /
   token statistics, live.
 - `IDX.DROP posts` — drop the declaration (catalog mutation,
-  sidecar-persisted).
+  recorded in the log and replicated).
 
 `MATCH` accepts `LIMIT` (≤ 1000) and `FIELDS`; there is no `CURSOR`
 form (see "Matching and ranking" for why).
@@ -119,7 +119,7 @@ exactly that, and it runs in CI.
 Query time, not a periodic snapshot: nothing is cached, so there is no
 staleness window to document, and nothing is coordinated on the write
 path. The second round costs 0.06 ms of a 28 ms p95 over a million
-documents (measured — [PERF-LEDGER.md](../bench/PERF-LEDGER.md)),
+documents (measured),
 because pass 1 moves only `(term, df)` pairs for the terms actually
 queried.
 
@@ -218,7 +218,7 @@ Measured envelope (receipts in the bench tree):
   real server, plus the memory formula against real RSS growth.
   It runs in CI-adjacent release checks — the numbers are clamps,
   not aspirations.
-- [`bench/PERF-LEDGER.md`](../bench/PERF-LEDGER.md) records the
+- [`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) records the
   comparative shootout: BM25 top-10 at +21% qps with a p95 tie
   against the `FT.SEARCH` of RediSearch in redis-stack 7.4.7, on
   the same corpus.

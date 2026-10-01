@@ -3,10 +3,11 @@
 //! WHERE grammar, and the CREATE-time guards.
 
 use super::*;
-use crate::catalog::{Catalog, FieldSpec, IndexKind, IndexSpec};
+use crate::{Catalog, FieldSpec, IndexKind, IndexSpec, WhereError};
 
 fn col(name: &str, ty: ValType, desc: bool) -> CompositeCol {
-    CompositeCol { name: name.into(), ty, desc }
+    let order = if desc { kevy_text::SortOrder::Desc } else { kevy_text::SortOrder::Asc };
+    CompositeCol::new(name, ty).with_order(order)
 }
 
 /// Deterministic xorshift64* — no crates, stable across runs.
@@ -50,7 +51,7 @@ fn model_cmp(cols: &[CompositeCol], a: &[Vec<u8>], b: &[Vec<u8>]) -> std::cmp::O
     for (i, c) in cols.iter().enumerate() {
         let (va, vb) =
             (IndexValue::coerce(c.ty, &a[i]).unwrap(), IndexValue::coerce(c.ty, &b[i]).unwrap());
-        let ord = if c.desc { vb.cmp(&va) } else { va.cmp(&vb) };
+        let ord = c.order.apply(va.cmp(&vb));
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
@@ -203,67 +204,79 @@ fn where_grammar_parses_and_refuses() {
 fn bounds_errors_are_named() {
     let cols = schema();
     let unknown = WhereClause { eqs: vec![(b"nope".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &unknown, 0).unwrap_err();
+    let e = composite_bounds(&cols, &unknown, 0).unwrap_err().to_string();
     assert!(e.contains("'nope'") && e.contains("does not declare"), "{e}");
     // declared but out of order (b before a) — the prefix rule.
     let out_of_order = WhereClause { eqs: vec![(b"b".to_vec(), b"1".to_vec())], range: None };
-    let e = composite_bounds(&cols, &out_of_order, 0).unwrap_err();
+    let e = composite_bounds(&cols, &out_of_order, 0).unwrap_err().to_string();
     assert!(e.contains("leading prefix"), "{e}");
     // a bound that does not coerce.
     let bad = WhereClause {
         eqs: vec![(b"a".to_vec(), b"x".to_vec())],
         range: Some((b"b".to_vec(), b"cheap".to_vec(), b"9".to_vec())),
     };
-    let e = composite_bounds(&cols, &bad, 0).unwrap_err();
+    let e = composite_bounds(&cols, &bad, 0).unwrap_err().to_string();
     assert!(e.contains("not a valid i64"), "{e}");
 }
 
+fn composite_builder(name: &str, kind: IndexKind, ty: ValType) -> crate::IndexSpecBuilder {
+    IndexSpec::builder(name, b"t:".to_vec(), kind, ty)
+        .with_field(b"a".to_vec())
+        .with_composite(vec![col("a", ValType::Str, false), col("b", ValType::I64, true)])
+}
+
 fn composite_spec(name: &str) -> IndexSpec {
-    let mut s = IndexSpec::single_field(
-        name.into(),
-        b"t:".to_vec(),
-        b"a".to_vec(),
-        ValType::Str,
-        IndexKind::Range,
-    );
-    s.composite = Some(vec![col("a", ValType::Str, false), col("b", ValType::I64, true)]);
-    s
+    composite_builder(name, IndexKind::Range, ValType::Str).build().unwrap()
 }
 
 #[test]
 fn create_guards_refuse_bad_composite_combos_by_name() {
     let mut c = Catalog::new();
     c.create(composite_spec("ok")).expect("a legal composite creates");
+    let range = |n| composite_builder(n, IndexKind::Range, ValType::Str);
 
-    let mut wrong_kind = composite_spec("k");
-    wrong_kind.kind = IndexKind::Unique;
-    assert_eq!(Catalog::new().create(wrong_kind), Err("ERR COMPOSITE requires KIND range"));
+    let wrong_kind = composite_builder("k", IndexKind::Unique, ValType::Str);
+    assert_eq!(
+        wrong_kind.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE requires KIND range")
+    );
 
-    let mut wrong_ty = composite_spec("t");
-    wrong_ty.ty = ValType::I64;
-    assert_eq!(Catalog::new().create(wrong_ty), Err("ERR COMPOSITE requires TYPE str"));
+    let wrong_ty = composite_builder("t", IndexKind::Range, ValType::I64);
+    assert_eq!(
+        wrong_ty.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE requires TYPE str")
+    );
 
-    let mut with_values = composite_spec("v");
-    with_values.values = vec![crate::ValueSpec::new(b"c".to_vec())];
-    assert_eq!(Catalog::new().create(with_values), Err("ERR COMPOSITE cannot combine with VALUES"));
+    let with_values = range("v").with_values(vec![crate::ValueSpec::new(b"c".to_vec())]);
+    assert_eq!(
+        with_values.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE cannot combine with VALUES")
+    );
 
-    let mut multi_fields = composite_spec("f");
-    multi_fields.fields = vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())];
+    let multi_fields =
+        range("f").with_fields(vec![FieldSpec::new(b"a".to_vec()), FieldSpec::new(b"b".to_vec())]);
     // The generic non-text multi-field fence fires first — still a
     // named refusal, never accept-and-ignore.
-    assert!(Catalog::new().create(multi_fields).is_err());
+    assert!(multi_fields.build().is_err());
 
-    let mut empty = composite_spec("e");
-    empty.composite = Some(Vec::new());
-    assert_eq!(Catalog::new().create(empty), Err("ERR COMPOSITE needs at least one column"));
+    let empty = range("e").with_composite(Vec::new());
+    assert_eq!(
+        empty.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE needs at least one column")
+    );
 
-    let mut too_many = composite_spec("m");
-    too_many.composite = Some((0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect());
-    assert_eq!(Catalog::new().create(too_many), Err("ERR COMPOSITE supports at most 8 columns"));
+    let many = (0..9).map(|i| col(&format!("c{i}"), ValType::I64, false)).collect();
+    let too_many = range("m").with_composite(many);
+    assert_eq!(
+        too_many.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE supports at most 8 columns")
+    );
 
-    let mut vec_col = composite_spec("vv");
-    vec_col.composite = Some(vec![col("a", ValType::Vector, false)]);
-    assert_eq!(Catalog::new().create(vec_col), Err("ERR COMPOSITE columns must be i64|f64|str"));
+    let vec_col = range("vv").with_composite(vec![col("a", ValType::Vector, false)]);
+    assert_eq!(
+        vec_col.build().err().map(|e| e.as_wire()),
+        Some("ERR COMPOSITE columns must be i64|f64|str")
+    );
 }
 
 /// The spec-level derivation face: composite read names, primary
@@ -280,14 +293,68 @@ fn spec_derivation_reads_composite_columns() {
     assert!(spec.derive_scalar(&[Some(b"x".to_vec()), None]).is_none(), "missing col excludes");
 
     // The plain single-field face is unchanged.
-    let plain = IndexSpec::single_field(
-        b"p".to_vec(),
-        b"t:".to_vec(),
-        b"n".to_vec(),
-        ValType::I64,
-        IndexKind::Range,
-    );
+    let plain = IndexSpec::builder(b"p".to_vec(), b"t:".to_vec(), IndexKind::Range, ValType::I64)
+        .with_field(b"n".to_vec())
+        .build()
+        .unwrap();
     assert_eq!(plain.scalar_read_names(), vec![b"n".as_slice()]);
     assert_eq!(plain.primary_width(), 1);
     assert_eq!(plain.derive_scalar(&[Some(b"7".to_vec())]), Some(IndexValue::I64(7)));
+    assert_eq!(plain.derive_scalar(&[]), None, "no column");
+    assert_eq!(plain.derive_scalar(&[None]), None, "an absent column");
+}
+
+#[test]
+fn a_where_missing_a_range_or_eq_operand_is_refused() {
+    let a = |s: &str| s.as_bytes().to_vec();
+    let never = |_: &[u8]| false;
+    assert!(parse_where(&[a("RANGE")], 0, never).is_none(), "no column");
+    assert!(parse_where(&[a("RANGE"), a("z")], 0, never).is_none(), "no min");
+    assert!(parse_where(&[a("x"), a("EQ")], 0, never).is_none(), "no value");
+}
+
+fn clause(eqs: &[(&str, &str)], range: Option<(&str, &str, &str)>) -> WhereClause {
+    let b = |s: &str| s.as_bytes().to_vec();
+    WhereClause {
+        eqs: eqs.iter().map(|(c, v)| (b(c), b(v))).collect(),
+        range: range.map(|(c, lo, hi)| (b(c), b(lo), b(hi))),
+    }
+}
+
+#[test]
+fn each_bound_is_checked_where_it_stands() {
+    let cols = schema();
+    let err = |w: &WhereClause| composite_bounds(&cols, w, 0).unwrap_err();
+    let e = err(&clause(&[("a", "x"), ("b", "cheap")], None));
+    assert!(matches!(&e, WhereError::Value { bound, .. } if bound == b"cheap"), "{e}");
+    let e = err(&clause(&[("a", "x")], Some(("c", "1", "2"))));
+    assert!(matches!(&e, WhereError::NotLeadingPrefix { .. }), "{e}");
+    let e = err(&clause(&[("a", "x")], Some(("b", "1", "lots"))));
+    assert!(matches!(&e, WhereError::Value { bound, .. } if bound == b"lots"), "{e}");
+}
+
+#[test]
+fn an_i64_bound_that_is_not_a_time_expression_is_named() {
+    let cols = [col("at", ValType::I64, false)];
+    let e = composite_bounds(&cols, &clause(&[("at", "@someday")], None), 0).unwrap_err();
+    assert_eq!(
+        e,
+        WhereError::TimeExpression { bound: b"@someday".to_vec(), column: b"at".to_vec() }
+    );
+}
+
+#[test]
+fn an_unconstrained_tail_stops_at_an_ascending_str_column() {
+    let w = clause(&[("n", "1")], None);
+    let cols = [
+        col("n", ValType::I64, false),
+        col("s", ValType::Str, false),
+        col("t", ValType::I64, false),
+    ];
+    let (lo, hi) = composite_bounds(&cols, &w, 0).unwrap();
+    assert_eq!(hi.len(), lo.len() + MAX_STR_COMPONENT * 2 + 3, "the str pad and nothing after it");
+    assert!(hi[lo.len()..].iter().all(|&b| b == 0xFF));
+    let vector = [col("n", ValType::I64, false), CompositeCol::new("v", ValType::Vector)];
+    let (lo, hi) = composite_bounds(&vector, &w, 0).unwrap();
+    assert_eq!(lo, hi, "a vector column adds no bound");
 }

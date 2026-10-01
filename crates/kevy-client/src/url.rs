@@ -44,9 +44,9 @@ pub(crate) fn parse_url(url: &str) -> Result<Target, KevyError> {
             }
             Ok(Target::EmbedPersist(PathBuf::from(rest)))
         }
-        "kevy" | "redis" | "tcp" => Ok(Target::Remote(url.to_string())),
-        "rediss" | "kevys" => Err(KevyError::Unsupported(
-            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS".into(),
+        "kevy" | "redis" | "tcp" | "kevys" => Ok(Target::Remote(url.to_string())),
+        "rediss" => Err(KevyError::Unsupported(
+            "rediss:// is unsupported: kevy has no TLS; put a TLS proxy in front, or use kevys:// for kevy's own encrypted port".into(),
         )),
         other => Err(KevyError::InvalidInput(format!("unknown URL scheme '{other}://'"))),
     }
@@ -125,7 +125,9 @@ mod tests {
 
     #[test]
     fn parse_remote_urls_delegate() {
-        for url in ["kevy://h:6379", "redis://h:6379/0", "tcp://h:6379"] {
+        for url in
+            ["kevy://h:6379", "redis://h:6379/0", "tcp://h:6379", "kevys://h:6404?server_key=ab"]
+        {
             match parse_url(url).unwrap() {
                 Target::Remote(u) => assert_eq!(u, url),
                 _ => panic!("wrong variant"),

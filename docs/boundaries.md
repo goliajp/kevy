@@ -28,9 +28,14 @@ cost is yours to predict.
 **3. Topology is declared, not discovered.** The member table comes
 from config. Roles are dynamic; membership is not.
 
-**4. The network is trusted.** kevy has no authentication and no
-transport encryption, by permanent decision — put it behind a proxy
-that has both (Caddy, nginx, a service mesh, a private subnet).
+**4. The network is trusted.** kevy has no AUTH, no TLS and no users, by
+permanent decision, and its client port is plaintext — put it behind a TCP
+proxy that has what you need (stunnel, HAProxy, nginx `stream`; see
+[deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)) or on a private
+subnet. kevy's own encryption is there when you turn it on: an encrypted
+client port for `kevys://` clients, and encrypted links between nodes for
+replication and elections, each authenticated by keys
+([encrypted-links.md](encrypted-links.md)).
 
 ## The refusals, by area
 
@@ -38,7 +43,7 @@ that has both (Caddy, nginx, a service mesh, a private subnet).
 |---|---|---|
 | Query | SQL as a query language, joins, cost-based planner, ad-hoc predicates in views | line 2 — declare an index or a view; `IDX.QUERY` / `VIEW.QUERY` name the access path explicitly |
 | Query | Write-path callbacks / triggers | your writer already knows what it wrote; a callback hides latency inside the write |
-| Security | AUTH, TLS, ACLs, multi-user | line 4 — terminate them in a proxy |
+| Security | AUTH, TLS, ACLs, multi-user for clients | line 4 — terminate them in a proxy; kevy's own encryption, for `kevys://` clients and between nodes, is optional |
 | Cluster | Sharded multi-master, cross-DC active-active, CRDTs | single-DC, single-partition-tolerant by design; conflict-free merge is an application-level model |
 | Cluster | Raft / strongly-consistent log replication | the quorum lease plus epoch fencing is the consistency this design offers; a full consensus log is a different product |
 | Cluster | Online resharding, gossip discovery, dynamic membership | line 3 — change the config and restart the member |

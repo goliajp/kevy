@@ -40,6 +40,13 @@ use crate::state::ReplicaProgress;
 /// a tick, slow enough that a long-down primary doesn't pin a CPU.
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 
+/// Where a runner connects, and with which keys when the link is secure.
+#[derive(Debug, Clone)]
+pub(crate) struct Dial {
+    pub(crate) addr: (std::net::IpAddr, u16),
+    pub(crate) links: Option<Arc<crate::secure::ReplLinks>>,
+}
+
 /// Handle for a per-shard runner thread. The kevy server keeps a
 /// `Vec<ReplicaRunner>` in its `ReplicationState` so `REPLICAOF`
 /// can stop + replace runners at runtime and so the
@@ -65,42 +72,30 @@ impl ReplicaRunner {
     /// election-offset sum reads it. `progress` is the
     /// ONLY state slice the runner thread captures.
     pub(crate) fn spawn(
-        upstream_addr: (std::net::IpAddr, u16),
+        dial: Dial,
         replica_id: String,
         sender: ReplicaInboxSender,
         runner_slot: usize,
         progress: Arc<ReplicaProgress>,
     ) -> Self {
-        Self::spawn_target(
-            upstream_addr,
-            replica_id,
-            Target::PerShard(sender),
-            runner_slot,
-            progress,
-        )
+        Self::spawn_target(dial, replica_id, Target::PerShard(sender), runner_slot, progress)
     }
 
     /// Single-source mode: ONE runner drains one upstream
     /// stream and fans events into EVERY shard's inbox (see
     /// [`route_event`]).
     pub(crate) fn spawn_routed(
-        upstream_addr: (std::net::IpAddr, u16),
+        dial: Dial,
         replica_id: String,
         senders: Vec<ReplicaInboxSender>,
         runner_slot: usize,
         progress: Arc<ReplicaProgress>,
     ) -> Self {
-        Self::spawn_target(
-            upstream_addr,
-            replica_id,
-            Target::Routed(senders),
-            runner_slot,
-            progress,
-        )
+        Self::spawn_target(dial, replica_id, Target::Routed(senders), runner_slot, progress)
     }
 
     fn spawn_target(
-        upstream_addr: (std::net::IpAddr, u16),
+        dial: Dial,
         replica_id: String,
         target: Target,
         runner_slot: usize,
@@ -114,7 +109,7 @@ impl ReplicaRunner {
             .name(format!("kevy-replica-{replica_id}"))
             .spawn(move || {
                 run_loop(
-                    upstream_addr,
+                    dial,
                     replica_id,
                     target,
                     stop_thread,
@@ -185,7 +180,7 @@ enum Target {
 /// owns one connection's lifetime.
 #[allow(clippy::too_many_arguments)]
 fn one_session(
-    upstream_addr: (std::net::IpAddr, u16),
+    dial: &Dial,
     replica_id: &str,
     target: &Target,
     stop: &Arc<AtomicBool>,
@@ -195,21 +190,24 @@ fn one_session(
     from_offset: u64,
     data_gen: &mut u64,
 ) -> u64 {
-    match ReplicaClient::connect_at(
-        upstream_addr,
-        replica_id,
-        *data_gen,
-        from_offset,
-        Duration::from_secs(5),
-    ) {
+    let connected = match &dial.links {
+        Some(links) => links.connect(dial.addr, replica_id, *data_gen, from_offset),
+        None => ReplicaClient::connect_with(
+            dial.addr,
+            &kevy_replicate::replica::ConnectOptions::new(replica_id)
+                .with_from(kevy_replicate::feed::FeedPosition::new(*data_gen, from_offset)),
+        ),
+    };
+    match connected {
         Ok(mut client) => {
             drain_session(&mut client, target, stop, socket_slot, runner_slot, progress, data_gen)
         }
         Err(e) => {
             eprintln!(
                 "kevy: replica runner '{replica_id}' connect to \
-                 {upstream_addr:?} failed: {e}; retrying in \
-                 {RECONNECT_BACKOFF:?}"
+                 {:?} failed: {e}; retrying in \
+                 {RECONNECT_BACKOFF:?}",
+                dial.addr
             );
             from_offset
         }
@@ -217,7 +215,7 @@ fn one_session(
 }
 
 fn run_loop(
-    upstream_addr: (std::net::IpAddr, u16),
+    dial: Dial,
     replica_id: String,
     target: Target,
     stop: Arc<AtomicBool>,
@@ -234,7 +232,7 @@ fn run_loop(
     let mut data_gen: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
         from_offset = one_session(
-            upstream_addr,
+            &dial,
             &replica_id,
             &target,
             &stop,

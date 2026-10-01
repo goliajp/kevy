@@ -1,6 +1,6 @@
 //! Behavioural tests for the heap.
 //!
-//! These are the assertions `bench/allocgate.sh` names: M3 (the
+//! These are the allocator contract's assertions: M3 (the
 //! accounting identity), M4 (reclaim actually returns pages), M6 (an
 //! exhausted class refuses rather than hands back a wild pointer).
 //! Every test skips cleanly where mapping is unavailable, because a test
@@ -20,6 +20,13 @@ macro_rules! require_mapping {
             return;
         }
     };
+}
+
+/// Sweep until everything freed so far has aged past the purge delay.
+fn sweep_out(heap: &mut Heap) {
+    for _ in 0..=crate::PURGE_DELAY {
+        heap.reclaim();
+    }
 }
 
 #[test]
@@ -267,7 +274,14 @@ fn m4_emptied_spans_have_their_pages_returned() {
     }
     let idle = heap.snapshot();
     assert_eq!(idle.live, 0);
+    // Inside the purge delay the policy holds everything back: a version
+    // that released the lot at once would satisfy every assertion below
+    // and fault the next burst back in page by page.
     heap.reclaim();
+    let held = heap.snapshot();
+    assert_eq!(held.returned, idle.returned, "pages went back inside the purge delay");
+    assert!(held.hysteresis > idle.hysteresis, "the emptied spans were not held: {held:?}");
+    sweep_out(&mut heap);
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     // This used to read `after.hysteresis > idle.hysteresis`, with a
@@ -286,15 +300,7 @@ fn m4_emptied_spans_have_their_pages_returned() {
             idle.returned,
             after.returned
         );
-        // And the policy really does hold some back rather than
-        // releasing everything: `EMPTY_SPAN_HYSTERESIS` spans stay
-        // assigned to their class, resident, per sweep. A version that
-        // released the lot would satisfy the assertion above and be an
-        // mmap storm.
-        assert!(
-            after.hysteresis > 0,
-            "the whole pool was released, so nothing absorbs the next burst"
-        );
+        assert_eq!(after.hysteresis, 0, "emptied spans outlived the purge delay: {after:?}");
         assert!(
             after.predicted_resident() < full.predicted_resident(),
             "predicted residency did not fall: {} -> {}",
@@ -348,7 +354,7 @@ fn reclaimed_spans_are_reusable_and_start_clean() {
         // SAFETY: ours, this size.
         unsafe { heap.dealloc(p, size, 8) };
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let mut again = Vec::new();
     for _ in 0..per_span * 4 {
         let p = heap.alloc(size, 8).expect("reclaimed spans must be reusable");
@@ -369,55 +375,6 @@ fn spans_are_page_multiples_so_discard_is_legal() {
     // madvise refuses ranges that are not page-aligned, and a silent
     // refusal would make M4 look like a policy choice rather than a bug.
     assert_eq!(SPAN_BYTES % os::PAGE, 0);
-}
-
-/// Resident pages, from `/proc/self/statm` field 2 (in pages).
-#[cfg(target_os = "linux")]
-fn rss_bytes() -> u64 {
-    let s = std::fs::read_to_string("/proc/self/statm").expect("procfs");
-    let pages: u64 = s.split_whitespace().nth(1).unwrap().parse().unwrap();
-    pages * os::PAGE as u64
-}
-
-/// M4 in its real form: the kernel's own resident count must fall.
-///
-/// The model-level test above checks our prediction; this checks the
-/// thing the prediction is about. Linux only, and deliberately so —
-/// `MADV_DONTNEED` drops pages outright, while macOS's `MADV_FREE` only
-/// marks them reclaimable, so a passing assertion there would mean
-/// nothing. glibc's brk arena cannot pass this at any page count, which
-/// is the whole reason this crate exists.
-#[cfg(target_os = "linux")]
-#[test]
-fn m4_the_kernel_agrees_that_pages_came_back() {
-    require_mapping!();
-    let mut heap = Heap::new(0);
-    let size = 64;
-    let per_span = class::slots_per_span(class::index_of(size, 8).unwrap());
-    // Enough spans that the returned bytes clear ordinary process noise.
-    let count = per_span * 200;
-    let mut given = Vec::with_capacity(count);
-    for _ in 0..count {
-        let p = heap.alloc(size, 8).expect("filling spans");
-        // Touch it: untouched pages are not resident, and a test that
-        // never made them resident could not observe them leaving.
-        // SAFETY: a live slot of at least `size` bytes.
-        unsafe { core::ptr::write_bytes(p.as_ptr(), 0x5A, size) };
-        given.push(p);
-    }
-    let peak = rss_bytes();
-    for p in given {
-        // SAFETY: ours, this size and alignment.
-        unsafe { heap.dealloc(p, size, 8) };
-    }
-    heap.reclaim();
-    let after = rss_bytes();
-    let touched = (count * size) as u64;
-    assert!(
-        after + touched / 2 < peak,
-        "RSS barely moved: {peak} -> {after} after freeing {touched} bytes across {} spans",
-        count / per_span
-    );
 }
 
 #[test]
@@ -564,7 +521,7 @@ fn v2_pages_return_while_the_span_still_lives() {
     assert!(!survivors.is_empty(), "the last page must hold live slots");
     let before = heap.snapshot();
     assert_eq!(before.returned, 0, "nothing returned before the sweep");
-    heap.reclaim();
+    sweep_out(&mut heap);
     let after = heap.snapshot();
     assert!(after.balanced(), "{after:?}");
     // `returned` is the accounting, not the kernel. On a system whose
@@ -652,7 +609,7 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
             live.push(heap.alloc(size, 8).expect("refill"));
         }
     }
-    heap.reclaim();
+    sweep_out(&mut heap);
     let st = heap.snapshot();
     assert!(st.balanced(), "{st:?}");
     // Same split as `v2_pages_return_while_the_span_still_lives`: this
@@ -668,55 +625,6 @@ fn v2_densification_migrates_free_space_into_whole_pages() {
         eprintln!("NOT EXERCISED: densification's page return needs a {}-byte page", os::PAGE);
     }
     for p in live {
-        // SAFETY: ours.
-        unsafe { heap.dealloc(p, size, 8) };
-    }
-}
-
-/// The kernel's own verdict on v2, Linux only (macOS MADV_FREE gives no
-/// prompt guarantee — same reasoning as the whole-span M4 test).
-#[cfg(target_os = "linux")]
-#[test]
-fn v2_the_kernel_reclaims_pages_from_spans_with_survivors() {
-    require_mapping!();
-    let mut heap = Heap::new(0);
-    let size = 400;
-    let c = class::index_of(size, 8).unwrap();
-    let slot = class::size_of(c);
-    let per_span = class::slots_per_span(c);
-    let spans = 200;
-    let mut given = Vec::with_capacity(per_span * spans);
-    for _ in 0..per_span * spans {
-        let p = heap.alloc(size, 8).expect("fill");
-        // Touch, so the pages are resident and their leaving is visible.
-        // SAFETY: live slot of at least `size` bytes.
-        unsafe { core::ptr::write_bytes(p.as_ptr(), 0x5A, size) };
-        given.push(p);
-    }
-    let peak = rss_bytes();
-    // Free all but each span's last-page slots — every span keeps
-    // survivors, so the v1 whole-span rule would return NOTHING here.
-    let last_page_start = (crate::pagemap::PAGES_PER_SPAN - 1) * os::PAGE;
-    let mut survivors = Vec::new();
-    for (n, p) in given.into_iter().enumerate() {
-        let in_span = n % per_span;
-        if (in_span + 1) * slot > last_page_start {
-            survivors.push(p);
-        } else {
-            // SAFETY: ours, this size and alignment.
-            unsafe { heap.dealloc(p, size, 8) };
-        }
-    }
-    heap.reclaim();
-    let after = rss_bytes();
-    let st = heap.snapshot();
-    assert!(st.balanced(), "{st:?}");
-    assert!(
-        after + st.returned / 2 < peak,
-        "kernel RSS barely moved with survivors pinning every span: {peak} -> {after} (returned={})",
-        st.returned
-    );
-    for p in survivors {
         // SAFETY: ours.
         unsafe { heap.dealloc(p, size, 8) };
     }
@@ -840,7 +748,8 @@ fn claims_span_words_and_never_strand_occupancy() {
 /// This asserts the check exists and agrees with the system, which is
 /// the only part that can be checked from inside the process. What it
 /// cannot check is whether `madvise` did anything — that needs RSS, and
-/// `bench/allocgate-mem.sh` is where that lives.
+/// `bench/capacity-envelope.sh` run against a build with the allocator is
+/// where that lives.
 #[test]
 fn the_page_size_check_agrees_with_the_system() {
     let matches = crate::os::page_size_matches();

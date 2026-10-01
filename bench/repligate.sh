@@ -8,8 +8,8 @@
 #      SNAPSHOT ship and converges — the closed v1.21 anti-scope.
 #   3. Replica restart within the backlog window resumes by frames
 #      and converges again.
-#   4. The replica serves its own derived state on replicated data:
-#      IDX.CREATE + IDX.QUERY answer on the replica.
+#   4. The replica serves the primary's index over replicated data,
+#      and refuses to declare one of its own (READONLY).
 #
 # Usage: bash bench/repligate.sh
 set -u
@@ -85,7 +85,7 @@ kill -STOP $WPID
 # exactly 2s on an idle box) that turned load-sensitive on slow runners.
 D1=""; D2=""
 for _ in $(seq 30); do
-    D2=$($CLI digest -p $REPPORT p:)
+    D2=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D1" ] && [ "$D1" = "$D2" ] && break
     D1="$D2"
     sleep 1
@@ -96,7 +96,7 @@ if [ "$D1" != "$D2" ] || [ -z "$D1" ]; then
 fi
 # and it must STAY stable — one more read a second later.
 sleep 1
-D2=$($CLI digest -p $REPPORT p:)
+D2=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D1" != "$D2" ]; then
     echo "repligate: FAIL — replica digest moved after convergence ($D1 vs $D2)"
     exit 1
@@ -121,30 +121,32 @@ kill -STOP $WPID
 # same bounded convergence as clamp 1.
 D3=""; D4=""
 for _ in $(seq 30); do
-    D4=$($CLI digest -p $REPPORT p:)
+    D4=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D3" ] && [ "$D3" = "$D4" ] && break
     D3="$D4"
     sleep 1
 done
 sleep 1
-D4B=$($CLI digest -p $REPPORT p:)
+D4B=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D3" != "$D4" ] || [ "$D4" != "$D4B" ] || [ "$N" -lt 50003 ]; then
     echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4 vs $D4B)"
     exit 1
 fi
 echo "repligate: restart re-synced + stable: $D3"
 
-# clamp 4: replica-local derived state over replicated data (writer
-# stays paused so the backfill snapshot is stable)
-$CLI -p $REPPORT IDX.CREATE rep_n ON PREFIX p: FIELD n TYPE i64 KIND range >/dev/null
+# clamp 4: the writer's index answers on the replica over replicated
+# data (writer stays paused so the backfill snapshot is stable); the
+# replica declares nothing of its own
+MINE=$($CLI -p $REPPORT IDX.CREATE mine ON PREFIX p: FIELD n TYPE i64 KIND range 2>&1 || true)
+echo "$MINE" | grep -q "READONLY" || { echo "repligate: FAIL — the replica took IDX.CREATE: $MINE"; exit 1; }
 OK=0
 for _ in $(seq 60); do
     R=$($CLI -p $REPPORT IDX.QUERY rep_n RANGE 100 110 LIMIT 20 2>/dev/null || true)
     echo "$R" | grep -q "p:105" && { OK=1; break; }
     sleep 0.5
 done
-[ $OK = 1 ] || { echo "repligate: FAIL — replica-local index never answered"; exit 1; }
-echo "repligate: replica-local IDX.QUERY answers over replicated data"
+[ $OK = 1 ] || { echo "repligate: FAIL — the primary's index never answered on the replica"; exit 1; }
+echo "repligate: the primary's index answers on the replica, which refuses its own"
 
 # clamp 5 (T8 generation fence): SIGKILL the writer, restart it on the
 # same port. The new boot mints a NEW feed generation and restarts
@@ -172,13 +174,13 @@ done
 kill -STOP $WPID
 D5=""; D6=""
 for _ in $(seq 30); do
-    D6=$($CLI digest -p $REPPORT p:)
+    D6=$($CLI -p $REPPORT --kevy digest p:)
     [ -n "$D5" ] && [ "$D5" = "$D6" ] && break
     D5="$D6"
     sleep 1
 done
 sleep 1
-D6B=$($CLI digest -p $REPPORT p:)
+D6B=$($CLI -p $REPPORT --kevy digest p:)
 if [ "$D5" != "$D6" ] || [ "$D6" != "$D6B" ] || [ -z "$D5" ]; then
     echo "repligate: FAIL — post-SIGKILL-restart digest unstable ($D5 vs $D6 vs $D6B)"
     exit 1

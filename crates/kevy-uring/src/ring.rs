@@ -13,6 +13,29 @@ use crate::ffi::{self, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URI
 use crate::layout::IoUringSqe;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
+///
+/// Operations are queued with the `prep_*` methods, handed to the kernel by
+/// [`submit_and_wait`](IoUring::submit_and_wait), and their results reaped
+/// with [`for_each_completion`](IoUring::for_each_completion).
+///
+/// ```
+/// use std::io::Read;
+/// use std::os::fd::AsRawFd;
+///
+/// let mut ring = kevy_uring::IoUring::new(8)?;
+/// let (mut reader, writer) = std::io::pipe()?;
+/// let msg = b"hello";
+/// // SAFETY: `msg` is static, so it outlives the completion reaped below.
+/// assert!(unsafe { ring.prep_write(writer.as_raw_fd(), msg.as_ptr(), 5, 1) });
+/// assert_eq!(ring.submit_and_wait(1)?, 1);
+/// let mut res = None;
+/// ring.for_each_completion(|c| res = Some((c.user_data, c.res)));
+/// assert_eq!(res, Some((1, 5)));
+/// let mut got = [0; 5];
+/// reader.read_exact(&mut got)?;
+/// assert_eq!(&got, b"hello");
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct IoUring {
     pub(crate) ring_fd: c_int,

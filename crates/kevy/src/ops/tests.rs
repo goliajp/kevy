@@ -75,7 +75,7 @@ fn info_replication_master_default_shape() {
     // shape with offset/connected folded from the shard view
     // slots. Per-replica list — 3 fake replica processes,
     // offset=42.
-    let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+    let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
     let replicas = vec![
         (
             "kevy-replica-7001#0".to_string(),
@@ -112,6 +112,25 @@ fn info_replication_master_default_shape() {
     assert!(!s.contains("master_link_status"), "got: {s}");
     // No cleanup needed: the view lives in this test's own
     // KevyCommands shard zone, not in any shared static.
+}
+
+#[test]
+fn info_replication_reports_the_replication_base_only_when_replication_is_on() {
+    let c = crate::KevyCommands::new();
+    let standalone = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(!standalone.contains("repl_port_base"), "got: {standalone}");
+
+    let mut cfg = kevy_config::Config::default();
+    cfg.replication.role = kevy_config::ReplicationRole::Primary;
+    cfg.replication.listen_port_base = 7100;
+    c.state().config_replace(std::sync::Arc::new(cfg.clone()));
+    let s = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(s.contains("repl_port_base:7100\r\n"), "got: {s}");
+
+    cfg.replication.listen_port_base = 0;
+    c.state().config_replace(std::sync::Arc::new(cfg));
+    let s = String::from_utf8(run_on(&c, b"INFO", &[b"replication"])).unwrap();
+    assert!(s.contains("repl_port_base:16004\r\n"), "default is client port + 10000: {s}");
 }
 
 #[test]

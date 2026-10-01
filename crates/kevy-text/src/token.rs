@@ -7,18 +7,43 @@
 //!   texts remain findable.
 //! - Tokens never cross a script boundary.
 
-/// Pluggable tokenizer ([`tokenize`] is the only shipped impl).
+/// A text analysis: bytes in, index tokens out.
+///
+/// [`KevyTokenizer`] (the rules of [`tokenize`]) is the only one shipped,
+/// and it is the one a [`TextSegment`](crate::TextSegment) applies itself.
+/// The trait is for code that works over an analysis without fixing which
+/// one — a caller's own pipeline, or a test double.
+///
+/// # Implementing it
+///
+/// The trait is open. An implementation must be a pure function of
+/// `text`: the same bytes always give the same tokens, because a document
+/// is found only when its text and the query tokenize alike. It must
+/// accept any bytes, including invalid UTF-8, without panicking.
+///
 /// # Examples
 ///
 /// ```
 /// use kevy_text::{KevyTokenizer, Tokenizer};
-/// // The engine takes a Tokenizer, so a caller can swap the analysis
-/// // without touching the index.
 /// fn count<T: Tokenizer>(t: &T, s: &[u8]) -> usize { t.tokens(s).len() }
 /// assert_eq!(count(&KevyTokenizer, b"one two three"), 3);
+///
+/// struct Whitespace;
+/// impl Tokenizer for Whitespace {
+///     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>> {
+///         text.split(u8::is_ascii_whitespace).filter(|t| !t.is_empty()).map(<[u8]>::to_vec).collect()
+///     }
+/// }
+/// assert_eq!(count(&Whitespace, b"a b  c"), 3);
 /// ```
 pub trait Tokenizer {
     /// Produce tokens for `text` (UTF-8; invalid bytes are skipped).
+    ///
+    /// ```
+    /// use kevy_text::{KevyTokenizer, Tokenizer};
+    /// let toks = KevyTokenizer.tokens(b"Hello, World \xff!");
+    /// assert_eq!(toks, [b"hello".to_vec(), b"world".to_vec()]);
+    /// ```
     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>>;
 }
 

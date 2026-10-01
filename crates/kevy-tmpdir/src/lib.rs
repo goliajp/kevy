@@ -23,6 +23,15 @@
 //! A process id and a monotonic counter, together, cannot collide: the counter
 //! separates threads within a process and the pid separates processes. That is
 //! the whole trick, and it is why this is one crate instead of nine copies.
+//!
+//! ```
+//! let dir = kevy_tmpdir::TmpDir::new("readme");
+//! std::fs::write(dir.path().join("data"), b"x")?;
+//! let path = dir.path().to_path_buf();
+//! drop(dir);
+//! assert!(!path.exists(), "gone with the guard");
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 // Best-effort removal, on paths where the file is being abandoned.
 // A file that will not delete is a stray the next sweep collects,
@@ -44,6 +53,12 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// never cleared, so a recycled pid inherited the PREVIOUS run's data files —
 /// `create_dir_all` on an existing directory succeeds silently, and the loader
 /// then read a mix of stale and fresh dumps as though they were one dataset.
+///
+/// # Panics
+///
+/// When the directory cannot be created: a caller with nowhere to put its
+/// files has nothing to do next.
+///
 /// # Examples
 ///
 /// Two calls never collide, and the second call for a label does not
@@ -93,6 +108,10 @@ impl TmpDir {
     /// `label` shows up in the path, so a directory that somehow survives says
     /// which test left it.
     ///
+    /// # Panics
+    ///
+    /// When the directory cannot be created, as [`unique_dir`].
+    ///
     /// # Examples
     ///
     /// ```
@@ -118,6 +137,26 @@ impl TmpDir {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// Remove the directory now and say whether that worked — what `Drop`
+    /// does, for a caller that cares about the answer. Dropping the guard
+    /// cannot report a failure, and removing a large tree blocks for as
+    /// long as it takes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let dir = kevy_tmpdir::TmpDir::new("close-me");
+    /// let path = dir.path().to_path_buf();
+    /// dir.close()?;
+    /// assert!(!path.exists());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn close(mut self) -> std::io::Result<()> {
+        // an empty path tells `Drop` there is nothing left to remove
+        let path = std::mem::take(&mut self.0);
+        std::fs::remove_dir_all(path)
+    }
 }
 
 impl AsRef<Path> for TmpDir {
@@ -130,9 +169,18 @@ impl Drop for TmpDir {
     fn drop(&mut self) {
         // Drop cannot report, and a temp directory that outlives its process
         // is the OS's to reclaim.
-        let _ = std::fs::remove_dir_all(&self.0);
+        if !self.0.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<TmpDir>();
+};
 
 #[cfg(test)]
 mod tests {
@@ -166,5 +214,20 @@ mod tests {
             d.path().to_path_buf()
         };
         assert!(!p.exists(), "TmpDir did not clean up after itself");
+    }
+
+    #[test]
+    fn close_removes_the_tree_and_reports_a_failure() {
+        let d = TmpDir::new("close");
+        let p = d.path().to_path_buf();
+        std::fs::create_dir(p.join("sub")).unwrap();
+        std::fs::write(p.join("sub/f"), b"x").unwrap();
+        d.close().unwrap();
+        assert!(!p.exists(), "close left the directory behind");
+
+        let gone = TmpDir::new("close-gone");
+        std::fs::remove_dir_all(gone.path()).unwrap();
+        let err = gone.close().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

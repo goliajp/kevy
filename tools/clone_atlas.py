@@ -36,7 +36,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "bench/CLONE-ATLAS.md"
+OUT = ROOT / "target/reports/CLONE-ATLAS.md"
 
 K = 30          # tokens per k-gram: shorter finds boilerplate, not designs
 W = 20          # winnowing window
@@ -206,6 +206,7 @@ def main():
         out.append(f"| {n} | `{a.relative_to(ROOT)}` | `{b.relative_to(ROOT)}` |")
     if not same:
         out.append("| — | *none* | |")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(out) + "\n")
     print(f"clones: {len(hot)} pairs >= {min_shared} shared fingerprints "
           f"({len(cross)} cross-crate) over {len(per_file)} files -> "

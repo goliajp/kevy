@@ -9,71 +9,8 @@
 //! variants — the parser only produces them when the server speaks RESP3.
 
 use crate::error::ProtocolError;
+use crate::reply::Reply;
 use crate::request::{find_crlf, parse_int};
-
-/// A parsed RESP reply (server → client) — the client-side counterpart of
-/// the crate's `encode_*` functions (server-side encoders).
-///
-/// Variants prefixed with `Resp3:` in their doc are only ever produced by
-/// a server speaking RESP3; an `HELLO 2` (or no `HELLO`) session sees the
-/// RESP2 subset (`Simple` / `Error` / `Int` / `Bulk` / `Nil` / `Array`)
-/// exclusively. Adding new variants is non-breaking: an exhaustive
-/// `match` on `Reply` is forced to opt into RESP3 by listing each variant
-/// (rust 2024 will not warn on missing arms only after `#[non_exhaustive]`
-/// — which we deliberately omit so RESP2-only code stays compile-checked
-/// for completeness).
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reply {
-    /// `+OK`
-    Simple(Vec<u8>),
-    /// `-ERR ...`
-    Error(Vec<u8>),
-    /// `:42`
-    Int(i64),
-    /// `$5\r\nhello\r\n`
-    Bulk(Vec<u8>),
-    /// `$-1` or `*-1` — the RESP2 null sentinel; in RESP3 the dedicated
-    /// [`Reply::Null`] (`_\r\n`) is used instead. Both round-trip here.
-    Nil,
-    /// `*N ...`
-    Array(Vec<Reply>),
-    /// **Resp3:** `%N\r\n<key1><value1>...<keyN><valueN>` — N pairs (the
-    /// header count is the pair count, NOT the element count, so a map of
-    /// 3 pairs is `%3` plus 6 sub-replies). Parsed/exposed as a Vec of
-    /// pairs so duplicate keys + insertion order are preserved.
-    Map(Vec<(Reply, Reply)>),
-    /// **Resp3:** `~N\r\n<item1>...<itemN>` — set semantics on the wire;
-    /// dedup is the application's job (RESP3 doesn't require it).
-    Set(Vec<Reply>),
-    /// **Resp3:** `,1.5\r\n` — double. `inf` / `-inf` / `nan` are valid
-    /// payloads per the RESP3 spec and survive the round-trip.
-    Double(f64),
-    /// **Resp3:** `#t\r\n` / `#f\r\n` — boolean.
-    Boolean(bool),
-    /// **Resp3:** `=15\r\ntxt:Some bytes\r\n` — verbatim string carrying
-    /// a 3-char format tag (`txt` / `mkd` / etc.) + raw bytes. The colon
-    /// separator is part of the wire encoding but not part of `data`.
-    Verbatim {
-        /// 3-char format tag (e.g. `b"txt"` for plain text, `b"mkd"` for markdown).
-        fmt: [u8; 3],
-        /// Payload bytes following the `:` separator.
-        data: Vec<u8>,
-    },
-    /// **Resp3:** `(170141183460469231731687303715884105727\r\n` — arbitrary-
-    /// precision integer; carried as the raw digit bytes since we don't
-    /// pull in a bignum crate (charter: zero deps).
-    BigNumber(Vec<u8>),
-    /// **Resp3:** `_\r\n` — true null. RESP2 falls back to [`Reply::Nil`].
-    Null,
-    /// **Resp3:** `>N\r\n...` — like [`Reply::Array`] but tagged as an
-    /// out-of-band server-push frame (pub/sub messages in RESP3). The
-    /// client must dispatch these separately from regular replies.
-    Push(Vec<Reply>),
-    /// **Resp3:** `!8\r\nERR ohno\r\n` — error carried as a length-prefixed
-    /// bulk (handles errors containing CRLF that the simple-string `-`
-    /// shape can't encode).
-    BlobError(Vec<u8>),
-}
 
 /// Parse one RESP reply from the front of `buf`. Speaks RESP2 + RESP3.
 ///
@@ -86,7 +23,73 @@ pub enum Reply {
 /// only the underlying reply, matching what every RESP3 client library
 /// does today. Exposing them is a future addition once a real consumer
 /// (e.g. CLIENT TRACE) ships.
+///
+/// ```
+/// use kevy_resp::{Reply, parse_reply};
+///
+/// let buf = b"+OK\r\n:5\r\n";
+/// let (first, used) = parse_reply(buf)?.expect("complete frame");
+/// assert_eq!(first, Reply::Simple(b"OK".to_vec()));
+/// let (second, _) = parse_reply(&buf[used..])?.expect("complete frame");
+/// assert_eq!(second, Reply::Int(5));
+/// assert_eq!(parse_reply(b"$5\r\nhel")?, None);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub fn parse_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
+    parse_with(buf, &mut DoubleText(None))
+}
+
+/// [`parse_reply`], also returning the wire text of every double in the
+/// reply, in the order a depth-first walk of the reply meets them.
+///
+/// [`Reply::Double`] carries the parsed `f64`, and a value does not say how
+/// the server wrote it: `1e+300`, `1e300` and a 301-digit integer are one
+/// number. A client that shows replies as the server sent them — a CLI
+/// that must print what `redis-cli` prints — needs the bytes.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_resp::{Reply, parse_reply_keeping_double_text};
+///
+/// let wire = b"*2\r\n,1e+300\r\n,inf\r\n";
+/// let (reply, used, texts) = parse_reply_keeping_double_text(wire)?.expect("a whole reply");
+/// assert_eq!(reply, Reply::Array(vec![Reply::Double(1e300), Reply::Double(f64::INFINITY)]));
+/// assert_eq!(used, wire.len());
+/// assert_eq!(texts, [b"1e+300".to_vec(), b"inf".to_vec()]);
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`ProtocolError`] when the bytes are not RESP, exactly as [`parse_reply`].
+pub fn parse_reply_keeping_double_text(buf: &[u8]) -> Result<Option<TextedReply>, ProtocolError> {
+    let mut texts = Vec::new();
+    let parsed = parse_with(buf, &mut DoubleText(Some(&mut texts)))?;
+    Ok(parsed.map(|(reply, used)| (reply, used, texts)))
+}
+
+/// A reply, the bytes it consumed, and the wire text of each double in it.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_resp::{Reply, TextedReply, parse_reply_keeping_double_text};
+///
+/// let parsed: Option<TextedReply> = parse_reply_keeping_double_text(b",1.5\r\n")?;
+/// let (reply, used, texts) = parsed.expect("a whole reply");
+/// assert_eq!((reply, used, texts), (Reply::Double(1.5), 6, vec![b"1.5".to_vec()]));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
+pub type TextedReply = (Reply, usize, Vec<Vec<u8>>);
+
+/// Where double text goes when a caller asked for it; nowhere otherwise.
+struct DoubleText<'a>(Option<&'a mut Vec<Vec<u8>>>);
+
+fn parse_with(
+    buf: &[u8],
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     let Some(&tag) = buf.first() else {
         return Ok(None);
     };
@@ -101,11 +104,11 @@ pub fn parse_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
             }
         },
         b'$' => parse_bulk_reply(buf),
-        b'*' => parse_array_reply(buf, false),
+        b'*' => parse_array_reply(buf, false, dt),
         // ── RESP3 additions ──────────────────────────────────────────
-        b'%' => parse_map_reply(buf),
-        b'~' => parse_set_reply(buf),
-        b',' => parse_double_reply(buf),
+        b'%' => parse_map_reply(buf, dt),
+        b'~' => parse_set_reply(buf, dt),
+        b',' => parse_double_reply(buf, dt),
         b'#' => parse_boolean_reply(buf),
         b'=' => parse_verbatim_reply(buf),
         b'(' => match reply_line(buf) {
@@ -113,9 +116,9 @@ pub fn parse_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
             Some((b, used)) => Ok(Some((Reply::BigNumber(b.to_vec()), used))),
         },
         b'_' => parse_null_reply(buf),
-        b'>' => parse_array_reply(buf, true),
+        b'>' => parse_array_reply(buf, true, dt),
         b'!' => parse_blob_error_reply(buf),
-        b'|' => parse_attributed_reply(buf),
+        b'|' => parse_attributed_reply(buf, dt),
         _ => Err(ProtocolError::Malformed("unknown reply type")),
     }
 }
@@ -138,6 +141,7 @@ fn parse_bulk_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError>
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "bulk payload not followed by CRLF")?;
     Ok(Some((Reply::Bulk(buf[data_start..data_end].to_vec()), data_end + 2)))
 }
 
@@ -145,7 +149,11 @@ fn parse_bulk_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError>
 /// are length-prefixed sequences of replies. `push=true` wraps the
 /// result in `Reply::Push`, otherwise `Reply::Array` (or `Reply::Nil`
 /// for the RESP2 `*-1` shape, which RESP3 push frames never emit).
-fn parse_array_reply(buf: &[u8], push: bool) -> Result<Option<(Reply, usize)>, ProtocolError> {
+fn parse_array_reply(
+    buf: &[u8],
+    push: bool,
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
@@ -166,7 +174,7 @@ fn parse_array_reply(buf: &[u8], push: bool) -> Result<Option<(Reply, usize)>, P
     let cap = (count as usize).min(buf.len().saturating_sub(pos));
     let mut items = Vec::with_capacity(cap);
     for _ in 0..count {
-        match parse_reply(&buf[pos..])? {
+        match parse_with(&buf[pos..], dt)? {
             None => return Ok(None),
             Some((r, used)) => {
                 items.push(r);
@@ -179,7 +187,10 @@ fn parse_array_reply(buf: &[u8], push: bool) -> Result<Option<(Reply, usize)>, P
 }
 
 /// `%N\r\n` followed by 2N sub-replies (N key/value pairs).
-fn parse_map_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
+fn parse_map_reply(
+    buf: &[u8],
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
@@ -192,11 +203,11 @@ fn parse_map_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
     let cap = (count as usize).min(buf.len().saturating_sub(pos) / 2);
     let mut pairs: Vec<(Reply, Reply)> = Vec::with_capacity(cap);
     for _ in 0..count {
-        let Some((k, used_k)) = parse_reply(&buf[pos..])? else {
+        let Some((k, used_k)) = parse_with(&buf[pos..], dt)? else {
             return Ok(None);
         };
         pos += used_k;
-        let Some((v, used_v)) = parse_reply(&buf[pos..])? else {
+        let Some((v, used_v)) = parse_with(&buf[pos..], dt)? else {
             return Ok(None);
         };
         pos += used_v;
@@ -206,7 +217,10 @@ fn parse_map_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
 }
 
 /// `~N\r\n` followed by N sub-replies — set on the wire, no dedup.
-fn parse_set_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
+fn parse_set_reply(
+    buf: &[u8],
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
@@ -218,7 +232,7 @@ fn parse_set_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
     let cap = (count as usize).min(buf.len().saturating_sub(pos));
     let mut items = Vec::with_capacity(cap);
     for _ in 0..count {
-        match parse_reply(&buf[pos..])? {
+        match parse_with(&buf[pos..], dt)? {
             None => return Ok(None),
             Some((r, used)) => {
                 items.push(r);
@@ -231,12 +245,18 @@ fn parse_set_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> 
 
 /// `,N\r\n` — double. RESP3 spec carries `inf` / `-inf` / `nan` as
 /// literal byte strings; `f64::from_str` already handles all three.
-fn parse_double_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
+fn parse_double_reply(
+    buf: &[u8],
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     let Some((bytes, used)) = reply_line(buf) else {
         return Ok(None);
     };
     let s = std::str::from_utf8(bytes).map_err(|_| ProtocolError::Malformed("bad double utf8"))?;
     let v: f64 = s.parse().map_err(|_| ProtocolError::Malformed("bad double"))?;
+    if let Some(texts) = dt.0.as_mut() {
+        texts.push(bytes.to_vec());
+    }
     Ok(Some((Reply::Double(v), used)))
 }
 
@@ -268,6 +288,7 @@ fn parse_verbatim_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolEr
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "verbatim payload not followed by CRLF")?;
     let body = &buf[data_start..data_end];
     if body[3] != b':' {
         return Err(ProtocolError::Malformed("verbatim missing fmt:data separator"));
@@ -304,143 +325,44 @@ fn parse_blob_error_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, Protocol
     if buf.len() < data_end + 2 {
         return Ok(None);
     }
+    payload_end(buf, data_end, "blob error payload not followed by CRLF")?;
     Ok(Some((Reply::BlobError(buf[data_start..data_end].to_vec()), data_end + 2)))
+}
+
+/// A length-prefixed payload ends in CRLF. A reader that only steps over
+/// `len + 2` bytes without looking survives the frame and then parses the
+/// stream from the middle of a value — silently, every later reply one out
+/// of step with its request, which is worse than the error it declined to
+/// raise. Two bytes of comparison refuse nothing conformant: RESP requires
+/// the terminator, and this is what the request parser has always done to
+/// the other direction.
+fn payload_end(buf: &[u8], data_end: usize, what: &'static str) -> Result<(), ProtocolError> {
+    if &buf[data_end..data_end + 2] == b"\r\n" {
+        Ok(())
+    } else {
+        Err(ProtocolError::Malformed(what))
+    }
 }
 
 /// `|N\r\n<map of N pairs><reply>` — attributes decorate the next reply.
 /// We parse the attribute map then transparently return the decorated
 /// reply, mirroring what RESP3 client libraries do today. The attributes
 /// themselves are dropped (see [`parse_reply`] docs).
-fn parse_attributed_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError> {
+fn parse_attributed_reply(
+    buf: &[u8],
+    dt: &mut DoubleText<'_>,
+) -> Result<Option<(Reply, usize)>, ProtocolError> {
     // Re-use the map parser but throw away the result; then parse the
     // actual reply that follows.
-    let Some((_attrs, used_attrs)) = parse_map_reply(buf)? else {
+    let Some((_attrs, used_attrs)) = parse_map_reply(buf, dt)? else {
         return Ok(None);
     };
-    match parse_reply(&buf[used_attrs..])? {
+    match parse_with(&buf[used_attrs..], dt)? {
         None => Ok(None),
         Some((r, used)) => Ok(Some((r, used_attrs + used))),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_replies() {
-        let r = |b: &[u8]| parse_reply(b).unwrap().unwrap().0;
-        assert_eq!(r(b"+OK\r\n"), Reply::Simple(b"OK".to_vec()));
-        assert_eq!(r(b"-ERR bad\r\n"), Reply::Error(b"ERR bad".to_vec()));
-        assert_eq!(r(b":42\r\n"), Reply::Int(42));
-        assert_eq!(r(b"$5\r\nhello\r\n"), Reply::Bulk(b"hello".to_vec()));
-        assert_eq!(r(b"$-1\r\n"), Reply::Nil);
-        assert_eq!(r(b"*-1\r\n"), Reply::Nil);
-
-        let (arr, used) = parse_reply(b"*2\r\n:1\r\n$2\r\nhi\r\n").unwrap().unwrap();
-        assert_eq!(arr, Reply::Array(vec![Reply::Int(1), Reply::Bulk(b"hi".to_vec())]));
-        assert_eq!(used, 16);
-
-        // Incomplete replies ask for more bytes.
-        assert_eq!(parse_reply(b"$5\r\nhel").unwrap(), None);
-        assert_eq!(parse_reply(b"*2\r\n:1\r\n").unwrap(), None);
-        // RESP3 `!N\r\n...` (blob error) IS a valid prefix now — verify the
-        // old "unknown prefix" test moved to a genuinely unknown byte.
-        assert!(parse_reply(b"@huh\r\n").is_err());
-    }
-
-    #[test]
-    fn parse_resp3_scalars() {
-        let r = |b: &[u8]| parse_reply(b).unwrap().unwrap().0;
-        assert_eq!(r(b"_\r\n"), Reply::Null);
-        assert_eq!(r(b"#t\r\n"), Reply::Boolean(true));
-        assert_eq!(r(b"#f\r\n"), Reply::Boolean(false));
-        assert_eq!(r(b",1.5\r\n"), Reply::Double(1.5));
-        assert_eq!(r(b",inf\r\n"), Reply::Double(f64::INFINITY));
-        assert_eq!(r(b",-inf\r\n"), Reply::Double(f64::NEG_INFINITY));
-        // NaN doesn't satisfy `PartialEq` — match manually.
-        match r(b",nan\r\n") {
-            Reply::Double(v) => assert!(v.is_nan()),
-            other => panic!("expected Double(nan), got {other:?}"),
-        }
-        assert_eq!(
-            r(b"(170141183460469231731687303715884105727\r\n"),
-            Reply::BigNumber(b"170141183460469231731687303715884105727".to_vec())
-        );
-        assert_eq!(r(b"!11\r\nERR bad cmd\r\n"), Reply::BlobError(b"ERR bad cmd".to_vec()));
-    }
-
-    #[test]
-    fn parse_resp3_verbatim() {
-        let r = |b: &[u8]| parse_reply(b).unwrap().unwrap().0;
-        assert_eq!(
-            r(b"=15\r\ntxt:Some string\r\n"),
-            Reply::Verbatim { fmt: *b"txt", data: b"Some string".to_vec() }
-        );
-        // len < 4 (no room for fmt + ':') is rejected.
-        assert!(parse_reply(b"=3\r\ntxt\r\n").is_err());
-        // Missing `:` separator is rejected.
-        assert!(parse_reply(b"=7\r\ntxt+abc\r\n").is_err());
-    }
-
-    #[test]
-    fn parse_resp3_map_and_set() {
-        let r = |b: &[u8]| parse_reply(b).unwrap().unwrap().0;
-        // %2\r\n :1\r\n $1\r\n a\r\n :2\r\n $1\r\n b\r\n
-        let m = r(b"%2\r\n:1\r\n$1\r\na\r\n:2\r\n$1\r\nb\r\n");
-        assert_eq!(
-            m,
-            Reply::Map(vec![
-                (Reply::Int(1), Reply::Bulk(b"a".to_vec())),
-                (Reply::Int(2), Reply::Bulk(b"b".to_vec())),
-            ])
-        );
-        // ~3\r\n :1\r\n :2\r\n :3\r\n
-        let s = r(b"~3\r\n:1\r\n:2\r\n:3\r\n");
-        assert_eq!(s, Reply::Set(vec![Reply::Int(1), Reply::Int(2), Reply::Int(3)]));
-        // Empty map / set.
-        assert_eq!(r(b"%0\r\n"), Reply::Map(vec![]));
-        assert_eq!(r(b"~0\r\n"), Reply::Set(vec![]));
-        // Negative count is malformed (only `*` / `$` allow -1 for nil).
-        assert!(parse_reply(b"%-1\r\n").is_err());
-        assert!(parse_reply(b"~-1\r\n").is_err());
-    }
-
-    #[test]
-    fn parse_resp3_push_frame() {
-        let r = |b: &[u8]| parse_reply(b).unwrap().unwrap().0;
-        let push = r(b">3\r\n+message\r\n$4\r\nnews\r\n$5\r\nhello\r\n");
-        assert_eq!(
-            push,
-            Reply::Push(vec![
-                Reply::Simple(b"message".to_vec()),
-                Reply::Bulk(b"news".to_vec()),
-                Reply::Bulk(b"hello".to_vec()),
-            ])
-        );
-        // Push frames have no null shape.
-        assert!(parse_reply(b">-1\r\n").is_err());
-    }
-
-    #[test]
-    fn parse_resp3_attributes_are_skipped() {
-        // |1\r\n +key-popularity\r\n %2\r\n $1\r\n a\r\n ,0.5\r\n $1\r\n b\r\n ,0.3\r\n
-        // followed by the actual reply: *2\r\n :1\r\n :2\r\n
-        let frame =
-            b"|1\r\n+key-popularity\r\n%2\r\n$1\r\na\r\n,0.5\r\n$1\r\nb\r\n,0.3\r\n*2\r\n:1\r\n:2\r\n";
-        let (r, used) = parse_reply(frame).unwrap().unwrap();
-        assert_eq!(r, Reply::Array(vec![Reply::Int(1), Reply::Int(2)]));
-        assert_eq!(used, frame.len());
-    }
-
-    #[test]
-    fn parse_resp3_partial_returns_none() {
-        // Each new shape: cut at every CRLF boundary and assert None.
-        for cut in &[b"_".as_slice(), b"_\r", b"#t", b"#t\r"] {
-            assert_eq!(parse_reply(cut).unwrap(), None);
-        }
-        assert_eq!(parse_reply(b"=15\r\ntxt:Some str").unwrap(), None);
-        // Map mid-frame.
-        assert_eq!(parse_reply(b"%2\r\n:1\r\n$1\r\na\r\n:2\r\n").unwrap(), None);
-    }
-}
+#[path = "reply_parse_tests.rs"]
+mod tests;

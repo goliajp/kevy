@@ -17,7 +17,7 @@ usage: arena_serving.py (kevy|stack) <port> [--docs N] [--rounds R]
 
 The `stack` mode's name is historical. Its oracle is now the redis anchor
 itself: Redis 8 ships the query engine in the standard image, so
-`docker run -d redis:8.10.1` serves 47 FT.* commands, while
+`docker run -d redis:8.10.2` serves 47 FT.* commands, while
 redis/redis-stack-server:latest is frozen at 7.4.7. Point this at that
 container's port. See bench/COMPETITOR-ANCHORS.json.
 Emits: "class p50_ms p95_ms qps stdev_p95" rows.

@@ -14,20 +14,21 @@
 //! exact over the whole i64 day range the epoch can reach.
 //!
 //! ```
-//! use kevy_time::{Civil, civil_from_epoch, epoch_from_civil, add_months};
+//! use kevy_time::{Civil, add_months};
 //!
 //! // Epoch seconds in, calendar out, and back again.
-//! let c = civil_from_epoch(1_700_000_000);
-//! assert_eq!((c.y, c.m, c.d), (2023, 11, 14));
-//! assert_eq!((c.h, c.min, c.s), (22, 13, 20));
-//! assert_eq!(epoch_from_civil(c), 1_700_000_000);
+//! let c = Civil::from_epoch(1_700_000_000);
+//! assert_eq!((c.year(), c.month(), c.day()), (2023, 11, 14));
+//! assert_eq!((c.hour(), c.minute(), c.second()), (22, 13, 20));
+//! assert_eq!(c.to_epoch(), 1_700_000_000);
 //!
 //! // Month arithmetic clamps rather than spilling into the next month:
 //! // 31 January plus one month is the last day of February, and 2024 is
 //! // a leap year.
-//! let jan31 = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
-//! let feb = civil_from_epoch(add_months(jan31, 1));
-//! assert_eq!((feb.m, feb.d), (2, 29));
+//! let jan31 = Civil::from_date(2024, 1, 31).ok_or("not a date")?.to_epoch();
+//! let feb = Civil::from_epoch(add_months(jan31, 1));
+//! assert_eq!((feb.month(), feb.day()), (2, 29));
+//! # Ok::<(), &str>(())
 //! ```
 
 #![forbid(unsafe_code)]
@@ -37,27 +38,189 @@ const SECS_PER_DAY: i64 = 86_400;
 
 /// One civil timestamp: year, month (1-12), day (1-31), hour,
 /// minute, second — UTC, proleptic Gregorian.
+///
+/// Always a real calendar instant that an `i64` epoch can hold: it is
+/// built from epoch seconds ([`Civil::from_epoch`]) or from fields that
+/// are checked ([`Civil::from_date`], [`Civil::with_time`]), so
+/// [`Civil::to_epoch`] cannot fail. Ordering is chronological.
+///
 /// # Examples
 ///
 /// ```
-/// let c = kevy_time::civil_from_epoch(0);
-/// assert_eq!((c.y, c.m, c.d), (1970, 1, 1));
-/// assert_eq!((c.h, c.min, c.s), (0, 0, 0));
+/// let c = kevy_time::Civil::from_epoch(0);
+/// assert_eq!((c.year(), c.month(), c.day()), (1970, 1, 1));
+/// assert_eq!((c.hour(), c.minute(), c.second()), (0, 0, 0));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Civil {
+    y: i64,
+    m: u32,
+    d: u32,
+    h: u32,
+    min: u32,
+    s: u32,
+}
+
+/// Years past this are refused before any day arithmetic: 2^63 seconds
+/// is about 292 billion years, and the day count itself overflows for
+/// years far beyond that.
+const MAX_YEAR: i64 = 300_000_000_000;
+
+impl Civil {
+    /// Decode epoch seconds.
+    ///
+    /// ```
+    /// let c = kevy_time::Civil::from_epoch(0);
+    /// assert_eq!((c.year(), c.month(), c.day()), (1970, 1, 1));
+    /// assert_eq!((c.hour(), c.minute(), c.second()), (0, 0, 0));
+    /// ```
+    ///
+    /// Negative seconds run backwards through the epoch rather than
+    /// clamping at it.
+    ///
+    /// ```
+    /// let c = kevy_time::Civil::from_epoch(-1);
+    /// assert_eq!((c.year(), c.month(), c.day()), (1969, 12, 31));
+    /// assert_eq!((c.hour(), c.minute(), c.second()), (23, 59, 59));
+    /// ```
+    #[must_use]
+    pub fn from_epoch(secs: i64) -> Self {
+        let days = secs.div_euclid(SECS_PER_DAY);
+        let rem = secs.rem_euclid(SECS_PER_DAY) as u32;
+        let (y, m, d) = civil_from_days(days);
+        Self { y, m, d, h: rem / 3600, min: rem / 60 % 60, s: rem % 60 }
+    }
+
+    /// Midnight at the start of a date, or `None` when the date is not
+    /// on the calendar (month 13, 30 February) or lies outside what an
+    /// `i64` epoch can hold.
+    ///
+    /// ```
+    /// use kevy_time::Civil;
+    /// assert_eq!(Civil::from_date(1970, 1, 1).map(Civil::to_epoch), Some(0));
+    /// assert_eq!(Civil::from_date(2024, 2, 29).map(Civil::day), Some(29));
+    /// assert_eq!(Civil::from_date(2023, 2, 29), None);
+    /// assert_eq!(Civil::from_date(2023, 13, 1), None);
+    /// assert_eq!(Civil::from_date(i64::MAX / 2, 1, 1), None);
+    /// ```
+    #[must_use]
+    pub fn from_date(y: i64, m: u32, d: u32) -> Option<Self> {
+        if !(1..=12).contains(&m) || d == 0 || d > last_day(y, m) {
+            return None;
+        }
+        Self { y, m, d, h: 0, min: 0, s: 0 }.checked()
+    }
+
+    /// The same date at another time of day, or `None` when the time is
+    /// not on the clock (hour 24, minute 60) or the instant lies outside
+    /// what an `i64` epoch can hold.
+    ///
+    /// ```
+    /// use kevy_time::Civil;
+    /// let c = Civil::from_date(1970, 1, 1).and_then(|c| c.with_time(0, 0, 1));
+    /// assert_eq!(c.map(Civil::to_epoch), Some(1));
+    /// assert_eq!(Civil::from_epoch(0).with_time(24, 0, 0), None);
+    /// ```
+    #[must_use]
+    pub fn with_time(self, h: u32, min: u32, s: u32) -> Option<Self> {
+        if h > 23 || min > 59 || s > 59 {
+            return None;
+        }
+        Self { h, min, s, ..self }.checked()
+    }
+
+    /// Encode to epoch seconds — the exact inverse of
+    /// [`Civil::from_epoch`].
+    ///
+    /// ```
+    /// use kevy_time::Civil;
+    /// for t in [0i64, 1, -1, 951_782_400, 1_700_000_000, -2_208_988_800, i64::MAX, i64::MIN] {
+    ///     assert_eq!(Civil::from_epoch(t).to_epoch(), t, "round trip at {t}");
+    /// }
+    /// ```
+    #[must_use]
+    pub fn to_epoch(self) -> i64 {
+        // exact: every constructor checked that the instant fits
+        self.wide_epoch() as i64
+    }
+
     /// Year (proleptic Gregorian; negative epochs decode correctly).
-    pub y: i64,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(-1).year(), 1969);
+    /// ```
+    #[must_use]
+    pub fn year(self) -> i64 {
+        self.y
+    }
+
     /// Month, 1-12.
-    pub m: u32,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(0).month(), 1);
+    /// ```
+    #[must_use]
+    pub fn month(self) -> u32 {
+        self.m
+    }
+
     /// Day of month, 1-31.
-    pub d: u32,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(-1).day(), 31);
+    /// ```
+    #[must_use]
+    pub fn day(self) -> u32 {
+        self.d
+    }
+
     /// Hour, 0-23.
-    pub h: u32,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(3600).hour(), 1);
+    /// ```
+    #[must_use]
+    pub fn hour(self) -> u32 {
+        self.h
+    }
+
     /// Minute, 0-59.
-    pub min: u32,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(60).minute(), 1);
+    /// ```
+    #[must_use]
+    pub fn minute(self) -> u32 {
+        self.min
+    }
+
     /// Second, 0-59.
-    pub s: u32,
+    ///
+    /// ```
+    /// assert_eq!(kevy_time::Civil::from_epoch(59).second(), 59);
+    /// ```
+    #[must_use]
+    pub fn second(self) -> u32 {
+        self.s
+    }
+
+    /// `self` when its instant fits an `i64` epoch. The fields are
+    /// already on the calendar; this is the range half of the invariant.
+    fn checked(self) -> Option<Self> {
+        if !(-MAX_YEAR..=MAX_YEAR).contains(&self.y) {
+            return None;
+        }
+        i64::try_from(self.wide_epoch()).ok()?;
+        Some(self)
+    }
+
+    /// Epoch seconds in `i128`: on the first day an `i64` epoch reaches,
+    /// midnight itself is before `i64::MIN`, so the sum has to be formed
+    /// wider than its result.
+    fn wide_epoch(self) -> i128 {
+        i128::from(days_from_civil(self.y, self.m, self.d)) * i128::from(SECS_PER_DAY)
+            + i128::from(self.h * 3600 + self.min * 60 + self.s)
+    }
 }
 
 /// Days since the epoch for a civil date.
@@ -83,50 +246,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// Decode epoch seconds to a civil timestamp.
-/// # Examples
-///
-/// ```
-/// let c = kevy_time::civil_from_epoch(0);
-/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1970, 1, 1, 0, 0, 0));
-/// ```
-///
-/// Negative seconds run backwards through the epoch rather than clamping
-/// at it.
-///
-/// ```
-/// let c = kevy_time::civil_from_epoch(-1);
-/// assert_eq!((c.y, c.m, c.d, c.h, c.min, c.s), (1969, 12, 31, 23, 59, 59));
-/// ```
-pub fn civil_from_epoch(secs: i64) -> Civil {
-    let days = secs.div_euclid(SECS_PER_DAY);
-    let rem = secs.rem_euclid(SECS_PER_DAY) as u32;
-    let (y, m, d) = civil_from_days(days);
-    Civil { y, m, d, h: rem / 3600, min: rem / 60 % 60, s: rem % 60 }
-}
-
-/// Encode a civil timestamp to epoch seconds. The caller supplies
-/// in-range fields; out-of-range months/days would decode to a
-/// different date, which is why the parser validates before calling.
-///
-/// # Examples
-///
-/// It is the exact inverse of [`civil_from_epoch`] for every in-range
-/// timestamp, which is the property the parser depends on:
-///
-/// ```
-/// use kevy_time::{civil_from_epoch, epoch_from_civil};
-/// for t in [0i64, 1, -1, 951_782_400, 1_700_000_000, -2_208_988_800] {
-///     assert_eq!(epoch_from_civil(civil_from_epoch(t)), t, "round trip at {t}");
-/// }
-/// ```
-pub fn epoch_from_civil(c: Civil) -> i64 {
-    days_from_civil(c.y, c.m, c.d) * SECS_PER_DAY
-        + i64::from(c.h) * 3600
-        + i64::from(c.min) * 60
-        + i64::from(c.s)
 }
 
 /// The last day of a month (leap-aware).
@@ -155,33 +274,36 @@ fn last_day(y: i64, m: u32) -> u32 {
 /// than spilling into March:
 ///
 /// ```
-/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
-/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
-/// let feb = civil_from_epoch(add_months(jan31, 1));
-/// assert_eq!((feb.y, feb.m, feb.d), (2023, 2, 28));
+/// use kevy_time::{add_months, Civil};
+/// let jan31 = Civil::from_date(2023, 1, 31).ok_or("not a date")?.to_epoch();
+/// let feb = Civil::from_epoch(add_months(jan31, 1));
+/// assert_eq!((feb.year(), feb.month(), feb.day()), (2023, 2, 28));
 ///
-/// let leap = epoch_from_civil(Civil { y: 2024, m: 1, d: 31, h: 0, min: 0, s: 0 });
-/// let feb = civil_from_epoch(add_months(leap, 1));
-/// assert_eq!((feb.y, feb.m, feb.d), (2024, 2, 29));
+/// let leap = Civil::from_date(2024, 1, 31).ok_or("not a date")?.to_epoch();
+/// let feb = Civil::from_epoch(add_months(leap, 1));
+/// assert_eq!((feb.year(), feb.month(), feb.day()), (2024, 2, 29));
+/// # Ok::<(), &str>(())
 /// ```
 ///
 /// Because of that clamp, adding a month is **not** reversible by
 /// subtracting one:
 ///
 /// ```
-/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
-/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
-/// let back = civil_from_epoch(add_months(add_months(jan31, 1), -1));
-/// assert_eq!((back.m, back.d), (1, 28), "the day did not come back");
+/// use kevy_time::{add_months, Civil};
+/// let jan31 = Civil::from_date(2023, 1, 31).ok_or("not a date")?.to_epoch();
+/// let back = Civil::from_epoch(add_months(add_months(jan31, 1), -1));
+/// assert_eq!((back.month(), back.day()), (1, 28), "the day did not come back");
+/// # Ok::<(), &str>(())
 /// ```
 ///
 /// Negative `n` walks backwards across a year boundary:
 ///
 /// ```
-/// use kevy_time::{add_months, civil_from_epoch, epoch_from_civil, Civil};
-/// let mar = epoch_from_civil(Civil { y: 2024, m: 3, d: 15, h: 0, min: 0, s: 0 });
-/// let c = civil_from_epoch(add_months(mar, -4));
-/// assert_eq!((c.y, c.m, c.d), (2023, 11, 15));
+/// use kevy_time::{add_months, Civil};
+/// let mar = Civil::from_date(2024, 3, 15).ok_or("not a date")?.to_epoch();
+/// let c = Civil::from_epoch(add_months(mar, -4));
+/// assert_eq!((c.year(), c.month(), c.day()), (2023, 11, 15));
+/// # Ok::<(), &str>(())
 /// ```
 pub fn add_months(secs: i64, n: i64) -> i64 {
     checked_add_months(secs, n).unwrap_or(if n < 0 { i64::MIN } else { i64::MAX })
@@ -207,50 +329,11 @@ pub fn add_months(secs: i64, n: i64) -> i64 {
 /// ```
 #[must_use]
 pub fn checked_add_months(secs: i64, n: i64) -> Option<i64> {
-    let c = civil_from_epoch(secs);
+    let c = Civil::from_epoch(secs);
     let months = c.y.checked_mul(12)?.checked_add(i64::from(c.m) - 1)?.checked_add(n)?;
     let (y, m) = (months.div_euclid(12), (months.rem_euclid(12) + 1) as u32);
     let d = c.d.min(last_day(y, m));
-    checked_epoch_from_civil(Civil { y, m, d, ..c })
-}
-
-/// [`epoch_from_civil`], answering `None` instead of overflowing.
-///
-/// `epoch_from_civil` multiplies a day count by 86,400, which leaves
-/// `i64` for any year past roughly ±292 billion — reachable from
-/// [`add_months`] with a large enough month count, and therefore from a
-/// query bound a client supplies.
-///
-/// # Examples
-///
-/// ```
-/// use kevy_time::{Civil, checked_epoch_from_civil, civil_from_epoch};
-/// // An ordinary date answers exactly as the unchecked version does.
-/// assert_eq!(checked_epoch_from_civil(civil_from_epoch(1_700_000_000)), Some(1_700_000_000));
-/// // A year no i64 epoch can hold answers None instead of wrapping.
-/// let far = Civil { y: i64::MAX / 2, m: 1, d: 1, h: 0, min: 0, s: 0 };
-/// assert_eq!(checked_epoch_from_civil(far), None);
-/// ```
-#[must_use]
-pub fn checked_epoch_from_civil(c: Civil) -> Option<i64> {
-    // The bound has to be here, not in the caller. `days_from_civil`
-    // multiplies the era by 146,097 before anything is multiplied by
-    // 86,400, so for an extreme year the DAY count overflows first and
-    // the checked seconds arithmetic below never runs. A first version
-    // put this in `checked_add_months` and left this function public and
-    // still able to panic — its own doc example is what caught that.
-    //
-    // The bound is what an i64 epoch can hold: 2^63 seconds is roughly
-    // 292 billion years, and this stops short of it.
-    const MAX_YEAR: i64 = 290_000_000_000;
-    if !(-MAX_YEAR..=MAX_YEAR).contains(&c.y) {
-        return None;
-    }
-    days_from_civil(c.y, c.m, c.d)
-        .checked_mul(SECS_PER_DAY)?
-        .checked_add(i64::from(c.h) * 3600)?
-        .checked_add(i64::from(c.min) * 60)?
-        .checked_add(i64::from(c.s))
+    Some(Civil { y, m, d, ..c }.checked()?.to_epoch())
 }
 
 /// Evaluate one `@` query-bound expression against the caller's
@@ -277,10 +360,11 @@ pub fn checked_epoch_from_civil(c: Civil) -> Option<i64> {
 /// than a fixed number of seconds:
 ///
 /// ```
-/// use kevy_time::{eval, epoch_from_civil, civil_from_epoch, Civil};
-/// let jan31 = epoch_from_civil(Civil { y: 2023, m: 1, d: 31, h: 0, min: 0, s: 0 });
-/// let c = civil_from_epoch(eval(b"@now+1mo", jan31).unwrap());
-/// assert_eq!((c.m, c.d), (2, 28));
+/// use kevy_time::{eval, Civil};
+/// let jan31 = Civil::from_date(2023, 1, 31).ok_or("not a date")?.to_epoch();
+/// let c = Civil::from_epoch(eval(b"@now+1mo", jan31).ok_or("no bound")?);
+/// assert_eq!((c.month(), c.day()), (2, 28));
+/// # Ok::<(), &str>(())
 /// ```
 ///
 /// Anything malformed is `None`. The stone never guesses — a caller that
@@ -347,24 +431,24 @@ fn parse_literal(b: &[u8]) -> Option<i64> {
         return None;
     }
     let (y, m, d) = (num(&date[..4])?, num(&date[5..7])? as u32, num(&date[8..10])? as u32);
-    if !(1..=12).contains(&m) || d < 1 || d > last_day(y, m) {
-        return None;
-    }
     let (h, min, s) = match time {
         None => (0, 0, 0),
         Some(t) => {
             if t[2] != b':' || t[5] != b':' {
                 return None;
             }
-            let (h, min, s) = (num(&t[..2])? as u32, num(&t[3..5])? as u32, num(&t[6..8])? as u32);
-            if h > 23 || min > 59 || s > 59 {
-                return None;
-            }
-            (h, min, s)
+            (num(&t[..2])? as u32, num(&t[3..5])? as u32, num(&t[6..8])? as u32)
         }
     };
-    Some(epoch_from_civil(Civil { y, m, d, h, min, s }))
+    Some(Civil::from_date(y, m, d)?.with_time(h, min, s)?.to_epoch())
 }
+
+// Send and Sync are part of the public contract: a change that loses
+// either fails to compile here rather than in a caller.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Civil>();
+};
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]

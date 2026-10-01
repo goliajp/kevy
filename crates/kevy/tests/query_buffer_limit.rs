@@ -66,11 +66,7 @@ fn a_streaming_giant_frame_is_disconnected_at_the_cap() {
         unsafe { std::env::set_var("KEVY_DEBUG_STALL_MS", "250") };
     }
     let port = free_port();
-    let dir = std::env::temp_dir().join(format!(
-        "kevy-qbuf-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("qbuf");
     let stop = Arc::new(AtomicBool::new(false));
     let (stop2, dir2) = (stop.clone(), dir.clone());
     let handle = std::thread::spawn(move || {

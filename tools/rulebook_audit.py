@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Where this repository stands against the rulebook, rule by rule.
 
-The rulebook (`~/.claude-shared/global/methodology/module-craft.md`) has
-50 rules. Six of them are locked by a gate here. The rest had never been
-counted, which meant "we follow the rulebook" was a claim with no
-reading behind it — and a claim like that is the thing the rulebook
-exists to replace.
+The rulebook has 50 rules. Six of them are locked by a gate here. The
+rest had never been counted, which meant "we follow the rulebook" was
+a claim with no reading behind it — and a claim like that is the thing
+the rulebook exists to replace.
 
 This produces the reading. Three verdicts, and the third is not a
 failure:
@@ -191,7 +190,7 @@ RULES = [
     ("fn/one-thing", "全", "READING", "a name with `and`; two blocks split by a comment"),
     ("fn/max-5-params", "全", m_params_over_5, None),
     ("fn/no-bare-bool-param", "全", m_bare_bool, None),
-    ("fn/result-not-panic", "石钢边", "LOCKED", "panic-free"),
+    ("fn/result-not-panic", "石钢边", "LOCKED", "clippy (workspace lints unwrap_used, panic)"),
     ("fn/no-out-param", "全", m_out_params, None),
     ("mod/max-500-lines", "全", "LOCKED", "locgate"),
     ("mod/one-responsibility", "全", "READING", "a file whose one-line description needs an `and`"),
@@ -203,15 +202,15 @@ RULES = [
     ("type/newtype-over-primitive", "石钢", "READING", "two same-typed scalars in one signature"),
     ("type/no-catchall-match", "石钢", m_catchall_match, None),
     ("type/no-stringly-typed", "全", m_stringly, None),
-    ("err/errors-are-values", "石钢水", "LOCKED", "panic-free"),
+    ("err/errors-are-values", "石钢水", "LOCKED", "clippy (workspace lints unwrap_used, panic)"),
     ("err/says-what-and-which", "全", "READING", "an error carrying no value"),
-    ("err/no-swallow", "全", "LOCKED", "panic-free (let_underscore_must_use)"),
+    ("err/no-swallow", "全", "LOCKED", "clippy (let_underscore_must_use)"),
     ("err/convert-at-the-boundary", "石钢", "READING", "map_err repeated down a call chain"),
     ("inv/write-it-down", "石钢边", "READING", "an invariant the code relies on and does not state"),
     ("inv/prefer-type-over-comment", "石钢", "READING", "a comment asserting what a type could"),
     ("doc/why-not-what", "全", "READING", "a comment restating the line under it"),
     ("doc/comment-drift-is-a-bug", "全", "READING", "a comment the code stopped matching"),
-    ("doc/pub-doc-is-a-contract", "石钢", "LOCKED", "panic-free (missing_docs); 100% documented"),
+    ("doc/pub-doc-is-a-contract", "石钢", "LOCKED", "clippy (workspace lint missing_docs); 100% documented"),
     ("doc/example-is-a-test", "石", "LOCKED", "doctestgate — the ratchet, not zero: 5.4% carry one"),
     ("test/separate-pure-from-io", "全", "READING", "logic reachable only through a socket or a file"),
     ("test/inject-clock-rand-fs", "石钢", "READING", "SystemTime::now / rand / std::fs inside library code"),
@@ -260,7 +259,8 @@ def main() -> int:
             rows.append((rid, scope, "READING", extra))
             reading += 1
 
-    out = ROOT / "quality/RULEBOOK-STATUS.md"
+    out = ROOT / "target/reports/RULEBOOK-STATUS.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:
         f.write("# The rulebook against this repository\n\n")
         f.write(f"{len(RULES)} rules. **{locked} locked by a gate**, "

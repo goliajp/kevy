@@ -33,8 +33,8 @@ fn rewrite_of_cold_bulk_values_is_byte_identical_to_hot() {
     for i in 0..5u8 {
         let key = [b'k', b'0' + i];
         let val = vec![b'a' + i; 4096];
-        hot.set(&key, val.clone(), None, false, false);
-        cold.set(&key, val, None, false, false);
+        hot.set(&key, val.clone(), None, kevy_store::SetCondition::Always);
+        cold.set(&key, val, None, kevy_store::SetCondition::Always);
     }
     assert!(cold.debug_force_demote(b"k1"));
     assert!(cold.debug_force_demote(b"k3"));
@@ -57,8 +57,13 @@ fn rewrite_of_cold_bulk_values_is_byte_identical_to_hot() {
 #[test]
 fn rewrite_roundtrip_restores_cold_hashes_and_field_ttls() {
     let (mut s, d) = tiered("tier-stream-roundtrip", u64::MAX);
-    s.set(b"bulk", vec![b'x'; 5000], None, false, false);
-    s.set(b"ttl'd", vec![b'y'; 2048], Some(Duration::from_secs(600)), false, false);
+    s.set(b"bulk", vec![b'x'; 5000], None, kevy_store::SetCondition::Always);
+    s.set(
+        b"ttl'd",
+        vec![b'y'; 2048],
+        Some(Duration::from_secs(600)),
+        kevy_store::SetCondition::Always,
+    );
     s.hset(
         b"row",
         &[(b"name".as_slice(), b"ada".as_slice()), (b"blob".as_slice(), &[0u8, 255, 7][..])],
@@ -93,7 +98,7 @@ fn rewrite_roundtrip_restores_cold_hashes_and_field_ttls() {
 #[test]
 fn snapshot_of_cold_store_round_trips() {
     let (mut s, d) = tiered("tier-stream-snap", u64::MAX);
-    s.set(b"bulk", vec![b'z'; 4096], None, false, false);
+    s.set(b"bulk", vec![b'z'; 4096], None, kevy_store::SetCondition::Always);
     s.hset(b"row", &[(b"f1".as_slice(), b"v1".as_slice())]).unwrap();
     assert!(s.debug_force_demote(b"bulk"));
     assert!(s.debug_force_demote(b"row"));
@@ -116,13 +121,13 @@ fn snapshot_of_cold_store_round_trips() {
 #[test]
 fn pinned_view_serializes_the_frozen_instant_after_store_moves_on() {
     let (mut s, _d) = tiered("tier-stream-view", u64::MAX);
-    s.set(b"cold", vec![b'q'; 4096], None, false, false);
+    s.set(b"cold", vec![b'q'; 4096], None, kevy_store::SetCondition::Always);
     assert!(s.debug_force_demote(b"cold"));
     let view = s.collect_snapshot();
 
     // The store moves on: the record is dead in the live map.
     s.del(&[b"cold".as_slice()]);
-    s.set(b"cold", b"new".to_vec(), None, false, false);
+    s.set(b"cold", b"new".to_vec(), None, kevy_store::SetCondition::Always);
 
     let mut buf = Vec::new();
     write_snapshot_to(&view, &mut buf).unwrap();
@@ -144,7 +149,7 @@ fn snapshot_load_demotes_inline_when_over_budget() {
     let mut src = Store::new();
     for i in 0..1500u32 {
         let key = format!("k{i:04}").into_bytes();
-        src.set(&key, vec![(i % 251) as u8; 1024], None, false, false);
+        src.set(&key, vec![(i % 251) as u8; 1024], None, kevy_store::SetCondition::Always);
     }
     let snap = d.path().join("big.rdb");
     save_snapshot(&src, &snap).unwrap();

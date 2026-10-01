@@ -23,122 +23,11 @@ use kevy_map::KevyMap;
 use crate::StoreError;
 use crate::value::{BTREE_SLOT_BYTES, SmallBytes};
 
-// ───────────── StreamId ─────────────
-
-/// A stream entry's `<ms>-<seq>` identifier. The `Ord` derivation compares
-/// `ms` first then `seq`, which is exactly the monotonic order the protocol
-/// requires; same derivation gives `Eq`, `Hash`, and the `BTreeMap` key bound.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-pub struct StreamId {
-    /// Unix milliseconds timestamp component.
-    pub ms: u64,
-    /// Per-ms sequence number, 0-based.
-    pub seq: u64,
-}
-
-impl StreamId {
-    /// The numerically smallest ID; XRANGE `-` start.
-    pub const MIN: StreamId = StreamId { ms: 0, seq: 0 };
-    /// The numerically largest representable ID; XRANGE `+` end.
-    pub const MAX: StreamId = StreamId { ms: u64::MAX, seq: u64::MAX };
-
-    /// Render as the canonical `<ms>-<seq>` wire form.
-    pub fn encode(self) -> Vec<u8> {
-        format!("{}-{}", self.ms, self.seq).into_bytes()
-    }
-
-    /// Step one ID past `self`. Saturates at [`Self::MAX`].
-    #[must_use]
-    pub fn next(self) -> Self {
-        if self.seq < u64::MAX {
-            StreamId { ms: self.ms, seq: self.seq + 1 }
-        } else if self.ms < u64::MAX {
-            StreamId { ms: self.ms + 1, seq: 0 }
-        } else {
-            StreamId::MAX
-        }
-    }
-}
-
-/// XADD's ID argument: either an explicit `<ms>-<seq>` (both parts may
-/// be `*` to auto-fill `seq` only) or fully auto-generate via `*`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum XAddIdSpec {
-    /// `*` — generate both `ms` (= current wall-clock) and `seq`.
-    AutoAll,
-    /// `<ms>-*` — caller fixes `ms`, server picks the next free `seq`.
-    AutoSeq(u64),
-    /// `<ms>-<seq>` — caller fully specifies the ID.
-    Explicit(StreamId),
-}
-
-/// Parse an XADD ID argument (`*`, `ms`, `ms-*`, `ms-seq`).
-pub fn parse_xadd_id(s: &[u8]) -> Result<XAddIdSpec, StreamIdError> {
-    if s == b"*" {
-        return Ok(XAddIdSpec::AutoAll);
-    }
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    match txt.split_once('-') {
-        None => {
-            let ms = txt.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            Ok(XAddIdSpec::Explicit(StreamId { ms, seq: 0 }))
-        }
-        Some((ms_s, seq_s)) => {
-            let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-            if seq_s == "*" {
-                Ok(XAddIdSpec::AutoSeq(ms))
-            } else {
-                let seq = seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-                Ok(XAddIdSpec::Explicit(StreamId { ms, seq }))
-            }
-        }
-    }
-}
-
-/// Parse an XRANGE `start` ID. Accepts `-` (= [`StreamId::MIN`]), bare
-/// `ms` (seq=0), and full `ms-seq`.
-pub fn parse_range_start(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"-" {
-        return Ok(StreamId::MIN);
-    }
-    parse_explicit_id(s, /*end=*/ false)
-}
-
-/// Parse an XRANGE `end` ID. Accepts `+` (= [`StreamId::MAX`]), bare `ms`
-/// (seq=u64::MAX so the entire ms is included), and full `ms-seq`.
-pub fn parse_range_end(s: &[u8]) -> Result<StreamId, StreamIdError> {
-    if s == b"+" {
-        return Ok(StreamId::MAX);
-    }
-    parse_explicit_id(s, /*end=*/ true)
-}
-
-/// Parse a fully-explicit ID for XREAD's per-stream "last-seen" arg
-/// (`0`, `0-0`, `5-2`). `$` is handled by the caller (it means "the
-/// stream's current `last_id`", which only Store can resolve).
-pub fn parse_explicit_id(s: &[u8], end: bool) -> Result<StreamId, StreamIdError> {
-    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
-    let (ms_s, seq_s) = match txt.split_once('-') {
-        Some(p) => p,
-        None => (txt, if end { "" } else { "0" }),
-    };
-    let ms = ms_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
-    let seq = if seq_s.is_empty() {
-        u64::MAX
-    } else {
-        seq_s.parse::<u64>().map_err(|_| StreamIdError::Invalid)?
-    };
-    Ok(StreamId { ms, seq })
-}
-
-/// Errors `parse_*_id` may emit. Distinct from `StoreError::NotInteger`
-/// so callers can map to the more specific Redis wire shape (`ERR
-/// Invalid stream ID specified as stream command argument`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamIdError {
-    /// Couldn't parse the bytes as `<ms>[-<seq>]` / `*` / `-` / `+`.
-    Invalid,
-}
+mod id;
+pub use id::{
+    StreamId, StreamIdError, XAddIdSpec, parse_explicit_id, parse_range_end, parse_range_start,
+    parse_xadd_id,
+};
 
 // ───────────── StreamData ─────────────
 
@@ -146,6 +35,16 @@ pub enum StreamIdError {
 /// scalar state Redis exposes via `XINFO STREAM`, plus the consumer
 /// groups map (sprint B). An empty `groups` map costs ~8 bytes and
 /// makes the no-group fast path (sprint A XADD/XREAD) zero-overhead.
+///
+/// ```
+/// use kevy_store::{MissingStream, Store, StreamId, XAddIdSpec};
+/// let mut s = Store::new();
+/// let fields = vec![(b"temp".to_vec(), b"21".to_vec())];
+/// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(5, 0)), fields, MissingStream::Create, 0)?;
+/// let stream = s.stream_view(b"s")?.unwrap();
+/// assert_eq!((stream.length(), stream.last_id()), (1, StreamId::new(5, 0)));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct StreamData {
     /// Sorted entries; the `BTreeMap` enforces strict-increasing IDs.
@@ -162,6 +61,9 @@ pub struct StreamData {
     /// Consumer groups keyed by name (sprint B). Boxed so the
     /// `StreamData` struct stays compact when no groups are attached.
     pub(super) groups: KevyMap<SmallBytes, Box<group::ConsumerGroup>>,
+    /// Where the entries would sit in a Redis server's nodes, for the
+    /// approximate trims.
+    pub(super) nodes: nodes::Nodes,
 }
 
 impl StreamData {
@@ -190,7 +92,7 @@ impl StreamData {
 
     /// Iterate every entry in ID-ascending order. Snapshot serializers
     /// walk this to dump the stream.
-    pub fn iter_entries(&self) -> impl Iterator<Item = (StreamId, &[(SmallBytes, SmallBytes)])> {
+    pub fn entries(&self) -> impl Iterator<Item = (StreamId, &[(SmallBytes, SmallBytes)])> {
         self.entries.iter().map(|(id, fv)| (*id, fv.as_slice()))
     }
 
@@ -205,7 +107,7 @@ impl StreamData {
     }
 
     /// Iterate `(group_name, group)` pairs — used by `XINFO GROUPS`.
-    pub fn groups_iter(&self) -> impl Iterator<Item = (&[u8], &group::ConsumerGroup)> {
+    pub fn groups(&self) -> impl Iterator<Item = (&[u8], &group::ConsumerGroup)> {
         self.groups.iter().map(|(k, v)| (k.as_slice(), v.as_ref()))
     }
 
@@ -223,6 +125,7 @@ impl StreamData {
     /// touching scalar state. Used by `Store::load_stream`; the loader
     /// pumps every entry then calls [`Self::set_loaded_state`] once.
     pub fn load_entry(&mut self, id: StreamId, fields: Vec<(SmallBytes, SmallBytes)>) {
+        self.nodes.append(id, &fields);
         self.entries.insert(id, fields);
     }
 
@@ -243,6 +146,7 @@ impl StreamData {
     /// the ID via [`StreamData::resolve_xadd_id`] so monotonicity holds.
     pub(crate) fn insert(&mut self, id: StreamId, fields: Vec<(SmallBytes, SmallBytes)>) {
         debug_assert!(id > self.last_id || (id == StreamId::MIN && self.last_id == StreamId::MIN));
+        self.nodes.append(id, &fields);
         self.entries.insert(id, fields);
         self.last_id = id;
         self.entries_added += 1;
@@ -252,34 +156,22 @@ impl StreamData {
     /// rejecting any spec that would not be strictly greater than
     /// `self.last_id`. `now_ms` is injected so tests can pin wall-clock.
     pub fn resolve_xadd_id(&self, spec: XAddIdSpec, now_ms: u64) -> Result<StreamId, StoreError> {
+        let last = self.last_id;
+        if last == StreamId::MAX {
+            return Err(StoreError::StreamExhausted);
+        }
         let candidate = match spec {
-            XAddIdSpec::AutoAll => {
-                let ms = now_ms.max(self.last_id.ms);
-                if ms == self.last_id.ms {
-                    StreamId { ms, seq: self.last_id.seq + 1 }
-                } else {
-                    StreamId { ms, seq: 0 }
-                }
+            XAddIdSpec::AutoAll if now_ms > last.ms => StreamId::new(now_ms, 0),
+            XAddIdSpec::AutoAll => last.next(),
+            XAddIdSpec::AutoSeq(ms) if ms > last.ms => StreamId::new(ms, 0),
+            XAddIdSpec::AutoSeq(ms) if ms < last.ms || last.seq == u64::MAX => {
+                return Err(StoreError::OutOfRange);
             }
-            XAddIdSpec::AutoSeq(ms) => {
-                if ms < self.last_id.ms {
-                    return Err(StoreError::OutOfRange);
-                }
-                if ms == self.last_id.ms {
-                    StreamId { ms, seq: self.last_id.seq + 1 }
-                } else {
-                    StreamId { ms, seq: 0 }
-                }
+            XAddIdSpec::AutoSeq(ms) => StreamId::new(ms, last.seq + 1),
+            XAddIdSpec::Explicit(id) if id <= last || id == StreamId::MIN => {
+                return Err(StoreError::OutOfRange);
             }
-            XAddIdSpec::Explicit(id) => {
-                if id <= self.last_id {
-                    return Err(StoreError::OutOfRange);
-                }
-                if id == StreamId::MIN {
-                    return Err(StoreError::OutOfRange);
-                }
-                id
-            }
+            XAddIdSpec::Explicit(id) => id,
         };
         Ok(candidate)
     }
@@ -291,6 +183,9 @@ impl StreamData {
         end: StreamId,
         count: Option<usize>,
     ) -> Vec<(StreamId, &[(SmallBytes, SmallBytes)])> {
+        if start > end {
+            return Vec::new();
+        }
         let iter = self.entries.range(start..=end).map(|(id, fv)| (*id, fv.as_slice()));
         match count {
             Some(n) => iter.take(n).collect(),
@@ -305,6 +200,9 @@ impl StreamData {
         end: StreamId,
         count: Option<usize>,
     ) -> Vec<(StreamId, &[(SmallBytes, SmallBytes)])> {
+        if start > end {
+            return Vec::new();
+        }
         let iter = self.entries.range(start..=end).rev().map(|(id, fv)| (*id, fv.as_slice()));
         match count {
             Some(n) => iter.take(n).collect(),
@@ -331,30 +229,12 @@ impl StreamData {
         let mut removed = 0usize;
         for id in ids {
             if self.entries.remove(id).is_some() {
+                self.nodes.delete(*id);
                 removed += 1;
                 if *id > self.max_deleted_id {
                     self.max_deleted_id = *id;
                 }
             }
-        }
-        removed
-    }
-
-    /// XTRIM MAXLEN — keep the most recent `n` entries.
-    pub(crate) fn trim_maxlen(&mut self, n: usize) -> usize {
-        let len = self.entries.len();
-        if len <= n {
-            return 0;
-        }
-        let drop = len - n;
-        let mut removed = 0;
-        let drop_ids: Vec<StreamId> = self.entries.keys().copied().take(drop).collect();
-        for id in drop_ids {
-            self.entries.remove(&id);
-            if id > self.max_deleted_id {
-                self.max_deleted_id = id;
-            }
-            removed += 1;
         }
         removed
     }
@@ -374,38 +254,37 @@ impl StreamData {
             .sum();
         (self.entries.len() as u64).saturating_mul(BTREE_SLOT_BYTES) + entry_sum
     }
-
-    /// XTRIM MINID — drop every entry with ID < `floor`.
-    pub(crate) fn trim_minid(&mut self, floor: StreamId) -> usize {
-        let drop_ids: Vec<StreamId> = self.entries.range(..floor).map(|(id, _)| *id).collect();
-        let removed = drop_ids.len();
-        for id in drop_ids {
-            self.entries.remove(&id);
-            if id > self.max_deleted_id {
-                self.max_deleted_id = id;
-            }
-        }
-        removed
-    }
 }
 
 mod claim;
 mod group;
+mod lag;
 mod load;
+mod modes;
+mod nodes;
+mod pending;
+mod restore;
 mod store;
-#[allow(unused_imports)]
-pub use claim::AutoclaimResult;
-#[allow(unused_imports)]
-pub use group::{
-    ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, PendingExtended, PendingExtendedRow,
-    PendingSummary, ReadGroupId, XClaimOpts,
-};
+pub use claim::{AutoclaimResult, XClaimOpts};
+pub use group::{ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 pub use load::{LoadedGroup, LoadedPelEntry};
-pub use store::EntryBatch;
+pub use modes::{AckMode, ClaimMode, MissingStream};
+pub use nodes::{APPROX_TRIM_LIMIT, TrimMode, TrimTo};
+pub use pending::{PendingExtended, PendingExtendedRow, PendingSummary};
+pub use store::{EntryBatch, GroupBatch};
 
 /// Snapshot-loader payload: one stream entry decoded into primitive
 /// tuples `(ms, seq, [(field, value), ...])`. The persist crate emits
 /// these and `Store::load_stream` consumes them.
+///
+/// ```
+/// use kevy_store::{LoadedStreamEntry, Store, StreamId};
+/// let mut s = Store::new();
+/// let entries: Vec<LoadedStreamEntry> = vec![(5, 0, vec![(b"f".to_vec(), b"v".to_vec())])];
+/// s.load_stream(b"s".to_vec(), entries, (5, 0), (0, 0), 1, Vec::new(), None);
+/// assert_eq!(s.xread_dollar_last_id(b"s")?, StreamId::new(5, 0));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 
 // ───────────── small helpers (shared with `store.rs`) ─────────────
@@ -415,6 +294,11 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 /// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
 /// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
 /// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
+///
+/// ```
+/// let now = kevy_store::now_unix_ms();
+/// assert!(now > 1_600_000_000_000); // after September 2020, in milliseconds
+/// ```
 #[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)

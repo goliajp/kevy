@@ -1,0 +1,176 @@
+//! Set commands on one key. The multi-key algebra (`SINTER`, `SUNION`,
+//! `SDIFF` and their `STORE` forms) gathers across shards and is not
+//! here.
+
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
+use kevy_store::Store;
+
+use crate::args::{arg_i64, rest_borrowed, scan_match};
+use crate::reply::{
+    ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, scan_page, store_err, wrong_args,
+};
+use crate::{Effect, changed};
+
+/// One set command; `None` = the verb is not in this group.
+// LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
+pub(crate) fn exec<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<Effect> {
+    Some(match cmd {
+        b"SADD" => {
+            if args.len() < 3 {
+                wrong_args(out, "sadd");
+            } else {
+                emit_int_result(
+                    store.sadd(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
+                    out,
+                );
+            }
+            Effect::Write
+        }
+        b"SREM" => {
+            if args.len() < 3 {
+                wrong_args(out, "srem");
+                return Some(Effect::Unchanged);
+            }
+            let res = store.srem(&args[1], &rest_borrowed(args, 2));
+            let removed = matches!(res, Ok(n) if n > 0);
+            emit_int_result(res.map(|n| n as i64), out);
+            changed(removed)
+        }
+        b"SCARD" => {
+            if args.len() == 2 {
+                emit_int_result(store.scard(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "scard");
+            }
+            Effect::Read
+        }
+        b"SISMEMBER" => {
+            if args.len() == 3 {
+                emit_int_result(store.sismember(&args[1], &args[2]).map(i64::from), out);
+            } else {
+                wrong_args(out, "sismember");
+            }
+            Effect::Read
+        }
+        b"SMEMBERS" => {
+            if args.len() == 2 {
+                emit_bulk_array(store.smembers(&args[1]), out);
+            } else {
+                wrong_args(out, "smembers");
+            }
+            Effect::Read
+        }
+        b"SPOP" => spop_rand(store, args, true, out),
+        b"SRANDMEMBER" => spop_rand(store, args, false, out),
+        b"SSCAN" => {
+            sscan(store, args, out);
+            Effect::Read
+        }
+        _ => return None,
+    })
+}
+
+/// `SPOP` / `SRANDMEMBER key [count]` — a single reply without a count,
+/// an array with one. A negative `SRANDMEMBER` count samples with
+/// replacement; `SPOP` has no such form, since a member cannot be
+/// removed twice.
+///
+/// `SPOP` is recorded as what it removed (`SREM key member…`), not as
+/// the verb: replaying the verb would draw different members.
+fn spop_rand<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    remove: bool,
+    out: &mut Vec<u8>,
+) -> Effect {
+    let Some(raw) = spop_count(args, remove, out) else {
+        return Effect::Unchanged;
+    };
+    let count_given = args.len() == 3;
+    let count = raw.unsigned_abs() as usize;
+    let res = if remove {
+        store.spop(&args[1], count)
+    } else if raw < 0 {
+        store.srandmember_with_repeats(&args[1], count)
+    } else {
+        store.srandmember(&args[1], count)
+    };
+    let items = match res {
+        Ok(items) => items,
+        Err(e) => {
+            store_err(out, e);
+            return Effect::Unchanged;
+        }
+    };
+    if count_given {
+        encode_array_len(out, items.len() as i64);
+        for it in &items {
+            encode_bulk(out, it);
+        }
+    } else {
+        match items.first() {
+            Some(v) => encode_bulk(out, v),
+            None => encode_null_bulk(out),
+        }
+    }
+    if !remove {
+        Effect::Read
+    } else if items.is_empty() {
+        Effect::Skip
+    } else {
+        let frame = crate::aof::spop_effect(&args[1], &items);
+        Effect::Record(frame.into_iter().map(<[u8]>::to_vec).collect())
+    }
+}
+
+/// The arity check and the optional count (1 when absent), or `None`
+/// with the refusal in `out`.
+fn spop_count<A: ArgvView + ?Sized>(args: &A, remove: bool, out: &mut Vec<u8>) -> Option<i64> {
+    if args.len() < 2 || args.len() > 3 {
+        wrong_args(out, if remove { "spop" } else { "srandmember" });
+        return None;
+    }
+    let raw = if args.len() == 3 {
+        let Some(c) = arg_i64(&args[2]) else {
+            encode_error(out, ERR_NOT_INT);
+            return None;
+        };
+        c
+    } else {
+        1
+    };
+    if raw < 0 && remove {
+        encode_error(out, "ERR value is out of range, must be positive");
+        return None;
+    }
+    Some(raw)
+}
+
+/// `SSCAN key cursor [MATCH pattern] [COUNT n]` — every member in one
+/// batch.
+fn sscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() < 3 {
+        return wrong_args(out, "sscan");
+    }
+    if arg_i64(&args[2]).is_none() {
+        return encode_error(out, ERR_NOT_INT);
+    }
+    let Some(pat) = scan_match(args, 3) else {
+        return encode_error(out, ERR_SYNTAX);
+    };
+    match store.smembers(&args[1]) {
+        Err(e) => store_err(out, e),
+        Ok(all) => {
+            let page: Vec<Vec<u8>> = match pat {
+                None => all,
+                Some(p) => all.into_iter().filter(|m| kevy_store::glob_match(&p, m)).collect(),
+            };
+            scan_page(out, &page);
+        }
+    }
+}

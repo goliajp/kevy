@@ -42,57 +42,13 @@ fn decoded_hash_fields(value: &crate::Value, fields: &[&[u8]]) -> Vec<Option<Vec
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod enabled {
-    use std::sync::Arc;
-
-    use kevy_vlog::{VlogFile, VlogRef, verify_image};
+    use kevy_vlog::verify_image;
 
     use crate::value::{COLD_TAG_HASH, ColdRef, Value};
     use crate::{Entry, Store, StoreError};
     use kevy_bytes::SmallBytes;
 
-    /// One planned cold-record read in a [`Store::peek_hash_rows`]
-    /// batch. The pinned file keeps the record readable even if a
-    /// compaction retires the file mid-batch.
-    #[derive(Debug)]
-    pub struct ColdRead {
-        /// Pinned vlog file the record lives in.
-        pub file: Arc<VlogFile>,
-        /// Record address; the image to fetch is `vref.disk_len()`
-        /// bytes at `vref.offset`.
-        pub vref: VlogRef,
-    }
-
-    /// The read-issuance half of a cold batch: fetch every record
-    /// image, in `reads` order. [`SyncColdRead`] is the ordered
-    /// positional-read loop (poller reactors + embedded); the server's
-    /// io_uring backend submits the batch to a secondary ring instead.
-    pub trait ColdBatchReader {
-        /// Fetch each `reads[i]`'s raw image (`vref.disk_len()` bytes
-        /// at `vref.offset`, unverified — the store runs
-        /// [`verify_image`] + decode on completion). Returns the images
-        /// plus the number of kernel submissions made (1 for the sync
-        /// loop, ceil(n / ring entries) for a ring).
-        fn read_batch(&mut self, reads: &[ColdRead]) -> std::io::Result<(Vec<Vec<u8>>, u64)>;
-    }
-
-    /// The default reader: one ordered `pread` per record.
-    #[derive(Debug)]
-    pub struct SyncColdRead;
-
-    impl ColdBatchReader for SyncColdRead {
-        fn read_batch(&mut self, reads: &[ColdRead]) -> std::io::Result<(Vec<Vec<u8>>, u64)> {
-            let mut images = Vec::with_capacity(reads.len());
-            for r in reads {
-                images.push(r.file.read_image(r.vref)?);
-            }
-            Ok((images, 1))
-        }
-    }
-
-    /// One peeked row: the per-field values of a live hash
-    /// (`Ok(Some(..))`, one `Option` per requested field), a missing
-    /// key (`Ok(None)`), or a non-hash (`Err(WrongType)`).
-    pub type PeekRow = Result<Option<Vec<Option<Vec<u8>>>>, StoreError>;
+    pub use crate::tier_batch::{ColdBatchReader, ColdRead, PeekRow, SyncColdRead};
 
     /// Stage-1 verdict for one peeked key (zero IO — the stub's tag
     /// answers WRONGTYPE without a pread).
@@ -188,7 +144,7 @@ mod enabled {
             peek: bool,
         ) -> Result<Option<&Entry>, StoreError> {
             let (cref, expire) = {
-                let e = self.map.get_mut(key).expect("probed live above");
+                let e = self.map.get_mut_quiet(key).expect("probed live above");
                 let Value::Cold(c) = &mut e.value else { unreachable!("cold checked above") };
                 if !peek {
                     c.touched = 1;
@@ -213,8 +169,19 @@ mod enabled {
         /// vlog read/decode failure is a process bug by the vlog's
         /// per-boot doctrine — surfaced loudly, never healed silently.
         pub(crate) fn tier_read_record(&mut self, key: &[u8], cref: ColdRef) -> Value {
+            self.tier_read_record_as(key, cref, crate::tier_codec::RowForm::AsStored)
+        }
+
+        /// [`Self::tier_read_record`], choosing which hash rows come back
+        /// packed.
+        pub(crate) fn tier_read_record_as(
+            &mut self,
+            key: &[u8],
+            cref: ColdRef,
+            form: crate::tier_codec::RowForm,
+        ) -> Value {
             if cref.is_seg() {
-                return self.segrow_read(cref, key);
+                return self.segrow_read_as(cref, key, form);
             }
             let t = self.tier.as_mut().expect("tier enabled");
             t.preads_total += 1;
@@ -222,7 +189,7 @@ mod enabled {
                 .vlog
                 .read(cref.vref())
                 .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
-            crate::tier_codec::decode(cref.type_tag, payload)
+            crate::tier_codec::decode_as(cref.type_tag, payload, &self.row_shapes, form)
                 .expect("tier: cold record decode failed — process bug")
         }
 
@@ -244,7 +211,7 @@ mod enabled {
                 .read(c.vref())
                 .expect("tier: vlog read failed — per-boot spill file, this is a process bug");
             Some(
-                crate::tier_codec::decode(c.type_tag, payload)
+                crate::tier_codec::decode(c.type_tag, payload, &self.row_shapes)
                     .expect("tier: cold record decode failed — process bug"),
             )
         }
@@ -402,13 +369,9 @@ mod enabled {
                     .file
                     .decompress(&frame)
                     .expect("tier: cold record decompress failed — process bug");
-                let value = crate::tier_codec::decode(cref.type_tag, payload)
+                let value = crate::tier_codec::decode(cref.type_tag, payload, &self.row_shapes)
                     .expect("tier: cold record decode failed — process bug");
-                let Value::Hash(h) = &value else {
-                    unreachable!("hash-tagged record decodes to a hash")
-                };
-                out[row] =
-                    Ok(Some(fields.iter().map(|f| h.get(*f).map(SmallBytes::to_vec)).collect()));
+                out[row] = Ok(Some(super::decoded_hash_fields(&value, fields)));
             }
         }
     }

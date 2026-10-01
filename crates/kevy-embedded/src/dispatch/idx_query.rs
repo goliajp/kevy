@@ -7,11 +7,12 @@ use crate::store::Store;
 
 use kevy_index::{IndexValue, ValType};
 
-use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index, value_repr};
+use super::idx::{badargs, decode_cursor, encode_cursor, no_such_index};
 // spec_of's only use here is the KNN handler, which is vector-gated.
 #[cfg(feature = "vector")]
 use super::idx::spec_of;
-use super::util::{arr, bulk, err, kevy_err, nil};
+use super::kevy_err;
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_null_bulk};
 
 /// One IDX query request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -66,16 +67,16 @@ pub(super) fn emit_row(
     value: Option<&IndexValue>,
     fields: &[Vec<u8>],
 ) {
-    arr(out, 1 + usize::from(value.is_some()) + fields.len() * 2);
-    bulk(out, key);
+    encode_array_len(out, (1 + usize::from(value.is_some()) + fields.len() * 2) as i64);
+    encode_bulk(out, key);
     if let Some(v) = value {
-        bulk(out, &value_repr(v));
+        encode_bulk(out, &v.render());
     }
     for f in fields {
-        bulk(out, f);
+        encode_bulk(out, f);
         match s.hget(key, f) {
-            Ok(Some(v)) => bulk(out, &v),
-            _ => nil(out),
+            Ok(Some(v)) => encode_bulk(out, &v),
+            _ => encode_null_bulk(out),
         }
     }
 }
@@ -151,7 +152,7 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         || tail.offset > 0;
     if tail.cursor_raw.is_some() && selects {
         let n = String::from_utf8_lossy(name);
-        return err(
+        return encode_error(
             out,
             &format!("ERR IDX.QUERY '{n}': CURSOR cannot combine with SORT|DISTINCT|FACET|OFFSET"),
         );
@@ -162,7 +163,7 @@ fn scalar_query(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let cursor = match tail.cursor_raw.as_deref() {
         None | Some(b"0") => None,
         Some(raw) => match decode_cursor(raw) {
-            Some((v, k)) => Some(kevy_index::Cursor { value: v, key: k }),
+            Some((v, k)) => Some(kevy_index::Cursor::new(v, k)),
             None => return badargs(out, "IDX.QUERY", name),
         },
     };
@@ -184,20 +185,20 @@ fn emit_scalar_page(
     next: Option<&kevy_index::Cursor>,
     fields: &[Vec<u8>],
 ) {
-    arr(out, 2);
+    encode_array_len(out, 2);
     match next {
-        Some(c) => bulk(out, &encode_cursor(&c.value, &c.key)),
-        None => bulk(out, b"0"),
+        Some(c) => encode_bulk(out, &encode_cursor(&c.value, &c.key)),
+        None => encode_bulk(out, b"0"),
     }
     if fields.is_empty() {
         // legacy flat shape: *2N of key/value
-        arr(out, rows.len() * 2);
+        encode_array_len(out, (rows.len() * 2) as i64);
         for (k, v) in rows {
-            bulk(out, k);
-            bulk(out, &value_repr(v));
+            encode_bulk(out, k);
+            encode_bulk(out, &v.render());
         }
     } else {
-        arr(out, rows.len());
+        encode_array_len(out, rows.len() as i64);
         for (k, v) in rows {
             emit_row(s, out, k, Some(v), fields);
         }
@@ -257,13 +258,13 @@ fn emit_facets(out: &mut Vec<u8>, names: &[Vec<u8>], buckets: &[Vec<(Vec<u8>, u6
     if names.is_empty() {
         return;
     }
-    arr(out, names.len() * 2);
+    encode_array_len(out, (names.len() * 2) as i64);
     for (name, field) in names.iter().zip(buckets) {
-        bulk(out, name);
-        arr(out, field.len() * 2);
+        encode_bulk(out, name);
+        encode_array_len(out, (field.len() * 2) as i64);
         for (label, n) in field {
-            bulk(out, label);
-            bulk(out, n.to_string().as_bytes());
+            encode_bulk(out, label);
+            encode_bulk(out, n.to_string().as_bytes());
         }
     }
 }
@@ -282,16 +283,16 @@ pub(super) fn emit_ranked(
     // header is written before them.
     extra: usize,
 ) {
-    arr(out, hits.len() + extra);
+    encode_array_len(out, (hits.len() + extra) as i64);
     for (key, v) in hits {
-        arr(out, 2 + fields.len() * 2);
-        bulk(out, key);
-        bulk(out, format!("{v:.prec$}").as_bytes());
+        encode_array_len(out, (2 + fields.len() * 2) as i64);
+        encode_bulk(out, key);
+        encode_bulk(out, format!("{v:.prec$}").as_bytes());
         for f in fields {
-            bulk(out, f);
+            encode_bulk(out, f);
             match s.hget(key, f) {
-                Ok(Some(val)) => bulk(out, &val),
-                _ => nil(out),
+                Ok(Some(val)) => encode_bulk(out, &val),
+                _ => encode_null_bulk(out),
             }
         }
     }
@@ -307,25 +308,25 @@ fn emit_ranked_highlighted(
     fields: &[Vec<u8>],
     extra: usize,
 ) {
-    arr(out, hits.len() + extra);
+    encode_array_len(out, (hits.len() + extra) as i64);
     for (key, v, hl) in hits {
-        arr(out, 2 + fields.len() * 2 + 1);
-        bulk(out, key);
-        bulk(out, format!("{v:.4}").as_bytes());
+        encode_array_len(out, (2 + fields.len() * 2 + 1) as i64);
+        encode_bulk(out, key);
+        encode_bulk(out, format!("{v:.4}").as_bytes());
         for f in fields {
-            bulk(out, f);
+            encode_bulk(out, f);
             match s.hget(key, f) {
-                Ok(Some(val)) => bulk(out, &val),
-                _ => nil(out),
+                Ok(Some(val)) => encode_bulk(out, &val),
+                _ => encode_null_bulk(out),
             }
         }
-        arr(out, hl.len());
+        encode_array_len(out, hl.len() as i64);
         for (name, ranges) in hl {
-            arr(out, 1 + ranges.len() * 2);
-            bulk(out, name);
+            encode_array_len(out, (1 + ranges.len() * 2) as i64);
+            encode_bulk(out, name);
             for (start, end) in ranges {
-                bulk(out, start.to_string().as_bytes());
-                bulk(out, end.to_string().as_bytes());
+                encode_bulk(out, start.to_string().as_bytes());
+                encode_bulk(out, end.to_string().as_bytes());
             }
         }
     }
@@ -345,7 +346,7 @@ fn knn(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some((tail, ef)) = parse_knn_tail(argv) else {
             return badargs(out, "IDX.QUERY", name);
         };
-        let dim = spec.ann.map_or(0, |a| a.dim) as usize;
+        let dim = spec.ann().map_or(0, |a| a.dim) as usize;
         let Some(vec) = kevy_vector::parse_vector(raw_vec, dim) else {
             return badargs(out, "IDX.QUERY", name);
         };
@@ -419,26 +420,26 @@ fn group(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         return match s.idx_group(name, g) {
             Err(e) => idx_err(out, name, &e),
             Ok(st) => {
-                arr(out, 5);
+                encode_array_len(out, 5);
                 emit_group_stats(out, &st);
                 match st.avg() {
-                    Some(a) => bulk(out, format!("{a}").as_bytes()),
-                    None => nil(out),
+                    Some(a) => encode_bulk(out, format!("{a}").as_bytes()),
+                    None => encode_null_bulk(out),
                 }
             }
         };
     }
     let Some((by, limit)) = parse_groups_args(argv) else {
-        return err(out, "ERR bad IDX arguments");
+        return encode_error(out, "ERR bad IDX arguments");
     };
     match s.idx_groups(name, by, limit) {
         Err(e) => idx_err(out, name, &e),
         Ok(rows) => {
             let rows: Vec<_> = rows.into_iter().filter(|(_, st)| st.count > 0).collect();
-            arr(out, rows.len());
+            encode_array_len(out, rows.len() as i64);
             for (g, st) in &rows {
-                arr(out, 5);
-                bulk(out, g);
+                encode_array_len(out, 5);
+                encode_bulk(out, g);
                 emit_group_stats(out, st);
             }
         }
@@ -447,12 +448,12 @@ fn group(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
 
 /// The `count, sum, min|nil, max|nil` core of a group row.
 fn emit_group_stats(out: &mut Vec<u8>, st: &kevy_index::GroupStats) {
-    bulk(out, st.count.to_string().as_bytes());
-    bulk(out, format!("{}", st.sum).as_bytes());
+    encode_bulk(out, st.count.to_string().as_bytes());
+    encode_bulk(out, format!("{}", st.sum).as_bytes());
     for v in [&st.min, &st.max] {
         match v {
-            Some(x) => bulk(out, &value_repr(x)),
-            None => nil(out),
+            Some(x) => encode_bulk(out, &x.render()),
+            None => encode_null_bulk(out),
         }
     }
 }

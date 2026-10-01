@@ -19,20 +19,49 @@ use crate::shard::Shard;
 /// that takes the LOCAL block path, not this cross-shard one — so the test
 /// retries until it provably exercised the cross-shard code. Non-I/O, so it
 /// does not perturb the timing.
+///
+/// ```
+/// use kevy_rt::serve_counters::{cross_shard_serves, note_cross_shard_serve};
+/// let before = cross_shard_serves();
+/// note_cross_shard_serve();
+/// // monotonic, process-wide: other threads may add to it, never take away
+/// assert!(cross_shard_serves() > before);
+/// ```
 #[cfg(debug_assertions)]
 pub mod counters {
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
     /// Counts cross-shard serves since process start. Debug builds only
     /// — the test that needs it retries until this proves the cross-shard
     /// path actually ran, rather than assuming a pass meant it did.
+    ///
+    /// ```
+    /// use std::sync::atomic::Ordering::Relaxed;
+    /// use kevy_rt::serve_counters::{CROSS_SHARD_SERVES, note_cross_shard_serve};
+    /// let before = CROSS_SHARD_SERVES.load(Relaxed);
+    /// note_cross_shard_serve();
+    /// assert!(CROSS_SHARD_SERVES.load(Relaxed) > before);
+    /// ```
     pub static CROSS_SHARD_SERVES: AtomicU64 = AtomicU64::new(0);
     #[inline]
     /// Record one cross-shard serve. Relaxed and non-I/O, so arming the
     /// counter cannot change the timing it is there to observe.
+    ///
+    /// ```
+    /// let before = kevy_rt::serve_counters::cross_shard_serves();
+    /// kevy_rt::serve_counters::note_cross_shard_serve();
+    /// assert!(kevy_rt::serve_counters::cross_shard_serves() > before);
+    /// ```
     pub fn note_cross_shard_serve() {
         CROSS_SHARD_SERVES.fetch_add(1, Relaxed);
     }
     /// Cross-shard serves processed since process start.
+    ///
+    /// ```
+    /// use kevy_rt::serve_counters::cross_shard_serves;
+    /// // a test that needs the cross-shard path retries until this moves
+    /// let seen = cross_shard_serves();
+    /// assert!(cross_shard_serves() >= seen, "never goes backwards");
+    /// ```
     pub fn cross_shard_serves() -> u64 {
         CROSS_SHARD_SERVES.load(Relaxed)
     }

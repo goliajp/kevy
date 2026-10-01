@@ -425,8 +425,6 @@ impl<K, V> KevyMap<K, V> {
         prefetch_t0(ptr);
     }
 
-    /// 7/8 of the capacity — the inclusive max for `occupied + deleted`.
-    #[inline]
     /// Slots holding a tombstone: erased, but still probed through.
     ///
     /// A test's window onto the growth question — the load check counts
@@ -436,6 +434,8 @@ impl<K, V> KevyMap<K, V> {
         self.deleted
     }
 
+    /// 7/8 of the capacity — the inclusive max for `occupied + deleted`.
+    #[inline]
     pub(crate) fn threshold(&self) -> usize {
         self.cap - (self.cap / 8)
     }

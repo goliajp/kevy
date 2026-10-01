@@ -13,7 +13,7 @@ kevy 是一台**服务引擎**（serving engine）：给那些原本会把业务
 | **P2——索引** | 声明式二级索引，四种 kind：`range`、`unique`、`text`（CJK bigram + BM25）、`ann`（HNSW）。构造即派生（写钩子维护，零漂移）、一跳补水（`FIELDS`）、backfill 重建。 | docs/indexes.md、docs/text-search.md、docs/vector-search.md |
 | **P3——视图与代数** | 索引之上的具名组合（virtual / materialized top-K）、带完整 Redis 语义的 zset/set 代数。 | docs/views.md |
 | **P4——流** | 带 `(generation, offset)` 游标的 CDC feed（内建的 outbox）、阻塞 pop、hash 字段级 TTL、快照读视图、embedded 只读 RESP listener。 | docs/cdc.md、docs/embedded-listener.md |
-| **P5——证据** | 每条声明都实测并对账；崩溃一致性混沌 gate；3000 万键的混合栈 soak。 | bench/VALIDATION-LEDGER.md |
+| **P5——证据** | 每条声明都实测并对账；崩溃一致性混沌 gate；3000 万键的混合栈 soak。 | [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) |
 | **P6——可用性** | 带 acked-offset 真值与心跳的复制、计划内交接（`FAILOVER`）与崩溃切主（多数派选举、写权限只来自选举、丢弃分叉），以及可选购的一致性阶梯：`WAIT`、读己之写 token（`REPL.TOKEN` / `REPL.WAIT`）、有界陈旧（`-STALE`）、多数派租约写围栏。12 道可执行钳制（availgate）在 CI 里跑。 | docs/availability.md、docs/replication.md |
 
 ## 三条法则
@@ -47,9 +47,9 @@ kevy 是一台**服务引擎**（serving engine）：给那些原本会把业务
 
 ## 服务宪章（永久受 gate 约束的部分）
 
-数字是棘轮，只升不降。现行的线（实测值在 `bench/VALIDATION-LEDGER.md`）：
+数字是棘轮，只升不降。现行的线（实测值在 [PERFORMANCE.md](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)）：
 
-- Redis 对等吞吐：12 角 perfgate，下限 = 基线 × 0.92。
+- 吞吐：perfgate 在同一次运行里与上一个构建并排测量——吞吐 ≥ 0.92 倍，每条命令的指令数 ≤ 1.03 倍，每条命令的周期数 ≤ 1.05 倍。
 - 补水后的行列表分页 p99 < 1ms；视图分页 < 1ms；穿过 index + view 钩子的写扇出 p99 < 200µs——全部是在一台扛着完整栈的服务器上。
 - IDX.QUERY p99 < 2ms @ 100 万行；MATCH p95 < 20ms @ 100 万文档；KNN p95 < 30ms 且 recall@10 ≥ 0.90 @ 100 万 × 128 维。
 - 崩溃诚实：写到一半 kill -9 → 重放 → 派生状态与一次全新重建完全一致。恢复点 = 快照 + `(gen, offset)`。

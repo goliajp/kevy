@@ -9,12 +9,13 @@
 use std::collections::BTreeSet;
 
 use kevy_resp::ops_table::{ops_with, surface};
+use kevy_verbs::is_streams_geo;
 
 use crate::op_manifest::ESTORE_OPS;
 use crate::ops_atomic::ATOMIC_OPS;
 use crate::ops_atomic_all::ATOMIC_ALL_OPS;
 use crate::ops_pipeline::PIPELINE_OPS;
-use crate::replay::REPLAY_VERBS;
+use crate::replay::replay_verbs;
 
 fn diff(surface_name: &str, manifest: &[&str], flag: u16) {
     let m: BTreeSet<&str> = manifest.iter().copied().collect();
@@ -48,18 +49,36 @@ fn estore_manifest_matches_table() {
     diff("ESTORE", ESTORE_OPS, surface::ESTORE);
 }
 
+/// The registry's replay column describes a build with every family; the
+/// stream and geo rows are this build's only with `streams-geo`.
 #[test]
 fn replay_manifest_matches_table() {
-    diff("REPLAY", REPLAY_VERBS, surface::REPLAY);
+    let mut manifest = replay_verbs();
+    // the restore and a replica take the catalog frame ahead of `apply`
+    manifest.push(kevy_resp::ops_table::CATALOG);
+    if !cfg!(feature = "streams-geo") {
+        let off = ops_with(surface::REPLAY).into_iter().filter(|n| is_streams_geo(n.as_bytes()));
+        // the thirteen stream and geo writes and the internal record verb
+        assert_eq!(off.clone().count(), 14, "the family's replay rows moved");
+        manifest.extend(off);
+    }
+    diff("REPLAY", &manifest, surface::REPLAY);
 }
 
-/// Grounding: every manifest verb the replay claims must actually
-/// have a literal arm in replay.rs source.
+/// Grounding: every verb the replay claims is one it really applies —
+/// a frame of it changes an empty keyspace or is refused, never skipped.
 #[test]
-fn replay_manifest_verbs_have_source_arms() {
-    let src = include_str!("replay.rs");
-    for v in REPLAY_VERBS {
-        let lit = format!("b\"{v}\"");
-        assert!(src.contains(&lit), "REPLAY_VERBS lists {v} but replay.rs has no {lit} arm");
+fn replay_manifest_verbs_are_applied() {
+    let verbs = replay_verbs();
+    assert!(verbs.len() > 50, "the replay claims only {} verbs", verbs.len());
+    for v in verbs {
+        let mut buf = [0u8; 32];
+        let up = kevy_verbs::args::upper_verb(v.as_bytes(), &mut buf);
+        let argv = kevy_persist::Argv::from(vec![v.as_bytes().to_vec()]);
+        let mut out = Vec::new();
+        let mut store = kevy_store::Store::new();
+        let ran = kevy_verbs::aof::apply_internal(&mut store, &argv, &mut out)
+            || kevy_verbs::exec(&mut store, up, &argv, &mut out).is_some();
+        assert!(ran && !out.is_empty(), "the replay lists {v} but nothing runs it");
     }
 }

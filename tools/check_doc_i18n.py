@@ -30,17 +30,11 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 
-# Deliberately English-only, each for a stated reason. These are not
-# chapters a reader is handed: they are records addressed to one
-# audience at one moment, and translating them would be inventing a
-# readership they never had.
+# Deliberately English-only, each for a stated reason.
 ENGLISH_ONLY = {
-    "DEFECT-REPORT-2026-07-20-ATOMIC-ERROR-PATH-RESPONSE.md": "a dated defect report",
-    "REPORT-FROM-GOLIAJP-2026-07-20-EMBEDDED-AS-PRIMARY-STORE.md": "a consumer's report",
-    "REPORT-RESPONSE-2026-07-20-EMBEDDED-AS-PRIMARY-STORE.md": "the reply to it",
-    "SUPPORT-LINE-3X-VS-4X-2026-07-20.md": "a dated support statement",
     "client-contract.md": "the contract client authors implement, in the language they file issues in",
     "clients.md": "a list of client packages and their install lines",
+    "rust-api-7.0.md": "a list of Rust signatures, old and new, read beside the code",
     "verb-reference.md": "generated verb table, not prose",
 }
 

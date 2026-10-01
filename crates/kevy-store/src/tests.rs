@@ -2,6 +2,15 @@ use super::*;
 use std::borrow::Cow;
 use std::time::Duration;
 
+#[path = "tests_accessors.rs"]
+mod accessors;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+#[path = "tests_errors.rs"]
+mod errors;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+#[path = "tests_seg_cold.rs"]
+mod seg_cold;
+
 pub(crate) fn s(x: &str) -> Vec<u8> {
     x.as_bytes().to_vec()
 }
@@ -9,7 +18,7 @@ pub(crate) fn s(x: &str) -> Vec<u8> {
 #[test]
 fn set_get_del_exists() {
     let mut st = Store::new();
-    assert!(st.set(b"k", s("v"), None, false, false));
+    assert!(st.set(b"k", s("v"), None, crate::SetCondition::Always));
     assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"v"[..]))));
     assert_eq!(st.exists(&[b"k".as_slice(), b"k".as_slice(), b"nope".as_slice()]), 2);
     assert_eq!(st.del(&[b"k".as_slice(), b"nope".as_slice()]), 1);
@@ -19,11 +28,11 @@ fn set_get_del_exists() {
 #[test]
 fn set_nx_xx() {
     let mut st = Store::new();
-    assert!(!st.set(b"k", s("v"), None, false, true));
-    assert!(st.set(b"k", s("v"), None, true, false));
-    assert!(!st.set(b"k", s("w"), None, true, false));
+    assert!(!st.set(b"k", s("v"), None, crate::SetCondition::IfPresent));
+    assert!(st.set(b"k", s("v"), None, crate::SetCondition::IfAbsent));
+    assert!(!st.set(b"k", s("w"), None, crate::SetCondition::IfAbsent));
     assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"v"[..]))));
-    assert!(st.set(b"k", s("w"), None, false, true));
+    assert!(st.set(b"k", s("w"), None, crate::SetCondition::IfPresent));
     assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"w"[..]))));
 }
 
@@ -33,16 +42,16 @@ fn incr_paths() {
     assert_eq!(st.incr_by(b"n", 1), Ok(1));
     assert_eq!(st.incr_by(b"n", 41), Ok(42));
     assert_eq!(st.incr_by(b"n", -50), Ok(-8));
-    st.set(b"s", s("abc"), None, false, false);
+    st.set(b"s", s("abc"), None, crate::SetCondition::Always);
     assert_eq!(st.incr_by(b"s", 1), Err(StoreError::NotInteger));
-    st.set(b"big", s(&i64::MAX.to_string()), None, false, false);
+    st.set(b"big", s(&i64::MAX.to_string()), None, crate::SetCondition::Always);
     assert_eq!(st.incr_by(b"big", 1), Err(StoreError::Overflow));
 }
 
 #[test]
 fn ttl_expire_persist() {
     let mut st = Store::new();
-    st.set(b"k", s("v"), None, false, false);
+    st.set(b"k", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.pttl(b"k"), -1);
     assert_eq!(st.pttl(b"missing"), -2);
     assert!(st.expire(b"k", Duration::from_secs(100)));
@@ -55,7 +64,7 @@ fn ttl_expire_persist() {
 #[test]
 fn lazy_expiry() {
     let mut st = Store::new();
-    st.set(b"k", s("v"), Some(Duration::from_millis(1)), false, false);
+    st.set(b"k", s("v"), Some(Duration::from_millis(1)), crate::SetCondition::Always);
     std::thread::sleep(Duration::from_millis(8));
     assert_eq!(st.get(b"k"), Ok(None));
     assert_eq!(st.exists(&[b"k".as_slice()]), 0);
@@ -106,7 +115,7 @@ fn wrong_type_errors() {
     st.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())]).unwrap();
     assert_eq!(st.get(b"h"), Err(StoreError::WrongType));
     assert_eq!(st.incr_by(b"h", 1), Err(StoreError::WrongType));
-    st.set(b"s", s("v"), None, false, false);
+    st.set(b"s", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.hget(b"s", b"f"), Err(StoreError::WrongType));
     assert_eq!(st.hset(b"s", &[(b"f".as_slice(), b"v".as_slice())]), Err(StoreError::WrongType));
 }
@@ -150,7 +159,7 @@ fn list_lrem_ltrim_and_empty_delete() {
 #[test]
 fn list_wrong_type() {
     let mut st = Store::new();
-    st.set(b"s", s("v"), None, false, false);
+    st.set(b"s", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.lpush(b"s", &[b"x".as_slice()]), Err(StoreError::WrongType));
     st.rpush(b"l", &[b"a".as_slice()]).unwrap();
     assert_eq!(st.get(b"l"), Err(StoreError::WrongType));
@@ -161,7 +170,7 @@ fn list_wrong_type_on_read_path() {
     // list_ref WrongType branch — every read accessor returns WrongType when
     // the key holds a string. Drives the `_ => Err(WrongType)` arm in list_ref.
     let mut st = Store::new();
-    st.set(b"s", s("v"), None, false, false);
+    st.set(b"s", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.lrange(b"s", 0, -1), Err(StoreError::WrongType));
     assert_eq!(st.llen(b"s"), Err(StoreError::WrongType));
     assert_eq!(st.lindex(b"s", 0), Err(StoreError::WrongType));
@@ -240,7 +249,7 @@ fn set_ops() {
 #[test]
 fn set_wrong_type() {
     let mut st = Store::new();
-    st.set(b"str", s("v"), None, false, false);
+    st.set(b"str", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.sadd(b"str", &[b"x".as_slice()]), Err(StoreError::WrongType));
 }
 
@@ -260,19 +269,14 @@ fn zset_ops() {
     assert_eq!(st.zrank(b"z", b"c"), Ok(Some(1)));
     assert_eq!(st.zrank(b"z", b"missing"), Ok(None));
     assert_eq!(st.zincrby(b"z", 1.0, b"b"), Ok(3.0)); // b -> 3, ties with c
-    let mid = st
-        .zrange_by_score(
-            b"z",
-            ScoreBound { value: 3.0, exclusive: false },
-            ScoreBound { value: 4.0, exclusive: false },
-        )
-        .unwrap();
+    let mid =
+        st.zrange_by_score(b"z", ScoreBound::inclusive(3.0), ScoreBound::inclusive(4.0)).unwrap();
     assert_eq!(mid.len(), 2); // b(3) and c(3)
     assert_eq!(
         st.zcount(
             b"z",
-            ScoreBound { value: f64::NEG_INFINITY, exclusive: false },
-            ScoreBound { value: f64::INFINITY, exclusive: false }
+            ScoreBound::inclusive(f64::NEG_INFINITY),
+            ScoreBound::inclusive(f64::INFINITY)
         ),
         Ok(3)
     );
@@ -283,7 +287,7 @@ fn zset_ops() {
 #[test]
 fn zset_wrong_type_and_empty_delete() {
     let mut st = Store::new();
-    st.set(b"s", s("v"), None, false, false);
+    st.set(b"s", s("v"), None, crate::SetCondition::Always);
     assert_eq!(st.zadd(b"s", &[(1.0, b"m".as_slice())]), Err(StoreError::WrongType));
     st.zadd(b"z", &[(1.0, b"only".as_slice())]).unwrap();
     assert_eq!(st.zrem(b"z", &[b"only".as_slice()]), Ok(1));
@@ -332,9 +336,9 @@ fn glob_no_catastrophic_backtracking() {
 #[test]
 fn collect_keys_test() {
     let mut st = Store::new();
-    st.set(b"user:1", s("a"), None, false, false);
-    st.set(b"user:2", s("b"), None, false, false);
-    st.set(b"post:1", s("c"), None, false, false);
+    st.set(b"user:1", s("a"), None, crate::SetCondition::Always);
+    st.set(b"user:2", s("b"), None, crate::SetCondition::Always);
+    st.set(b"post:1", s("c"), None, crate::SetCondition::Always);
     assert_eq!(st.collect_keys(None, None).len(), 3);
     let mut users = st.collect_keys(Some(b"user:*"), None);
     users.sort();
@@ -401,17 +405,25 @@ pub(crate) fn grouped_stream_fixture(st: &mut Store) {
     for ms in [1u64, 2, 3] {
         st.xadd(
             b"st",
-            XAddIdSpec::Explicit(StreamId { ms, seq: 1 }),
+            XAddIdSpec::Explicit(StreamId::new(ms, 1)),
             vec![(s("f"), s("v"))],
-            false,
+            crate::MissingStream::Create,
             0,
         )
         .unwrap();
     }
-    st.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false).unwrap();
-    st.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000).unwrap();
-    st.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000).unwrap();
-    st.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
+    st.xgroup_create(
+        b"st",
+        b"g",
+        GroupCreateMode::AtId(StreamId::MIN),
+        crate::MissingStream::Refuse,
+    )
+    .unwrap();
+    st.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), crate::AckMode::Pending, 1000)
+        .unwrap();
+    st.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, crate::AckMode::Pending, 2000)
+        .unwrap();
+    st.xdel(b"st", &[StreamId::new(2, 1)]).unwrap();
 }
 
 #[test]
@@ -425,22 +437,20 @@ fn load_value_carries_stream_groups() {
 
     let view = dst.stream_view(b"st").unwrap().unwrap();
     let g = view.group(b"g").expect("group must survive load_value");
-    assert_eq!(g.last_delivered_id(), StreamId { ms: 3, seq: 1 });
+    assert_eq!(g.last_delivered_id(), StreamId::new(3, 1));
     assert_eq!(g.pending_count(), 3); // tombstone 2-1 included
-    let p1 = g.pel.get(&StreamId { ms: 1, seq: 1 }).unwrap();
+    let p1 = g.pel.get(&StreamId::new(1, 1)).unwrap();
     assert_eq!(
         (p1.consumer.as_slice(), p1.delivery_time_ms, p1.delivery_count),
         (&b"c1"[..], 1000, 1)
     );
-    let p3 = g.pel.get(&StreamId { ms: 3, seq: 1 }).unwrap();
+    let p3 = g.pel.get(&StreamId::new(3, 1)).unwrap();
     assert_eq!(
         (p3.consumer.as_slice(), p3.delivery_time_ms, p3.delivery_count),
         (&b"c2"[..], 2000, 1)
     );
-    let mut consumers: Vec<(Vec<u8>, u64, usize)> = g
-        .consumers_iter()
-        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
-        .collect();
+    let mut consumers: Vec<(Vec<u8>, u64, usize)> =
+        g.consumers().map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count())).collect();
     consumers.sort();
     assert_eq!(consumers, vec![(s("c1"), 1000, 2), (s("c2"), 2000, 1)]);
 }
@@ -448,37 +458,30 @@ fn load_value_carries_stream_groups() {
 #[test]
 fn xsetid_scalar_overrides_and_guards() {
     let mut st = Store::new();
-    assert_eq!(
-        st.xsetid(b"nope", StreamId { ms: 1, seq: 0 }, None, None),
-        Err(StoreError::NoSuchKey)
-    );
+    assert_eq!(st.xsetid(b"nope", StreamId::new(1, 0), None, None), Err(StoreError::NoSuchKey));
     st.xadd(
         b"s",
-        XAddIdSpec::Explicit(StreamId { ms: 5, seq: 1 }),
+        XAddIdSpec::Explicit(StreamId::new(5, 1)),
         vec![(s("f"), s("v"))],
-        false,
+        crate::MissingStream::Create,
         0,
     )
     .unwrap();
     // Below the top entry → rejected, state untouched.
-    assert_eq!(
-        st.xsetid(b"s", StreamId { ms: 4, seq: 0 }, None, None),
-        Err(StoreError::OutOfRange)
-    );
-    st.xsetid(b"s", StreamId { ms: 9, seq: 0 }, Some(42), Some(StreamId { ms: 3, seq: 3 }))
-        .unwrap();
+    assert_eq!(st.xsetid(b"s", StreamId::new(4, 0), None, None), Err(StoreError::OutOfRange));
+    st.xsetid(b"s", StreamId::new(9, 0), Some(42), Some(StreamId::new(3, 3))).unwrap();
     let view = st.stream_view(b"s").unwrap().unwrap();
-    assert_eq!(view.last_id(), StreamId { ms: 9, seq: 0 });
+    assert_eq!(view.last_id(), StreamId::new(9, 0));
     assert_eq!(view.entries_added(), 42);
-    assert_eq!(view.max_deleted_id(), StreamId { ms: 3, seq: 3 });
+    assert_eq!(view.max_deleted_id(), StreamId::new(3, 3));
     // The bumped ID clock gates subsequent XADDs.
     assert!(
         st.xadd(
             b"s",
-            XAddIdSpec::Explicit(StreamId { ms: 9, seq: 0 }),
+            XAddIdSpec::Explicit(StreamId::new(9, 0)),
             vec![(s("f"), s("v"))],
-            false,
-            0,
+            crate::MissingStream::Create,
+            0
         )
         .is_err()
     );
@@ -502,9 +505,9 @@ fn expires_counter_tracks_ground_truth() {
     }
 
     // New key WITH a TTL → +1; new key WITHOUT → no change.
-    assert!(st.set(b"a", s("v"), ttl, false, false));
+    assert!(st.set(b"a", s("v"), ttl, crate::SetCondition::Always));
     check!();
-    assert!(st.set(b"b", s("v"), None, false, false));
+    assert!(st.set(b"b", s("v"), None, crate::SetCondition::Always));
     check!();
     assert_eq!(st.expires_count(), 1);
 
@@ -514,7 +517,7 @@ fn expires_counter_tracks_ground_truth() {
     assert_eq!(st.expires_count(), 2);
 
     // SET without EX overwrites and CLEARS the existing TTL → -1.
-    assert!(st.set(b"a", s("v2"), None, false, false));
+    assert!(st.set(b"a", s("v2"), None, crate::SetCondition::Always));
     check!();
     assert_eq!(st.expires_count(), 1);
 
@@ -524,22 +527,22 @@ fn expires_counter_tracks_ground_truth() {
     assert_eq!(st.expires_count(), 0);
 
     // DEL of a TTL'd key decrements via remove_entry.
-    assert!(st.set(b"c", s("v"), ttl, false, false));
+    assert!(st.set(b"c", s("v"), ttl, crate::SetCondition::Always));
     check!();
     assert_eq!(st.del(&[b"c".as_slice()]), 1);
     check!();
     assert_eq!(st.expires_count(), 0);
 
     // EXPIREAT in the past deletes immediately (remove_entry path).
-    assert!(st.set(b"d", s("v"), ttl, false, false));
+    assert!(st.set(b"d", s("v"), ttl, crate::SetCondition::Always));
     check!();
     assert!(st.expire_at_unix_ms(b"d", 1));
     check!();
     assert_eq!(st.expires_count(), 0);
 
     // FLUSHALL resets the counter to zero.
-    assert!(st.set(b"e", s("v"), ttl, false, false));
-    assert!(st.set(b"f", s("v"), ttl, false, false));
+    assert!(st.set(b"e", s("v"), ttl, crate::SetCondition::Always));
+    assert!(st.set(b"f", s("v"), ttl, crate::SetCondition::Always));
     assert_eq!(st.expires_count(), 2);
     st.flushall();
     check!();
@@ -561,26 +564,26 @@ fn hrandfield_distinct_repeating_and_bounded() {
     }
 
     // Positive count: distinct, and never more than the hash holds.
-    let got = s.hrandfield(b"h", 5, false).unwrap();
+    let got = s.hrandfield(b"h", 5).unwrap();
     assert_eq!(got.len(), 5);
-    let names: std::collections::HashSet<_> = got.iter().map(|(f, _)| f.clone()).collect();
+    let names: std::collections::HashSet<_> = got.iter().cloned().collect();
     assert_eq!(names.len(), 5, "a positive count must not repeat a field");
 
-    let all = s.hrandfield(b"h", 100, false).unwrap();
+    let all = s.hrandfield(b"h", 100).unwrap();
     assert_eq!(all.len(), 8, "a count past the end is capped at the hash size");
 
     // Negative count: repeats allowed, and the length is exactly what was asked.
-    let rep = s.hrandfield(b"h", -20, false).unwrap();
+    let rep = s.hrandfield(b"h", -20).unwrap();
     assert_eq!(rep.len(), 20, "a negative count returns |count| entries, repeats allowed");
 
     // WITHVALUES pairs each field with its own value.
-    for (f, v) in s.hrandfield(b"h", 8, true).unwrap() {
+    for (f, v) in s.hrandfield_with_values(b"h", 8).unwrap() {
         let want = s.hget(b"h", &f).unwrap().map(<[u8]>::to_vec);
         assert_eq!(Some(v), want, "WITHVALUES paired {f:?} with the wrong value");
     }
 
     // A missing key is empty, not an error.
-    assert!(s.hrandfield(b"absent", 3, false).unwrap().is_empty());
+    assert!(s.hrandfield(b"absent", 3).unwrap().is_empty());
     // A zero count is empty in Redis too.
-    assert!(s.hrandfield(b"h", 0, false).unwrap().is_empty());
+    assert!(s.hrandfield(b"h", 0).unwrap().is_empty());
 }

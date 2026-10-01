@@ -16,6 +16,20 @@
 //! figure is the one that is meaningful, so it is the one kept, and
 //! [`large_stats`] stays out of `Heap::snapshot` so that summing shards
 //! cannot count it once per shard.
+//!
+//! # Examples
+//!
+//! ```
+//! use kevy_alloc::{Heap, class::MAX_SMALL, large_stats};
+//! let mut heap = Heap::new(0);
+//! // past the largest class: a mapping of its own, page-rounded
+//! let p = heap.alloc(MAX_SMALL + 1, 8).ok_or("no mapping")?;
+//! assert_eq!(p.as_ptr() as usize % kevy_alloc::os::PAGE, 0);
+//! assert!(large_stats().large_count >= 1);
+//! // SAFETY: `p` came from this heap with this size and alignment.
+//! unsafe { heap.dealloc(p, MAX_SMALL + 1, 8) };
+//! # Ok::<(), &str>(())
+//! ```
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -209,9 +223,24 @@ mod counters {
 
 /// Direct-mapping figures for the whole process.
 ///
-/// Kept apart from [`Heap::snapshot`] rather than folded in, because
+/// Kept apart from [`Heap::snapshot`](crate::Heap::snapshot) rather than folded in, because
 /// summing per-shard snapshots would then count them once per shard.
 /// Each balances on its own, and so does their sum.
+///
+/// # Examples
+///
+/// ```
+/// use kevy_alloc::{Heap, large_stats};
+/// let mut heap = Heap::new(0);
+/// let p = heap.alloc(100_000, 8).ok_or("no mapping")?;
+/// let s = large_stats();
+/// // process-wide and balanced on its own; other threads may add to it
+/// assert!(s.balanced());
+/// assert!(s.live >= 100_000);
+/// // SAFETY: `p` came from this heap with this size and alignment.
+/// unsafe { heap.dealloc(p, 100_000, 8) };
+/// # Ok::<(), &str>(())
+/// ```
 #[must_use]
 pub fn large_stats() -> Stats {
     use core::sync::atomic::Ordering::Relaxed;
@@ -232,17 +261,35 @@ pub fn large_stats() -> Stats {
 /// exactly the right length is waiting. `None` when the OS refuses or
 /// the alignment is stricter than a fresh mapping provides.
 pub(crate) fn alloc(size: usize, align: usize) -> Option<NonNull<u8>> {
+    alloc_tracked(size, align).map(|(p, _)| p)
+}
+
+/// [`alloc`] with every byte zero. A fresh mapping already is, so only a
+/// parked one — written by its previous owner — is cleared; writing zeroes
+/// over a fresh mapping would fault in every page of it.
+#[cfg(feature = "global")]
+pub(crate) fn alloc_zeroed(size: usize, align: usize) -> Option<NonNull<u8>> {
+    let (p, fresh) = alloc_tracked(size, align)?;
+    if !fresh {
+        // SAFETY: the block was just handed out and is `size` bytes long.
+        unsafe { core::ptr::write_bytes(p.as_ptr(), 0, size) };
+    }
+    Some(p)
+}
+
+/// The block and whether it is a fresh mapping (rather than a parked one).
+fn alloc_tracked(size: usize, align: usize) -> Option<(NonNull<u8>, bool)> {
     if align > os::PAGE {
         return None;
     }
     let mapped = os::round_up(size, os::PAGE);
     if let Some(p) = pool_take(mapped) {
         counters::add_live_only(mapped as u64, size as u64);
-        return Some(p);
+        return Some((p, false));
     }
     let p = os::map_aligned(mapped, os::PAGE)?;
     counters::add(mapped as u64, size as u64);
-    Some(p)
+    Some((p, true))
 }
 
 /// # Safety
@@ -304,5 +351,10 @@ mod pool_tests {
             0,
             "an oversized mapping must never park"
         );
+    }
+
+    #[test]
+    fn an_alignment_stricter_than_a_page_is_refused() {
+        assert!(alloc(crate::class::MAX_SMALL + 1, os::PAGE * 2).is_none());
     }
 }

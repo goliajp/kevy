@@ -407,3 +407,66 @@ fn fuzz_churn_crash_6b733e74_replays_clean() {
         assert!(rp.iter().all(|b| b == fill));
     }
 }
+
+/// The compression terms account for every byte on disk that is not
+/// record framing, across rotation and after compaction retires files.
+/// Keys are 3 bytes and values 48, so the record count is raw / 48.
+#[test]
+fn compression_terms_add_up_to_the_bytes_on_disk() {
+    let d = dir("vlog-accounting");
+    let mut v = Vlog::open(d.path(), 512).unwrap();
+    let mut owner = MapOwner { live: HashMap::new(), moves: 0 };
+    let mut noise = 0x9e37_79b9_u32;
+    for i in 0..60u8 {
+        let payload: Vec<u8> = if i % 3 == 0 {
+            (0..48)
+                .map(|_| {
+                    noise ^= noise << 13;
+                    noise ^= noise >> 17;
+                    noise ^= noise << 5;
+                    noise as u8
+                })
+                .collect()
+        } else {
+            format!("{{\"id\":{i:03},\"name\":\"user\",\"tag\":\"cold\"}}xxxxxxxxxxx").into_bytes()
+        };
+        assert_eq!(payload.len(), 48);
+        let key = format!("k{i:02}");
+        let r = v.append(key.as_bytes(), &payload).unwrap();
+        owner.live.insert(key.into_bytes(), r);
+    }
+    let holds = |v: &Vlog| {
+        let (c, s) = (v.compression(), v.stats());
+        assert_eq!(c.raw_bytes % 48, 0);
+        let records = c.raw_bytes / 48;
+        assert_eq!(s.bytes, records * (8 + 4 + 3) + c.frame_header_bytes + c.payload_bytes);
+        // the split, from the frame format: a tag byte, and 48 fits one LEB128 byte
+        assert_eq!(c.frame_header_bytes, records * 2, "{c:?}");
+        c
+    };
+    let before = holds(&v);
+    assert!(
+        v.stats().files > 1 && before.dict_bytes > 0,
+        "rotated files carry trained dictionaries"
+    );
+    assert!(before.payload_bytes < before.raw_bytes, "the structured two thirds compress");
+    for i in (1..60).step_by(2) {
+        let r = owner.live.remove(format!("k{i:02}").as_bytes()).unwrap();
+        v.note_dead(r);
+    }
+    assert!(v.compact_below(60, &mut owner).unwrap() >= 1);
+    let after = holds(&v);
+    assert_ne!(after, before, "retired files took their terms with them");
+}
+
+#[test]
+fn a_pinned_file_lends_the_descriptor_it_reads_through() {
+    use std::os::fd::{AsFd, AsRawFd};
+    let d = dir("vlog-fd");
+    let mut v = Vlog::open(d.path(), DEFAULT_ROTATE_BYTES).unwrap();
+    let r = v.append(b"k", b"value").unwrap();
+    let f = v.pin(r.file_id).expect("the active file");
+    let fd = f.as_raw_fd();
+    assert!(fd >= 0);
+    assert_eq!(f.as_fd().as_raw_fd(), fd, "both views name one descriptor");
+}

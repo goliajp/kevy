@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
 KEVY_IO_URING=0 kevy --port 6004   # force epoll
 ```
 
+**接收缓冲区（io_uring）。** 每个 shard 从一个由 16 KiB 缓冲区组成的环接收数据，内核在数据到达时写入其中。环在每个 shard 上占 `recv_buffers` × 16 KiB，流量轮转一遍之后全部常驻内存：默认值 1024 时每个 shard 16 MiB，基准测试中吞吐与之前固定的 4096（每个 shard 64 MiB）没有差别。环被用空不是错误：发现环为空的接收会被重新提交，数据在 socket 里等待。所以这个设置是用内存换突发流量下重新提交的次数。每个 shard 上有数千个连接同时发送时调大；内存更重要时调小。只在启动时读取，必须是 1 到 32768 之间的 2 的幂，对 epoll 和 kqueue reactor 不起作用。
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # 每个 shard 32 MiB
+```
+
 ### 持久化
 
 AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取值与 Redis 语义一致：
@@ -60,7 +70,7 @@ AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取
 | `appendfsync` | 耐久性 | 代价 |
 |---------------|--------|------|
 | `always` | 每次写入都先 `fsync` 再回复 | 延迟最高；下限是 NVMe 的 sync 延迟 |
-| `everysec`（默认） | 后台线程每秒 `fsync` 一次 | 数据丢失窗口不超过 1 s；热路径开销近乎为零 |
+| `everysec`（默认） | 后台线程大约每秒 `fsync` 一次 | 断电丢失窗口约 1 s 加一次 `fsync`；热路径开销近乎为零 |
 | `no` | 从不 `fsync`，内核按自己的节奏落盘 | 最快；数据丢失窗口 = page-cache 的刷盘间隔 |
 
 `everysec` 的后台 `fsync` 跑在独立的 bio 线程上，不在 shard 热路径里，所以 shard 的尾延迟不会跟磁盘延迟耦合。纯缓存或只读副本还可以用 `--no-aof` 彻底关掉 AOF（完全不写 AOF 文件，连缓冲都没有）。
@@ -79,7 +89,7 @@ AOF 策略由 `appendfsync` 控制（配置文件或 `CONFIG SET`）。三个取
 
 **容器要按 `process_rss_bytes` 定容，不是 `used_memory`。**`INFO memory` 两个都报：`used_memory` 是 store 的键空间记账——`maxmemory` 和分层预算作用的对象；`process_rss_bytes` 才是操作系统真正为进程保留的常驻内存，它额外承载着索引与视图、连接与复制缓冲区、分配器开销与碎片。按 `used_memory` 设容器内存上限会把一个健康的进程 OOM 杀掉；请按观察到的 RSS 加余量来设限。
 
-**可选启用的分配器。** 用 `--features kevy-alloc` 构建，会把 glibc malloc 换成 kevy 自己的 span 分配器：churn 之下的稳态 RSS 小约 10 %，而吞吐上的代价只出现在写饱和的集合分片上。当内存容量是那条约束时，这个构建是值得的；实测的取舍见 [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)。
+**分配器。** 服务端默认使用 kevy 自己的 span 分配器 `kevy-alloc`：每个 shard 一个堆，空闲的 4 KiB 页还给操作系统，shard tick 上的整理过程把降级和删除留下的空洞压紧，分层存储的服务端靠它把 RSS 控制在预算 × 1.05 以内。和 glibc 相比，每个写命令的指令数都不多于 glibc，`LPUSH` 和 `ZADD` 快约 11 %。`INFO modules` 显示 `module:name=alloc,impl=kevy-alloc`。用 `--no-default-features` 构建就换回系统分配器：适合挂钩 malloc 的工具，或页大于 4 KiB、它还不了页的系统。实测数据见 [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md)。
 
 ### 网络
 
@@ -92,7 +102,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 服务器是双绑定的：TCP 继续服务远程客户端，UDS 负责本地客户端，RESP 语义和 shard 运行时都完全一样。本地客户端负载上的收益很大（小载荷下 loopback TCP 路径是最大的开销来源）；完整数据、权限模型，以及 UDS 不适用的场景，见 [docs/uds.md](uds.md)。
 
-**绑定地址警告。** kevy 目前既没有 AUTH 也没有 TLS。绑定到非 loopback 地址（`--bind 0.0.0.0` 或任何公网接口）会在启动时打印警告，因为此时网络上的任何一方都能直接下发命令。请把 kevy 放在私有网络边界之内，或者放在负责认证的代理后面。
+**绑定地址警告。** kevy 既没有 AUTH 也没有 TLS。绑定到非 loopback 地址（`--bind 0.0.0.0` 或任何公网接口）会在启动时打印警告，因为此时网络上的任何一方都能直接下发命令。请把 kevy 放在私有网络边界之内，或者放在负责认证的代理后面。开启加密客户端端口（[encrypted-links.md](encrypted-links.md)）并不会关掉明文端口，所以这条警告照样适用。
 
 **连接内省。**`INFO clients` 报告跨全部 shard 求和的实时 `connected_clients` 与 `blocked_clients` 仪表（`blocked_clients` 对每条停在阻塞命令里的连接只计一次，无论它登记在哪）。`CLIENT LIST` / `CLIENT INFO` 为每条真实客户端连接渲染一行 Redis 7.x 形状的记录——对端地址、全局唯一 `id`、`name`、订阅计数、MULTI 队列深度、输入/输出缓冲大小（`cmd=NULL`：不跟踪最近命令名）。`CLIENT SETNAME` 给连接打标签供 LIST 查看；`CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>`（或旧式位置参数 `CLIENT KILL <ip:port>`）关闭所有匹配的连接，包括停在阻塞命令里的连接。拆连接前会等受害者的待发输出排空，所以杀掉自己的连接依然能收到自己那条回复。
 
@@ -188,7 +198,7 @@ addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 
 **生产环境 `appendfsync` 的甜点在哪？**
 
-对绝大多数人都是 `everysec`。它把数据丢失限制在一秒内，把 `fsync` 挪出热路径，对尾延迟几乎没有影响。只有当你的耐久性要求真的是零数据丢失时才用 `always`（并接受尾延迟从此受 NVMe `fsync` 延迟托底）。`no` 只用于纯缓存——那里 AOF 存在的意义只是加快热重启。
+对绝大多数人都是 `everysec`。它把数据丢失限制在约一秒加一次 `fsync` 之内，把 `fsync` 挪出热路径，对尾延迟几乎没有影响。只有当你的耐久性要求真的是零数据丢失时才用 `always`（并接受尾延迟从此受 NVMe `fsync` 延迟托底）。`no` 只用于纯缓存——那里 AOF 存在的意义只是加快热重启。
 
 **什么时候需要 `MADV_HUGEPAGE`？**
 

@@ -13,19 +13,16 @@ import { SCENARIOS } from '../scenarios'
 // the same shell as every other page, because a demo behind its own
 // fullscreen surface is a demo most readers never open.
 //
-// Two things are deliberately absent.
+// The terminal opens without persistence: every scenario starts from a
+// FLUSHALL, and a store that came back from the last visit would only get
+// in its way. (Until 7.0 there was a second reason: writes through `cmd`
+// never reached the log. They do now.)
 //
-// **Persistence.** The wasm build's durability is host-mediated: the typed
-// setters push frames to the OPFS worker, and `cmd` does not — it goes
-// straight to `Store::dispatch_argv`. Measured, not assumed: write through
-// `cmd`, close, reopen, and the key is gone, while a typed write survives.
-// So a "persist" switch on a *command* terminal would invite a reader to
-// type SET, reload, and conclude kevy loses data. Better absent than lying.
-//
-// **Streams, transactions, geo, scripting.** The embedded engine's verb
-// surface is the ESTORE_OPS manifest — 112 of the 191 verbs the server
-// answers. Those four groups are not in it. Nothing here is trimmed to
-// save bytes; the browser build enables every feature a browser can host.
+// What it answers is the embedded engine's verb surface, streams and geo
+// included. Transactions and scripting are outside that surface on every
+// platform, and a stream read with BLOCK is refused, because a tab has one
+// thread to park. Nothing here is trimmed to save bytes; the browser build
+// enables every feature a browser can host.
 type Reply = unknown
 type Engine = { cmd: (...args: string[]) => Reply; close: () => Promise<void> }
 

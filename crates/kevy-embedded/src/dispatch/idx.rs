@@ -5,9 +5,11 @@
 
 use crate::store::Store;
 
+use super::kevy_err;
+
 use kevy_index::{IndexSpec, IndexValue};
 
-use super::util::{arr, bulk, err, int};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 /// One IDX catalog request; `false` = verb not in this group (the
 /// query shapes live in `idx_query.rs`).
@@ -16,15 +18,18 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"IDX.CREATE" => super::idx_create::cmd_idx_create(s, argv, out),
         b"IDX.DROP" => {
             if argv.len() != 2 {
-                err(out, "ERR usage: IDX.DROP name");
+                encode_error(out, "ERR usage: IDX.DROP name");
             } else {
-                int(out, i64::from(s.idx_drop(&argv[1])));
+                match s.idx_drop(&argv[1]) {
+                    Ok(hit) => encode_integer(out, i64::from(hit)),
+                    Err(e) => kevy_err(out, &e),
+                }
             }
         }
         b"IDX.LIST" => cmd_idx_list(s, out),
         b"IDX.ADVISE" => {
             if argv.len() != 1 {
-                err(out, "ERR usage: IDX.ADVISE");
+                encode_error(out, "ERR usage: IDX.ADVISE");
             } else {
                 cmd_idx_advise(s, out);
             }
@@ -39,59 +44,16 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 /// never-hit drop suggestions.
 fn cmd_idx_advise(s: &Store, out: &mut Vec<u8>) {
     let rows = s.idx_advise();
-    arr(out, rows.len());
+    encode_array_len(out, rows.len() as i64);
     for r in rows {
-        arr(out, 3);
-        int(out, r.count as i64);
-        bulk(out, &r.name);
-        bulk(out, r.advice.as_bytes());
+        encode_array_len(out, 3);
+        encode_integer(out, r.count as i64);
+        encode_bulk(out, &r.name);
+        encode_bulk(out, r.advice.as_bytes());
     }
 }
 
 // ---- shared codecs (server `cmd_index_query::wire` shapes) -----------
-
-pub(super) fn enc_value(out: &mut Vec<u8>, v: &IndexValue) {
-    match v {
-        IndexValue::I64(i) => {
-            out.push(0);
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        IndexValue::F64(f) => {
-            out.push(1);
-            out.extend_from_slice(&f.to_le_bytes());
-        }
-        IndexValue::Str(s) => {
-            out.push(2);
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s);
-        }
-    }
-}
-
-pub(super) fn dec_value(b: &[u8], pos: &mut usize) -> Option<IndexValue> {
-    let tag = *b.get(*pos)?;
-    *pos += 1;
-    match tag {
-        0 => {
-            let v = i64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::I64(v))
-        }
-        1 => {
-            let v = f64::from_le_bytes(b.get(*pos..*pos + 8)?.try_into().ok()?);
-            *pos += 8;
-            Some(IndexValue::F64(v))
-        }
-        2 => {
-            let n = u32::from_le_bytes(b.get(*pos..*pos + 4)?.try_into().ok()?) as usize;
-            *pos += 4;
-            let s = b.get(*pos..*pos + n)?.to_vec();
-            *pos += n;
-            Some(IndexValue::Str(s))
-        }
-        _ => None,
-    }
-}
 
 pub(super) fn hex(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len() * 2);
@@ -115,7 +77,7 @@ pub(super) fn unhex(raw: &[u8]) -> Option<Vec<u8>> {
 /// Hex `(value, key)` cursor — the resume point every paged reply carries.
 pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
-    enc_value(&mut payload, v);
+    v.encode(&mut payload);
     payload.extend_from_slice(k);
     hex(&payload)
 }
@@ -123,18 +85,9 @@ pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
 pub(super) fn decode_cursor(raw: &[u8]) -> Option<(IndexValue, Vec<u8>)> {
     let bytes = unhex(raw)?;
     let mut pos = 0usize;
-    let value = dec_value(&bytes, &mut pos)?;
+    let value = IndexValue::decode(&bytes, &mut pos)?;
     let key = bytes.get(pos..)?.to_vec();
     Some((value, key))
-}
-
-/// The wire text a hit's value renders as (server `value_repr`).
-pub(super) fn value_repr(v: &IndexValue) -> Vec<u8> {
-    match v {
-        IndexValue::I64(i) => i.to_string().into_bytes(),
-        IndexValue::F64(f) => format!("{f}").into_bytes(),
-        IndexValue::Str(s) => s.clone(),
-    }
 }
 
 /// Snapshot one declared index's spec from the embedded catalog.
@@ -145,7 +98,7 @@ pub(super) fn spec_of(s: &Store, name: &[u8]) -> Option<IndexSpec> {
 
 pub(super) fn no_such_index(out: &mut Vec<u8>, name: &[u8]) {
     let n = String::from_utf8_lossy(name);
-    err(out, &format!("ERR no such index '{n}' (IDX.LIST enumerates them)"));
+    encode_error(out, &format!("ERR no such index '{n}' (IDX.LIST enumerates them)"));
 }
 
 /// The server's wording for a call with too few arguments, verbatim:
@@ -159,45 +112,54 @@ pub(super) fn no_such_index(out: &mut Vec<u8>, name: &[u8]) {
 /// every language binding is built on, so a binding user and a server user
 /// were being told different things about the same typo.
 pub(super) fn arity_err(out: &mut Vec<u8>, verb: &str) {
-    err(out, &format!("ERR wrong number of arguments for '{}' command", verb.to_lowercase()));
+    encode_error(
+        out,
+        &format!("ERR wrong number of arguments for '{}' command", verb.to_lowercase()),
+    );
 }
 
 pub(super) fn badargs(out: &mut Vec<u8>, verb: &str, name: &[u8]) {
     let n = String::from_utf8_lossy(name);
-    err(out, &format!("ERR {verb} '{n}': bad arguments — run COMMAND DOCS {verb} for the syntax"));
+    encode_error(
+        out,
+        &format!("ERR {verb} '{n}': bad arguments — run COMMAND DOCS {verb} for the syntax"),
+    );
 }
 
-/// `IDX.LIST` — 18-field rows matching the server's reduce. Embedded
-/// builds are synchronous, so `state` is always `ready`; entry/byte
-/// stats are the scalar-segment sums (kind-specific stats stay 0);
-/// hits/last_hit read the usage dual.
+/// `IDX.LIST` — 20-field rows matching the server's reduce for a local
+/// index, the only kind an embedded store holds. Embedded builds are
+/// synchronous, so `state` is always `ready`; entry/byte stats are the
+/// scalar-segment sums (kind-specific stats stay 0); hits/last_hit read
+/// the usage dual.
 fn cmd_idx_list(s: &Store, out: &mut Vec<u8>) {
     let specs: Vec<IndexSpec> = {
         let g = s.indexes.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.1.iter().map(|(spec, _)| spec.clone()).collect()
     };
-    arr(out, specs.len());
+    encode_array_len(out, specs.len() as i64);
     for spec in &specs {
-        let stats = s.idx_stats(&spec.name).unwrap_or_default();
-        let (hits, last, _) = s.idx_usage(&spec.name).unwrap_or((0, 0, 0));
-        arr(out, 18);
-        bulk(out, b"name");
-        bulk(out, &spec.name);
-        bulk(out, b"prefix");
-        bulk(out, &spec.prefix);
-        bulk(out, b"kind");
-        bulk(out, spec.kind.tag().as_bytes());
-        bulk(out, b"state");
-        bulk(out, b"ready");
-        bulk(out, b"entries");
-        bulk(out, stats.entries.to_string().as_bytes());
-        bulk(out, b"bytes");
-        bulk(out, stats.approx_bytes.to_string().as_bytes());
-        bulk(out, b"hits");
-        bulk(out, hits.to_string().as_bytes());
-        bulk(out, b"last_hit");
-        bulk(out, last.to_string().as_bytes());
-        bulk(out, b"auto");
-        bulk(out, if s.is_auto_path(&spec.name) { b"1" } else { b"0" });
+        let stats = s.idx_stats(spec.name()).unwrap_or_default();
+        let (hits, last, _) = s.idx_usage(spec.name()).unwrap_or((0, 0, 0));
+        encode_array_len(out, 20);
+        encode_bulk(out, b"name");
+        encode_bulk(out, spec.name());
+        encode_bulk(out, b"prefix");
+        encode_bulk(out, spec.prefix());
+        encode_bulk(out, b"kind");
+        encode_bulk(out, spec.kind().tag().as_bytes());
+        encode_bulk(out, b"state");
+        encode_bulk(out, b"ready");
+        encode_bulk(out, b"entries");
+        encode_bulk(out, stats.entries.to_string().as_bytes());
+        encode_bulk(out, b"bytes");
+        encode_bulk(out, stats.approx_bytes.to_string().as_bytes());
+        encode_bulk(out, b"hits");
+        encode_bulk(out, hits.to_string().as_bytes());
+        encode_bulk(out, b"last_hit");
+        encode_bulk(out, last.to_string().as_bytes());
+        encode_bulk(out, b"auto");
+        encode_bulk(out, if s.is_auto_path(spec.name()) { b"1" } else { b"0" });
+        encode_bulk(out, b"partitioning");
+        encode_bulk(out, b"local");
     }
 }

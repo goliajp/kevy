@@ -57,16 +57,29 @@ Config::default().with_tier_budget_percent(50) // percent of the bound
 
 ## 预算模型
 
-整个进程一份预算，均分给各个 shard。每个 shard 朝一条统一的水位线 demote：
+整个进程一份预算，均分给各个 shard。每个 shard 把 `used_memory` 压在一条统一的水位线下：
 
 ```
-demote target = budget·19/20 − index_reserved_bytes − stub_bytes
+demote target = budget·19/20 − index_reserved_bytes − overhead − growth reserve
 ```
 
 - **索引和视图是优先保留的固定层**——它们从不下沉（它们正是让冷行可以被便宜地找到的访问路径），所以它们的字节从预算顶上先扣掉。如果光是索引的下限就超过预算，`IDX.CREATE` / `TABLE.DECLARE` 会用具名错误**拒绝**，而不是收下一个预算装不下的索引。
-- **stub 字节同样要扣**：已冷键的 stub 是预算必须背着的 RAM，所以冷层越大，水位线越紧。当固定下限超过 19/20 线时，有效目标饱和到 0——在 `INFO` 里可见，不被隐藏。
+- **冷键只算一次，从插入那一刻起就算。**键在键空间表里的槽位和键本身的字节，不管值是热是冷都在 `used_memory` 里；demote 拿走的是值的字节，键的字节留着。目标不再把 stub 扣第二遍。当固定下限超过 19/20 线时，有效目标饱和到 0——在 `INFO` 里可见，不被隐藏。
+- **额外开销是量出来的，不是估的。**接收环、连接缓冲、分配器开销、比自报更大的索引：RSS 超过预算一半时，服务端每秒向分配器读一次实际在用的内存（kevy-alloc 自己的统计；用系统分配器的构建读 glibc 的 `mallinfo2` 或 macOS 的 zone 统计），`used_memory` 和索引下限都没覆盖的部分从目标里扣掉（`tier_overhead_bytes`）。
+- **键空间表的下一次扩容，落地之前先留出来。**表按倍数扩容；离扩容只剩最后八分之一时，先把它要增加的字节留出来，让 demote 先腾地方。直接映射的大表在搬进新表的同时把已经搬空的页还给内核，所以一次扩容只多占它新增的那部分，不会两张表同时整张驻留。
 - 19/20 这个系数是滞回带：demote 在线上方开始、线下方停止，store 不会在线附近来回震荡。
 - 下沉是**限额的**：每次 demote 调用最多 32 条记录，剩余在 shard tick 上续跑——单条 `SET` 永远不会引发一场无界的同步下沉风暴。
+
+### 预算约束的是整个进程
+
+预算约束的是**常驻内存**：RSS ≤ 预算 × 1.05，而不只是 store 自己的记账。两者之间隔着两样东西，由服务端一个独立线程处理（从不占用 shard）：
+
+- **分配器留着的已释放内存。**被 demote 的值在原处留下空洞。服务端的分配器 kevy-alloc 在 shard tick 上把不含活数据的 4 KiB 页都还给操作系统，整理过程再把值从稀疏的 span 里复制出去，让这些页也腾空（[alloc.md](alloc.md)）。用系统分配器的构建（`--no-default-features`）里，内存块释放回 glibc 的空闲链表，在分配器被要求归还整页之前一直常驻：RSS 超出实际在用的部分超过预算的 1% 时，服务端收缩堆（`malloc_trim`）；最多每秒一次；如果上一次几乎没还回整页，就等五秒再试。
+- **越线的在用内存。**如果进程实际在用的内存连续两次读数（相隔一秒）都超过预算 × 1.05——也就是 demote 已经没有可下沉的东西——每个 shard 都拒绝会让内存增长的写入，返回 `-OOM command not allowed when the process holds more memory than the tiering budget allows`，直到回落到线下。读、删除以及其他缩小内存的命令照常工作。
+
+用系统分配器时，读分配器和收缩堆都要在遍历时逐个锁住分配器的 arena（碎片多的堆上是毫秒级），所以它们在独立线程上跑，而且只在 RSS 需要时才跑；`heap_walk_us_total` 和 `heap_trim_us_total` 记录了它们的开销。嵌入式 store 不跑这个线程：嵌入进程的 RSS 属于宿主程序。
+
+实测（16 核 x86_64 Linux，系统分配器 glibc 2.41），D1 的行（五个字段，其中一个 900 字节）一千万行、3 GiB 预算、建索引之前：装载结束时的 RSS 从预算的 1.30 倍降到 0.99 倍，装载过程中的峰值从 1.30 倍降到 1.10 倍。剩下的是键空间表的最后一次翻倍：八个 shard 的表在一秒之内相继翻倍，3 GiB 预算上一下子多出 0.6 GB，靠 demote 一批行来腾地方，而这些行的内存块要等邻居也释放了，分配器才在随后几秒里陆续还回去。一千万个键时这张表占预算里的 1.2 GB。哈希负载门禁（`bench/tierrssgate.sh`，256 MiB 上 60 万行）在装载、冷读和覆盖写全程把 RSS 保持在预算的 1.00–1.05 倍，上一个版本会到 1.33 倍。
 
 ### 每个键的 RAM：热与冷
 
@@ -91,7 +104,7 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 **那 96 B 究竟是什么，决定了杠杆在哪里。** 它是**键空间条目**（`ENTRY_OVERHEAD`：内联的键单元加上那个 `Entry`），是**每一个**键无论有没有被分层都要付的——冷 stub 本身 24 B 内联、不占堆。分层能把值还回来，却永远还不回那个给值命名的键，所以**没有任何分层旋钮能移动这个数字**；能移动它的只有 store 的条目布局，而改动它意味着改动每一种工况下每一个键的代价。
 
   **256 B 时预算不是紧，而是根本守不住**：20 万条就越过 16 MB 预算，80 万条时用到 77 MB——因为降级一个 256 B 值省下的还不够它留下的 stub。窄记录要手算着定预算。
-- **算例（按模型推算，不是实测）**：10 M 行 × 约 1 KiB（约 10 GB 数据）加 2 个二级索引和存储的 VALUES 列，装进 **3 GB** 预算：stub 下限 10 M × 约 108 B ≈ 1.1 GB，索引下限 10 M ×（68 + 68 + 约 30 VALUES 字节）≈ 1.7 GB，合计 ≈ 2.8 GB ≤ 3 GB。值为 4 KiB 时，比例门禁是 ≥ 10× `data:RAM`（5 M × 4 KiB = 20 GB 对 2 GB 预算；stub 下限 ≈ 540 MB）。窄行由每键固定成本主导——在相信任何预算之前，先把 stub 下限和索引下限算一遍，这正是公式放在前面的原因。
+- **算例（按模型推算，不是实测）**：10 M 行 × 约 1 KiB（约 10 GB 数据）加 2 个二级索引和存储的 VALUES 列，装进 **4 GB** 预算：stub 下限 10 M × 约 108 B ≈ 1.1 GB，索引下限 10 M ×（键长约 12 字节时每个索引 94–105 字节 × 2 + 约 30 VALUES 字节）≈ 2.2–2.4 GB，合计 ≈ 3.3–3.5 GB ≤ 4 GB。值为 4 KiB 时，比例门禁是 ≥ 10× `data:RAM`（5 M × 4 KiB = 20 GB 对 2 GB 预算；stub 下限 ≈ 540 MB）。窄行由每键固定成本主导——在相信任何预算之前，先把 stub 下限和索引下限算一遍，这正是公式放在前面的原因。
 
 ## 冷键上的语义
 
@@ -125,10 +138,10 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 |---|---|
 | `tiering_enabled` | `1`（关闭时整段不出现） |
 | `tier_budget_bytes` | 解析后的预算（auto / 百分比 → 字节，实时） |
-| `tier_effective_target` | `budget·19/20 − reserved − stubs`，饱和到 0——0 表示光固定下限就超过了水位线 |
+| `tier_effective_target` | `budget·19/20 − reserved − overhead − growth reserve`，饱和到 0——0 表示光固定下限就超过了水位线 |
 | `cold_keys` | 当前处于 demote 状态的键数 |
 | `cold_bytes` | 这些值 demote 前的原始字节数 |
-| `stub_bytes` | 冷键 stub 占用的 RAM |
+| `stub_bytes` | 冷键 stub 占用的 RAM——估算值，已经包含在 `used_memory` 里 |
 | `index_reserved_bytes` | 从水位线里扣掉的索引 / 视图下限 |
 | `vlog_size_bytes` | value log 在磁盘上的大小 |
 | `vlog_live_bytes` | 仍被引用的字节（其余可压实） |
@@ -138,8 +151,20 @@ cold key ≈ 96 B (entry overhead) + key heap bytes     # value fully reclaimed
 | `promotions_total` | 启动以来换回的值数 |
 | `peek_preads_total` | 不 promote 的冷读次数（每个冷**行**一次） |
 | `batch_submissions_total` | 批量冷读提交次数（hydration 页） |
+| `vlog_raw_bytes` | 磁盘上各 vlog 文件里的值在压缩前的字节数 |
+| `vlog_payload_bytes` | 磁盘上压缩后的负载字节数 |
+| `vlog_frame_header_bytes` | 磁盘上每条记录的帧头（标记字节 + 原始长度） |
+| `vlog_dict_bytes` | 内存里的压缩字典，每个 vlog 文件一份 |
+| `tier_rss_line_bytes` | 预算 × 1.05，服务端把 RSS 压在它下面 |
+| `tier_refusing_writes` | 在用内存越线、正在拒绝增长型写入时为 `1` |
+| `tier_live_bytes` | 上一次读数时分配器实际在用的字节，加上在分配器之外映射的键空间表 |
+| `tier_overhead_bytes` | 其中 `used_memory` 和索引下限都没覆盖的部分，从目标里扣掉 |
+| `heap_walks_total` / `heap_walk_us_total` | 读分配器的次数和耗时 |
+| `heap_trims_total` / `heap_trimmed_bytes` / `heap_trim_us_total` | 收缩堆的次数、还回去的 RSS 和耗时 |
 
 `vlog_size_bytes / cold_bytes` 是空间放大比，验收门禁把它压在 ≤ 2.0×；`peek_preads_total` 是你验证一页 hydration 每行只付一次读、而不是每字段一次的办法。
+
+`(vlog_payload_bytes + vlog_frame_header_bytes) / vlog_raw_bytes` 是 vlog 当前所存内容（含已死记录）的压缩比。压缩之后剩下的就是这两项加上字典；负载里既有数据本身的熵，也有编码器没找到的重复，这两部分在日志内部分不开。`vlog_size_bytes` 的其余部分是记录封装：每条记录 12 字节加上键。
 
 ## 性能预期
 

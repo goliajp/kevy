@@ -81,7 +81,7 @@ cp bench/clientgate/node_redis.mjs bench/clientgate/ioredis.mjs "$NODEAPP/"
 # found in the client smoke two steps later.
 for attempt in 1 2 3; do
     (cd "$NODEAPP" && npm install --no-audit --no-fund --quiet \
-        --fetch-retries=5 redis@6.2.1 ioredis) > "$NODEAPP/npm-install.log" 2>&1 && break
+        --fetch-retries=5 redis@6.3.0 ioredis) > "$NODEAPP/npm-install.log" 2>&1 && break
     if [ "$attempt" = 3 ]; then
         echo "clientgate: FAIL — npm install failed after 3 attempts:"
         tail -20 "$NODEAPP/npm-install.log"

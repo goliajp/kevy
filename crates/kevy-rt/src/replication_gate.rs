@@ -14,7 +14,7 @@
 //!
 //! Usage:
 //!
-//! ```ignore
+//! ```
 //! let _g = kevy_rt::ReplicatedApplyGuard::enter();
 //! // dispatch frame here — any post_write_housekeeping that hits
 //! // this shard's ReplicationSource is suppressed for the duration
@@ -33,12 +33,78 @@ thread_local! {
     /// `true` while a replicated-apply scope is active on this thread.
     /// Set by [`ReplicatedApplyGuard::enter`], cleared on drop.
     static APPLYING_REPLICATED: Cell<bool> = const { Cell::new(false) };
+    /// `true` while this thread applies a record other than a primary's
+    /// frame: an AOF replay, a scope-move ingest.
+    static REPLAYING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether this thread is applying a record — replaying the AOF, applying
+/// a frame from a primary, ingesting a moved scope — rather than serving a
+/// client. An
+/// internal record verb, one kevy writes and no client may send, is
+/// accepted only then.
+///
+/// ```
+/// assert!(!kevy_rt::applying_record(), "a plain thread serves clients");
+/// let _g = kevy_rt::ReplicatedApplyGuard::enter();
+/// assert!(kevy_rt::applying_record());
+/// ```
+pub fn applying_record() -> bool {
+    APPLYING_REPLICATED.with(Cell::get) || REPLAYING.with(Cell::get)
+}
+
+/// RAII guard marking the current thread as applying a record — an AOF
+/// replay, a scope-move ingest — for the guard's life, so the internal
+/// record verbs such records carry are accepted. Nestable.
+///
+/// ```
+/// {
+///     let _g = kevy_rt::RecordApplyGuard::enter();
+///     assert!(kevy_rt::applying_record());
+/// }
+/// assert!(!kevy_rt::applying_record());
+/// ```
+#[derive(Debug)]
+pub struct RecordApplyGuard {
+    prev: bool,
+}
+
+impl RecordApplyGuard {
+    /// Enter a record-apply scope on the current thread.
+    ///
+    /// ```
+    /// let _g = kevy_rt::RecordApplyGuard::enter();
+    /// assert!(kevy_rt::applying_record());
+    /// ```
+    #[must_use = "RecordApplyGuard is RAII — drop it at scope end"]
+    pub fn enter() -> Self {
+        Self { prev: REPLAYING.with(|c| c.replace(true)) }
+    }
+}
+
+impl Drop for RecordApplyGuard {
+    fn drop(&mut self) {
+        REPLAYING.with(|c| c.set(self.prev));
+    }
 }
 
 /// RAII guard that marks the current thread as "applying a replicated
 /// frame" for the guard's lifetime. The replica runner
 /// enters this scope before each `dispatch` call so the apply doesn't
 /// re-push the frame into this shard's own backlog.
+///
+/// ```
+/// use kevy_rt::{Argv, ReplicatedApplyGuard, Store};
+/// let mut store = Store::new();
+/// let frame = Argv::from(vec![b"RPUSH".to_vec(), b"q".to_vec(), b"v".to_vec()]);
+/// {
+///     // this write came from upstream: apply it without feeding it back downstream
+///     let _applying = ReplicatedApplyGuard::enter();
+///     store.rpush(&frame[1], &[&frame[2]])?;
+/// } // the scope ends and later writes replicate as usual
+/// assert_eq!(store.llen(b"q")?, 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct ReplicatedApplyGuard {
     /// Prior gate value — supports nesting (caller can enter a second
@@ -73,6 +139,16 @@ pub(crate) fn is_applying_replicated() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replay_applies_records_and_ends_with_its_guard() {
+        assert!(!applying_record());
+        {
+            let _g = RecordApplyGuard::enter();
+            assert!(applying_record());
+        }
+        assert!(!applying_record());
+    }
 
     #[test]
     fn default_is_off() {

@@ -113,6 +113,23 @@ fn zrange_by_score_inclusive() {
 }
 
 #[test]
+fn zrange_by_score_excl_honors_each_bound() {
+    use kevy_store::ScoreBound;
+    let s = s();
+    s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]).unwrap();
+    let b = |value, exclusive| {
+        if exclusive { ScoreBound::exclusive(value) } else { ScoreBound::inclusive(value) }
+    };
+    let names = |r: Vec<(Vec<u8>, f64)>| r.into_iter().map(|(m, _)| m).collect::<Vec<_>>();
+    assert_eq!(
+        names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, false)).unwrap()),
+        [b"b", b"c"]
+    );
+    assert_eq!(names(s.zrange_by_score_excl(b"z", b(1.0, true), b(3.0, true)).unwrap()), [b"b"]);
+    assert!(s.zrange_by_score_excl(b"z", b(2.0, true), b(2.0, false)).unwrap().is_empty());
+}
+
+#[test]
 fn zincrby_atomic() {
     let s = s();
     s.zadd(b"z", &[(1.0, b"x")]).unwrap();
@@ -182,24 +199,24 @@ fn hrandfield_every_form() {
     s.hset(b"h", &[(b"f1", b"v1"), (b"f2", b"v2"), (b"f3", b"v3")]).unwrap();
 
     // No count: one field.
-    assert_eq!(s.hrandfield(b"h", 1, false).unwrap().len(), 1);
+    assert_eq!(s.hrandfield(b"h", 1).unwrap().len(), 1);
 
     // Positive count is distinct and capped at the field count.
-    let got = s.hrandfield(b"h", 10, false).unwrap();
+    let got = s.hrandfield(b"h", 10).unwrap();
     assert_eq!(got.len(), 3, "a count past the end is capped");
-    let names: std::collections::HashSet<_> = got.iter().map(|(f, _)| f.clone()).collect();
+    let names: std::collections::HashSet<_> = got.iter().cloned().collect();
     assert_eq!(names.len(), 3, "a positive count must not repeat");
 
     // Negative count returns exactly |count|, repeats allowed.
-    assert_eq!(s.hrandfield(b"h", -7, false).unwrap().len(), 7);
+    assert_eq!(s.hrandfield(b"h", -7).unwrap().len(), 7);
 
     // WITHVALUES pairs each field with its own value.
-    for (f, v) in s.hrandfield(b"h", 3, true).unwrap() {
+    for (f, v) in s.hrandfield_with_values(b"h", 3).unwrap() {
         assert_eq!(Some(v), s.hget(b"h", &f).unwrap(), "wrong pairing for {f:?}");
     }
 
     // A missing key is empty, not an error.
-    assert!(s.hrandfield(b"absent", 2, false).unwrap().is_empty());
+    assert!(s.hrandfield(b"absent", 2).unwrap().is_empty());
 }
 
 /// The embedded HRANDFIELD dispatch arm's refusals.

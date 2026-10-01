@@ -3,8 +3,7 @@
 //! These compose existing `kevy_store::Store` primitives at the
 //! embedded layer:
 //!
-//! - `copy` is `get` + (optional) read TTL + `set` on dst + `expire`
-//!   on dst.
+//! - `copy` clones the source's value and TTL and places them at dst.
 //! - `randomkey` collects matching keys and picks one by index.
 //! - `unlink` is an alias for `del`; kevy has no async deletion, so
 //!   sync delete is the unblocking semantic.
@@ -13,80 +12,87 @@
 
 use crate::KevyResult;
 
+use crate::CopyMode;
 use crate::store::ensure_writable;
-use crate::store::{Store, commit_write};
+use crate::store::{Inner, Store, commit_write};
 
 impl Store {
-    /// `COPY src dst [REPLACE]` — copy `src`'s value (and TTL if any)
-    /// to `dst`. Returns `true` when the copy happened.
+    /// `COPY src dst [REPLACE]` — copy `src`'s value, of any type, and
+    /// its remaining TTL to `dst`. Returns `true` when the copy happened.
     ///
     /// Semantics:
     /// - `false` if `src` doesn't exist.
-    /// - `false` if `dst` exists and `replace = false`.
-    /// - Preserves source TTL on the destination via `pexpireat`.
-    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> KevyResult<bool> {
+    /// - `false` if `dst` exists and `mode` is [`CopyMode::IfAbsent`].
+    /// - A source with a TTL gives the destination the same deadline.
+    ///
+    /// ```
+    /// use kevy_embedded::{Config, CopyMode, Store};
+    ///
+    /// let s = Store::open(Config::default())?;
+    /// s.set(b"a", b"1")?;
+    /// assert!(s.copy(b"a", b"b", CopyMode::IfAbsent)?);
+    /// assert_eq!(s.get(b"b")?.as_deref(), Some(&b"1"[..]));
+    /// s.hset(b"h", &[(b"f", b"v")])?;
+    /// assert!(s.copy(b"h", b"b", CopyMode::Replace)?);
+    /// assert_eq!(s.hget(b"b", b"f")?.as_deref(), Some(&b"v"[..]));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
+    pub fn copy(&self, src: &[u8], dst: &[u8], mode: CopyMode) -> KevyResult<bool> {
         ensure_writable(self)?;
-        // Read source under its own shard lock.
-        let src_val = match self.get(src)? {
-            Some(v) => v,
-            None => return Ok(false),
+        // the source's lock is released before the destination's is
+        // taken: the two keys may live on one shard
+        let cloned = self.wshard(src).store.clone_with_ttl(src);
+        let Some((value, ttl_ms)) = cloned else {
+            return Ok(false);
         };
-        // Sample the source's TTL (ms since UNIX epoch) BEFORE the
-        // write — captures the deadline that should survive the copy.
-        let src_ttl_ms = self.ttl_ms(src);
-        // Veto if dst exists and replace is false.
-        if !replace {
-            // Use a fresh wshard on dst so this works cross-shard.
-            let mut g = self.wshard(dst);
-            if g.store.key_exists(dst) {
-                return Ok(false);
-            }
-            // AOF-log first (SET dst <value>), then write dst — both
-            // under dst's shard lock. Log-before-apply avoids cloning
-            // the value; an AOF error leaves memory untouched.
-            commit_write(&mut g, &[b"SET", dst, &src_val])?;
-            g.store.set(dst, src_val, None, false, false);
-        } else {
-            let mut g = self.wshard(dst);
-            commit_write(&mut g, &[b"SET", dst, &src_val])?;
-            g.store.set(dst, src_val, None, false, false);
+        let mut g = self.wshard(dst);
+        let replaced = g.store.key_exists(dst);
+        if replaced && !matches!(mode, CopyMode::Replace) {
+            return Ok(false);
         }
-        // Re-attach absolute deadline if the source had one.
-        if src_ttl_ms > 0 {
-            let unix_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0)
-                .saturating_add(src_ttl_ms as u64);
-            self.pexpireat(dst, unix_ms)?;
-        }
-        // The dst SET is AOF-logged above under dst's shard lock; the
-        // TTL re-attach goes through the `pexpireat` facade which logs
-        // its own PEXPIREAT. (An earlier regression wrote the dst value
-        // to memory only, so it vanished on reopen.)
+        let frames = placed_frames(&g, dst, &value, ttl_ms);
+        g.store.put_with_ttl(dst.to_vec(), value, ttl_ms);
+        commit_copy(&mut g, [b"COPY", src, dst], frames, replaced)?;
         Ok(true)
     }
 
     /// `RANDOMKEY` — return a randomly-chosen existing key, or
     /// `None` when the keyspace is empty.
     ///
-    /// Implementation: snapshot all keys via `collect_keys`, then
-    /// pick a uniform index. For large keyspaces this is O(N); a
-    /// future ship can add a `key_at(rank)` Store method for O(1)
-    /// random pick.
+    /// A shard is drawn in proportion to how many keys it holds, and that
+    /// shard picks from a random point in its table, so the cost does not
+    /// grow with the keyspace.
+    ///
+    /// ```
+    /// # use kevy_embedded::{Config, Store};
+    /// let s = Store::open(Config::default())?;
+    /// assert_eq!(s.randomkey(), None);
+    /// s.set(b"only", b"1")?;
+    /// assert_eq!(s.randomkey(), Some(b"only".to_vec()));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub fn randomkey(&self) -> Option<Vec<u8>> {
-        let keys = self.collect_keys(None, None);
-        if keys.is_empty() {
+        let sizes: Vec<usize> =
+            self.shards.iter().map(|sh| crate::store_glue::lock_read(sh).store.dbsize()).collect();
+        let total: usize = sizes.iter().sum();
+        if total == 0 {
             return None;
         }
-        // Cheap PRNG via nanosecond clock — embedded in-process so
-        // this just needs decent distribution, not crypto strength.
-        let idx = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as usize)
-            .unwrap_or(0)
-            % keys.len();
-        Some(keys[idx].clone())
+        let mut draw = {
+            let mut g = crate::store_glue::lock_write(&self.shards[0]);
+            g.store.rand_draw() as usize % total
+        };
+        for (i, n) in sizes.iter().enumerate() {
+            if draw < *n {
+                if let Some(k) = crate::store_glue::lock_write(&self.shards[i]).store.random_key() {
+                    return Some(k);
+                }
+                break;
+            }
+            draw -= n;
+        }
+        // the shard drawn emptied since it was counted: any key will do
+        self.shards.iter().find_map(|sh| crate::store_glue::lock_write(sh).store.random_key())
     }
 
     /// `UNLINK key [key ...]` — alias for [`Self::del`]. In Redis
@@ -196,4 +202,51 @@ fn fnv(h: &mut u64, bytes: &[u8]) {
         *h ^= u64::from(b);
         *h = h.wrapping_mul(FNV_PRIME);
     }
+}
+
+/// The commands that rebuild a copied value at `dst`, when this shard
+/// records its writes anywhere
+#[cfg(feature = "persist")]
+fn placed_frames(
+    g: &Inner,
+    dst: &[u8],
+    value: &kevy_store::Value,
+    ttl_ms: Option<u64>,
+) -> Option<Vec<u8>> {
+    crate::store_glue::records_writes(g)
+        .then(|| kevy_persist::value_as_v1_frames(dst, value, ttl_ms))
+}
+
+#[cfg(not(feature = "persist"))]
+fn placed_frames(_: &Inner, _: &[u8], _: &kevy_store::Value, _: Option<u64>) -> Option<Vec<u8>> {
+    None
+}
+
+/// Record a copy as the commands that rebuild its value, after a DEL
+/// when it replaced a key, so a replay does not merge into what was
+/// there; with nothing to record into, the argv runs the commit's other
+/// steps
+fn commit_copy(
+    g: &mut Inner,
+    argv: [&[u8]; 3],
+    frames: Option<Vec<u8>>,
+    replaced: bool,
+) -> KevyResult<()> {
+    let Some(frames) = frames else {
+        return commit_write(g, &argv);
+    };
+    if replaced {
+        commit_write(g, &[b"DEL", argv[2]])?;
+    }
+    let (mut pos, mut cmd) = (0, kevy_resp::Argv::default());
+    while pos < frames.len() {
+        cmd.clear();
+        pos += kevy_resp::parse_command_into(&frames[pos..], &mut cmd)
+            .ok()
+            .flatten()
+            .expect("the value serializer writes whole commands");
+        let parts: Vec<&[u8]> = cmd.iter().collect();
+        commit_write(g, &parts)?;
+    }
+    Ok(())
 }

@@ -71,25 +71,12 @@ pub fn parse_date(s: &str) -> Option<i64> {
     let y: i64 = it.next()?.parse().ok()?;
     let m: u32 = it.next()?.parse().ok()?;
     let d: u32 = it.next()?.parse().ok()?;
-    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+    if it.next().is_some() {
         return None;
     }
-    // `epoch_from_civil` multiplies the day count by 86,400, so a year of
-    // twelve digits overflows inside the call — before any check below
-    // could see it. This pre-bound is generous (year one million) and
-    // exists only to make the arithmetic that follows safe to perform;
-    // the real limit is the one derived below.
-    if !(-1_000_000..=1_000_000).contains(&y) {
-        return None;
-    }
-    let c = kevy_time::Civil { y, m, d, h: 0, min: 0, s: 0 };
-    let secs = kevy_time::epoch_from_civil(c);
-    // Round-trip check rejects Feb 30 and friends.
-    let back = kevy_time::civil_from_epoch(secs);
-    if (back.y, back.m, back.d) != (y, m, d) {
-        return None;
-    }
-    let days = secs / 86_400;
+    // `from_date` refuses Feb 30 and friends, and any year whose midnight
+    // an i64 epoch cannot hold
+    let days = kevy_time::Civil::from_date(y, m, d)?.to_epoch() / 86_400;
     // A date whose microseconds do not fit is not representable, whatever
     // the calendar says: `parse_timestamp` and four comparison and
     // formatting sites all multiply a `Date` by MICROS_PER_DAY. Deriving
@@ -145,8 +132,16 @@ pub fn parse_interval(s: &str) -> Option<(i64, i64, i64)> {
 pub fn render_timestamp(us: i64) -> String {
     let secs = us.div_euclid(MICROS_PER_SEC);
     let frac = us.rem_euclid(MICROS_PER_SEC);
-    let c = kevy_time::civil_from_epoch(secs);
-    let mut out = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", c.y, c.m, c.d, c.h, c.min, c.s);
+    let c = kevy_time::Civil::from_epoch(secs);
+    let mut out = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        c.year(),
+        c.month(),
+        c.day(),
+        c.hour(),
+        c.minute(),
+        c.second()
+    );
     if frac != 0 {
         out.push_str(format!(".{frac:06}").trim_end_matches('0'));
     }
@@ -162,8 +157,8 @@ pub fn render_timestamp(us: i64) -> String {
 /// assert_eq!(render_date(0), "1970-01-01");
 /// ```
 pub fn render_date(days: i64) -> String {
-    let c = kevy_time::civil_from_epoch(days * 86_400);
-    format!("{:04}-{:02}-{:02}", c.y, c.m, c.d)
+    let c = kevy_time::Civil::from_epoch(days * 86_400);
+    format!("{:04}-{:02}-{:02}", c.year(), c.month(), c.day())
 }
 
 /// PG's interval output: `N year(s) N mon(s) N day(s) HH:MM:SS`, each
@@ -219,7 +214,7 @@ pub(crate) fn to_char(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         [_, _] => return Err(ScalarError::Type { func: FUNC, arg: 0 }),
         _ => return Err(ScalarError::Arity { func: FUNC, got: args.len() }),
     };
-    let c = kevy_time::civil_from_epoch(us.div_euclid(MICROS_PER_SEC));
+    let c = kevy_time::Civil::from_epoch(us.div_euclid(MICROS_PER_SEC));
     let frac = us.rem_euclid(MICROS_PER_SEC);
     let mut out = String::with_capacity(tpl.len());
     let mut rest = tpl;
@@ -265,13 +260,13 @@ const MONTHS: [&str; 12] = [
 /// `AM`/`PM` both render the ACTUAL meridiem; the template letter only
 /// picks the style.
 fn to_char_token(rest: &str, c: &kevy_time::Civil, frac: i64) -> Option<(String, usize)> {
-    let month = MONTHS[(c.m as usize).saturating_sub(1).min(11)];
+    let month = MONTHS[c.month() as usize - 1];
     let hit = if rest.starts_with("YYYY") {
-        (format!("{:04}", c.y), 4)
+        (format!("{:04}", c.year()), 4)
     } else if rest.starts_with("HH24") {
-        (format!("{:02}", c.h), 4)
+        (format!("{:02}", c.hour()), 4)
     } else if rest.starts_with("HH12") {
-        let h12 = match c.h % 12 {
+        let h12 = match c.hour() % 12 {
             0 => 12,
             h => h,
         };
@@ -281,21 +276,21 @@ fn to_char_token(rest: &str, c: &kevy_time::Civil, frac: i64) -> Option<(String,
     } else if rest.starts_with("Mon") {
         (month[..3].to_string(), 3)
     } else if rest.starts_with("MM") {
-        (format!("{:02}", c.m), 2)
+        (format!("{:02}", c.month()), 2)
     } else if rest.starts_with("DD") {
-        (format!("{:02}", c.d), 2)
+        (format!("{:02}", c.day()), 2)
     } else if rest.starts_with("MI") {
-        (format!("{:02}", c.min), 2)
+        (format!("{:02}", c.minute()), 2)
     } else if rest.starts_with("MS") {
         (format!("{:03}", frac / 1_000), 2)
     } else if rest.starts_with("SS") {
-        (format!("{:02}", c.s), 2)
+        (format!("{:02}", c.second()), 2)
     } else if rest.starts_with("US") {
         (format!("{frac:06}"), 2)
     } else if rest.starts_with("YY") {
-        (format!("{:02}", c.y.rem_euclid(100)), 2)
+        (format!("{:02}", c.year().rem_euclid(100)), 2)
     } else if rest.starts_with("AM") || rest.starts_with("PM") {
-        (if c.h < 12 { "AM" } else { "PM" }.to_string(), 2)
+        (if c.hour() < 12 { "AM" } else { "PM" }.to_string(), 2)
     } else {
         return None;
     };
@@ -313,9 +308,9 @@ pub(crate) fn date_format(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         [_, _] => return Err(ScalarError::Type { func: FUNC, arg: 0 }),
         _ => return Err(ScalarError::Arity { func: FUNC, got: args.len() }),
     };
-    let c = kevy_time::civil_from_epoch(us.div_euclid(MICROS_PER_SEC));
+    let c = kevy_time::Civil::from_epoch(us.div_euclid(MICROS_PER_SEC));
     let frac = us.rem_euclid(MICROS_PER_SEC);
-    let month = MONTHS[(c.m as usize).saturating_sub(1).min(11)];
+    let month = MONTHS[c.month() as usize - 1];
     let mut out = String::with_capacity(tpl.len());
     let mut it = tpl.chars();
     while let Some(ch) = it.next() {
@@ -324,15 +319,15 @@ pub(crate) fn date_format(args: &[Scalar]) -> Result<Scalar, ScalarError> {
             continue;
         }
         match it.next() {
-            Some('Y') => out.push_str(&format!("{:04}", c.y)),
-            Some('m') => out.push_str(&format!("{:02}", c.m)),
-            Some('d') => out.push_str(&format!("{:02}", c.d)),
-            Some('H') => out.push_str(&format!("{:02}", c.h)),
-            Some('i') => out.push_str(&format!("{:02}", c.min)),
-            Some('s') => out.push_str(&format!("{:02}", c.s)),
+            Some('Y') => out.push_str(&format!("{:04}", c.year())),
+            Some('m') => out.push_str(&format!("{:02}", c.month())),
+            Some('d') => out.push_str(&format!("{:02}", c.day())),
+            Some('H') => out.push_str(&format!("{:02}", c.hour())),
+            Some('i') => out.push_str(&format!("{:02}", c.minute())),
+            Some('s') => out.push_str(&format!("{:02}", c.second())),
             Some('M') => out.push_str(month),
             Some('b') => out.push_str(&month[..3]),
-            Some('p') => out.push_str(if c.h < 12 { "AM" } else { "PM" }),
+            Some('p') => out.push_str(if c.hour() < 12 { "AM" } else { "PM" }),
             Some('f') => out.push_str(&format!("{frac:06}")),
             Some('%') => out.push('%'),
             _ => {
@@ -370,5 +365,18 @@ pub(crate) fn from_unixtime(args: &[Scalar]) -> Result<Scalar, ScalarError> {
         }
         [_, ..] => Err(ScalarError::Type { func: FUNC, arg: 0 }),
         _ => Err(ScalarError::Arity { func: FUNC, got: args.len() }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_date_needs_exactly_three_numeric_parts() {
+        for bad in ["", "y-01-01", "2024", "2024-mm-01", "2024-01", "2024-01-dd", "2024-01-01-05"] {
+            assert_eq!(parse_date(bad), None, "{bad:?}");
+        }
+        assert_eq!(parse_date(" 1970-01-02 "), Some(1));
     }
 }

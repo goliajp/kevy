@@ -4,7 +4,8 @@
 //! came from the same place. Forty-two test files each carried their own
 //! copy of:
 //!
-//! ```ignore
+//! ```
+//! # #[allow(dead_code)]
 //! fn free_port() -> u16 {
 //!     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 //! }
@@ -37,6 +38,14 @@
 //! attempts and carried on. That is the more important half. A silent
 //! failure to bind is what turned a port collision into a test asserting
 //! against someone else's data.
+//!
+//! ```
+//! let port = kevy_testnet::free_port();
+//! let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+//! kevy_testnet::assert_listening(port, "the example server");
+//! assert_eq!(server.local_addr()?.port(), port);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 // Panicking IS this crate's product. It hands tests a port and the proof a
 // server took it; `assert_listening` says so in its name. A `Result` here
@@ -48,16 +57,22 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
-/// Ports per process block. Wide enough that a test binary never wraps
-/// into a neighbour's block during one run.
-const BLOCK: u16 = 64;
+mod mock;
+pub use mock::read_request;
+
+/// Ports per process block. The counter wraps inside the block, and a
+/// wrapped offset can name a port handed out moments ago that its server
+/// has not bound yet — both probes read that port as free. At 64 the
+/// replication tests drew 69 in one run and collided with themselves; the
+/// block is sized so no test binary comes near it.
+const BLOCK: u16 = 512;
 /// First port of the first block. Above the registered range and below
 /// the ephemeral range Linux hands out by default (32768+), so this
 /// scheme and the kernel's own allocator never draw from the same pool.
 const FLOOR: u16 = 20_000;
 /// How many blocks the space is divided into. `FLOOR + BLOCKS * BLOCK`
 /// must stay under 32768.
-const BLOCKS: u16 = 190;
+const BLOCKS: u16 = 24;
 
 /// The listener that proves this block is ours, held for the life of the
 /// process, and the block's base.
@@ -108,6 +123,16 @@ static NEXT: AtomicU16 = AtomicU16::new(1); // 0 is the anchor
 /// server does the binding, and the moment between this returning and
 /// that happening belongs to nobody — so pair it with [`assert_listening`]
 /// and a lost race becomes a clear failure instead of a strange one.
+///
+/// ```
+/// let a = kevy_testnet::free_port();
+/// let b = kevy_testnet::free_port();
+/// assert_ne!(a, b, "the counter never repeats a port");
+/// let server = std::net::TcpListener::bind(("127.0.0.1", a))?;
+/// kevy_testnet::assert_listening(a, "server on a");
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn free_port() -> u16 {
     let base = block_base();
     for _ in 0..BLOCK * 4 {
@@ -116,14 +141,41 @@ pub fn free_port() -> u16 {
             continue; // never the anchor
         }
         let p = base + off;
-        if TcpListener::bind(("127.0.0.1", p)).is_ok() {
+        if nobody_listens(p) {
             return p;
         }
     }
     panic!("kevy-testnet: no free port in this process's block {base}..{}", base + BLOCK)
 }
 
+/// Whether a connection to `port` is refused, i.e. nothing listens there.
+///
+/// Probing by binding a listener, as this once did, can hold the port it
+/// probes. On macOS a socket is created first and marked close-on-exec a
+/// moment later; a test thread that starts a program in that moment hands the
+/// program the probe, which then keeps the port for the program's lifetime.
+/// The server given the port fails to bind, and `assert_listening` connects to
+/// the leaked probe instead and passes. A refused connect leaks nothing that
+/// holds `port`.
+fn nobody_listens(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    matches!(
+        TcpStream::connect_timeout(&addr, Duration::from_millis(200)),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+    )
+}
+
 /// Wait until something accepts on `port`. `true` if it did.
+///
+/// ```
+/// use std::time::Duration;
+/// let port = kevy_testnet::free_port();
+/// assert!(!kevy_testnet::wait_listening(port, Duration::from_millis(50)));
+/// let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// assert!(kevy_testnet::wait_listening(port, Duration::from_secs(5)));
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn wait_listening(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -142,10 +194,44 @@ pub fn wait_listening(port: u16, timeout: Duration) -> bool {
 /// and "the server never bound" left by the same door. The failure then
 /// surfaced later, somewhere else, as a connection refused or — worse —
 /// as an assertion about another server's data.
+///
+/// ```
+/// let port = kevy_testnet::free_port();
+/// let server = std::net::TcpListener::bind(("127.0.0.1", port))?;
+/// // returns quietly because the listener above accepts
+/// kevy_testnet::assert_listening(port, "the listener above");
+/// # drop(server);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn assert_listening(port: u16, what: &str) {
-    if !wait_listening(port, Duration::from_secs(10)) {
+    assert_listening_within(port, what, Duration::from_secs(10));
+}
+
+/// `base` scaled by `KEVY_TEST_PATIENCE` (1 when unset), for waits on
+/// background work: an instrumented or heavily loaded run is slower by a
+/// factor, and a fixed budget that holds on a quiet box fails there.
+///
+/// ```
+/// let d = kevy_testnet::patience(std::time::Duration::from_secs(4));
+/// assert!(d >= std::time::Duration::from_secs(4) || std::env::var("KEVY_TEST_PATIENCE").is_ok());
+/// ```
+pub fn patience(base: Duration) -> Duration {
+    let factor: f64 =
+        std::env::var("KEVY_TEST_PATIENCE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    base.mul_f64(factor)
+}
+
+/// [`assert_listening`] with a caller-chosen budget.
+///
+/// ```should_panic
+/// // nothing listens on a port this process just drew and never bound
+/// let port = kevy_testnet::free_port();
+/// kevy_testnet::assert_listening_within(port, "nobody", std::time::Duration::from_millis(50));
+/// ```
+pub fn assert_listening_within(port: u16, what: &str, budget: Duration) {
+    if !wait_listening(port, budget) {
         panic!(
-            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within 10s. \
+            "kevy-testnet: {what} never accepted on 127.0.0.1:{port} within {budget:?}. \
              Either it failed to start, or another process took the port between \
              free_port() handing it out and {what} binding it."
         );
@@ -158,6 +244,15 @@ pub fn assert_listening(port: u16, what: &str) {
 /// dropped them together, which widens the window rather than closing it:
 /// every one of the `n` is exposed from the moment it is read until the
 /// last server binds.
+///
+/// ```
+/// let ports = kevy_testnet::free_ports(3);
+/// assert_eq!(ports.len(), 3);
+/// let mut unique = ports.clone();
+/// unique.sort_unstable();
+/// unique.dedup();
+/// assert_eq!(unique.len(), 3, "all distinct");
+/// ```
 pub fn free_ports(n: usize) -> Vec<u16> {
     (0..n).map(|_| free_port()).collect()
 }
@@ -168,6 +263,16 @@ pub fn free_ports(n: usize) -> Vec<u16> {
 ///
 /// Panics if `width` exceeds the block, which is a caller asking for more
 /// than this scheme can promise rather than a transient failure.
+///
+/// ```
+/// let base = kevy_testnet::free_port_block(2);
+/// // base, base + 1 and base + 2 are all bindable right now
+/// let held: Vec<_> = (0..=2)
+///     .map(|i| std::net::TcpListener::bind(("127.0.0.1", base + i)))
+///     .collect::<Result<_, _>>()?;
+/// assert_eq!(held.len(), 3);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn free_port_block(width: usize) -> u16 {
     assert!(
         width < BLOCK as usize,

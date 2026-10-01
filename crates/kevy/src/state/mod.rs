@@ -21,7 +21,7 @@ mod replication;
 mod scope;
 mod shard;
 
-pub(crate) use catalogs::CatalogState;
+pub(crate) use catalogs::{CatalogBase, CatalogChange, CatalogState};
 pub(crate) use election::ElectionState;
 pub(crate) use obs::{ObsState, ReplShardView, ShardStats, Totals};
 pub(crate) use progress::ReplicaProgress;
@@ -36,10 +36,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use kevy_config::Config;
+use kevy_scope::OwnershipError;
 
 /// Everything the server knows that is not per-shard keyspace data.
 /// Built once (by [`crate::serve`] or an embedder) and shared across
 /// shards behind an `Arc`.
+///
+/// ```
+/// use std::sync::Arc;
+/// let mut cfg = kevy_config::Config::default();
+/// cfg.server.port = 7000;
+/// let state = Arc::new(kevy::RuntimeState::new(Arc::new(cfg), "", 1)?);
+/// // every shard's command set shares the one state
+/// let kevy = kevy::KevyCommands::with_state(Arc::clone(&state));
+/// assert_eq!(kevy.state().config().server.port, 7000);
+/// # Ok::<(), kevy::OwnershipError>(())
+/// ```
 #[derive(Debug)]
 pub struct RuntimeState {
     /// The live config. Hot-swapped by `CONFIG SET` via
@@ -67,6 +79,8 @@ pub struct RuntimeState {
     pub(crate) scope: ScopeState,
     pub(crate) catalogs: CatalogState,
     pub(crate) obs: ObsState,
+    /// What the memory guard found (see `crate::mem_guard`).
+    pub(crate) mem: crate::mem_guard::MemGuard,
     /// Replication plane: inbox senders, runner fleet, upstream slot
     /// and the availability flags. `Arc` so narrow long-lived captures
     /// (the elect topology callback, the FAILOVER handover thread)
@@ -93,11 +107,23 @@ impl RuntimeState {
     /// Build the state for an explicit config. `data_dir` is the
     /// sidecar/persistence root (pass an empty path to disable sidecar
     /// persistence); `nshards` must match the runtime this state will
-    /// serve. Returns `Err(msg)` when `[cluster] scopes` fails the
-    /// linter — bad scope config fails at construction, not at the
-    /// first wrong-shard write.
-    pub fn new(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, String> {
-        let mut state = Self::build(cfg, data_dir, nshards)?;
+    /// serve. Returns the [`OwnershipError`] when `[cluster] scopes`
+    /// fails the linter — bad scope config fails at construction, not
+    /// at the first wrong-shard write.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// let state = kevy::RuntimeState::new(Arc::new(kevy_config::Config::default()), "", 1)?;
+    /// let kevy = kevy::KevyCommands::with_state(Arc::new(state));
+    /// # let _ = kevy;
+    /// # Ok::<(), kevy::OwnershipError>(())
+    /// ```
+    pub fn new(
+        cfg: Arc<Config>,
+        data_dir: impl Into<PathBuf>,
+        nshards: usize,
+    ) -> Result<Self, OwnershipError> {
+        let mut state = Self::build(cfg, data_dir.into(), nshards)?;
         *state.config_explicit.get_mut() = true;
         Ok(state)
     }
@@ -110,7 +136,7 @@ impl RuntimeState {
             .expect("Config::default() declares no scopes")
     }
 
-    fn build(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, String> {
+    fn build(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, OwnershipError> {
         let replication = Arc::new(ReplicationState::new(
             nshards,
             cfg.replication.single_source,
@@ -121,6 +147,7 @@ impl RuntimeState {
             election: ElectionState::new(nshards),
             catalogs: CatalogState::new(),
             obs: ObsState::new(&cfg.audit.log_path, nshards),
+            mem: crate::mem_guard::MemGuard::default(),
             control_epoch: replication.control_epoch_handle(),
             replication,
             config: RwLock::new(cfg),
@@ -242,9 +269,19 @@ pub(crate) struct Ctx<'a> {
 }
 
 /// kevy's command set, plugged into the `kevy-rt` runtime: the shared
-/// [`RuntimeState`] plus this shard's private [`ShardCtx`]. The
+/// [`RuntimeState`] plus this shard's private context. The
 /// runtime clones one `KevyCommands` per shard; the manual [`Clone`]
 /// shares the state Arc and rebuilds the shard zone empty.
+///
+/// ```
+/// use kevy::{Argv, KevyCommands, KeyspaceStore};
+/// let kevy = KevyCommands::new();
+/// let shard = kevy.clone();
+/// assert!(std::sync::Arc::ptr_eq(kevy.state(), shard.state()), "clones share the state");
+/// let mut store = KeyspaceStore::new();
+/// let ping = Argv::from(vec![b"PING".to_vec()]);
+/// assert_eq!(shard.dispatch(&mut store, &ping), b"+PONG\r\n");
+/// ```
 #[derive(Debug)]
 pub struct KevyCommands {
     state: Arc<RuntimeState>,
@@ -384,5 +421,13 @@ mod tests {
         let c = KevyCommands::sharded(4);
         assert_eq!(c.state.config().server.threads, 4);
         assert!(!c.state.config_is_explicit());
+    }
+
+    #[test]
+    fn a_config_whose_scopes_overlap_is_refused_at_construction() {
+        let mut cfg = Config::default();
+        cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("p:=w1,p:=w2").unwrap();
+        let built = RuntimeState::new(Arc::new(cfg), "", 1);
+        assert!(matches!(built, Err(OwnershipError::DuplicatePrefix { .. })), "two writers for p:");
     }
 }

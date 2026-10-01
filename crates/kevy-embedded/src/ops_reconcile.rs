@@ -28,21 +28,106 @@ use std::collections::HashSet;
 const MAX_SAMPLES: usize = 1000;
 
 /// The result of [`Snapshot::reconcile`].
-#[derive(Debug, Default, Clone)]
+///
+/// ```
+/// assert!(kevy_embedded::ReconcileReport::default().is_clean());
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ReconcileReport {
     /// Rows visited under the row prefix.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// assert_eq!(report.rows, 3);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub rows: u64,
     /// Distinct derived keys the rows imply.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// assert_eq!(report.expected, 3);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub expected: u64,
     /// Implied by a row, absent from the store — lost derived state.
-    /// Exact count; `missing` holds up to [`MAX_SAMPLES`] examples.
+    /// Exact count; `missing` holds up to 1000 examples.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// assert_eq!(report.missing_count, 2);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub missing_count: u64,
     /// Example missing keys.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// let mut missing = report.missing.clone();
+    /// missing.sort();
+    /// assert_eq!(missing, [b"idx:user:2".to_vec(), b"idx:user:3".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub missing: Vec<Vec<u8>>,
     /// Present under a derived prefix but implied by no row — a claim
     /// or link left behind. Exact count; `orphaned` holds examples.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// assert_eq!(report.orphaned_count, 1);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub orphaned_count: u64,
     /// Example orphaned keys.
+    ///
+    /// ```
+    /// # let s = kevy_embedded::Store::open(kevy_embedded::Config::default())?;
+    /// # for k in [&b"user:1"[..], b"user:2", b"user:3"] {
+    /// #     s.hset(k, &[(b"name", b"x")])?;
+    /// # }
+    /// # s.set(b"idx:user:1", b"")?; // user:2 and user:3 lost theirs
+    /// # s.set(b"idx:user:9", b"")?; // left behind by a deleted row
+    /// # let report = s.snapshot().reconcile(b"user:", &[b"idx:"], |key, _| vec![[&b"idx:"[..], key].concat()]);
+    /// // three rows, each implying `idx:<key>`; idx:user:1 exists, idx:user:9 has no row
+    /// assert_eq!(report.orphaned, [b"idx:user:9".to_vec()]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub orphaned: Vec<Vec<u8>>,
 }
 
@@ -79,15 +164,20 @@ impl Snapshot {
     /// The snapshot is frozen, so a clean system reports clean no
     /// matter what writers are doing.
     ///
-    /// ```no_run
+    /// ```
     /// # use kevy_embedded::{Store, Config};
-    /// # let store = Store::open(Config::default()).unwrap();
+    /// # let store = Store::open(Config::default())?;
+    /// store.set(b"user:1", b"ann")?;
+    /// store.set(b"email:user:1", b"1")?; // the one key user:1 implies
+    /// store.set(b"dept:gone", b"1")?;    // implied by no row
     /// let report = store.snapshot().reconcile(
     ///     b"user:",
     ///     &[b"email:", b"dept:"],
     ///     |key, _row| vec![[b"email:".as_slice(), key].concat()],
     /// );
-    /// assert!(report.is_clean());
+    /// assert!(!report.is_clean());
+    /// assert_eq!((report.missing_count, report.orphaned), (0, vec![b"dept:gone".to_vec()]));
+    /// # Ok::<(), kevy_embedded::KevyError>(())
     /// ```
     pub fn reconcile(
         &self,

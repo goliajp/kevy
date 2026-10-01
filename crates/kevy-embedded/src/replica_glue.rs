@@ -25,6 +25,7 @@ pub(crate) fn spawn_replica_runner(
         config.replica_id.clone(),
         config.replica_reconnect_min,
         config.replica_reconnect_max,
+        config.link_security.replica.clone(),
     ))
 }
 

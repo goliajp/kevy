@@ -5,8 +5,40 @@
 
 /// Type tag a [`ColdRef`] carries so `TYPE` / SCAN's `TYPE` filter / the
 /// WRONGTYPE precheck answer with zero IO.
+///
+/// ```
+/// use kevy_store::{COLD_TAG_HASH, COLD_TAG_STRING, SetCondition, Store, StoreError};
+/// # let dir = std::env::temp_dir().join(format!("kevy-doc-tag-string-{}", std::process::id()));
+/// assert_ne!(COLD_TAG_STRING, COLD_TAG_HASH);
+/// let mut s = Store::new();
+/// s.enable_tiering(&dir, 1 << 20)?;
+/// s.set(b"k", vec![b'x'; 4096], None, SetCondition::Always);
+/// s.set_tier_budget(1);
+/// s.demote_to_watermark();
+/// // the string tag answers TYPE and refuses a hash read with no disk read
+/// assert_eq!(s.type_of(b"k"), "string");
+/// assert_eq!(s.hget(b"k", b"f").map(|_| ()), Err(StoreError::WrongType));
+/// assert_eq!(s.tier_stats().preads_total, 0);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const COLD_TAG_STRING: u8 = 1;
 /// Hash tag — see [`COLD_TAG_STRING`].
+///
+/// ```
+/// use kevy_store::{Store, StoreError};
+/// # let dir = std::env::temp_dir().join(format!("kevy-doc-tag-hash-{}", std::process::id()));
+/// let mut s = Store::new();
+/// s.enable_tiering(&dir, 1 << 20)?;
+/// s.hset(b"row", &[(b"f".as_slice(), [b'x'; 4096].as_slice())])?;
+/// s.set_tier_budget(1);
+/// s.demote_to_watermark();
+/// assert_eq!(s.type_of(b"row"), "hash");
+/// assert_eq!(s.get(b"row").map(|_| ()), Err(StoreError::WrongType));
+/// assert_eq!(s.tier_stats().preads_total, 0);
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub const COLD_TAG_HASH: u8 = 2;
 
 /// The in-map stub a demoted (cold) value leaves behind: its vlog
@@ -14,6 +46,24 @@ pub const COLD_TAG_HASH: u8 = 2;
 /// (existence, TYPE, weight) with zero IO. Byte math: offset u64 (8) +
 /// file_id/len/weight u32 (12) + type_tag/touched u8 (2) = 22, padded
 /// to 24 by u64 alignment — fits `Value`'s 24 B payload (≤32 B assert).
+///
+/// ```
+/// use kevy_store::{ColdRef, SetCondition, Store, Value};
+/// # let dir = std::env::temp_dir().join(format!("kevy-doc-coldref-{}", std::process::id()));
+/// let mut s = Store::new();
+/// s.enable_tiering(&dir, 1 << 20)?;
+/// s.set(b"k", vec![b'x'; 4096], None, SetCondition::Always);
+/// s.set_tier_budget(1);
+/// s.demote_to_watermark();
+/// let mut stub = None;
+/// s.snapshot_each(|_, v, _| if let Value::Cold(c) = v { stub = Some(*c) });
+/// // a vlog-backed stub, not a row-segment one
+/// assert_eq!(stub.and_then(ColdRef::seg_parts), None);
+/// // a row-segment stub round-trips through its snapshot record
+/// assert_eq!(ColdRef::from_seg_parts(7, 512).seg_parts(), Some((7, 512)));
+/// # std::fs::remove_dir_all(&dir)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ColdRef {
     /// Byte offset of the record header inside its vlog file.

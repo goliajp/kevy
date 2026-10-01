@@ -5,6 +5,8 @@
 //! `kevy_cli::lint`'s own tests. What needs a server is the reading —
 //! and the deliberate difference between the two exit codes.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;
@@ -21,7 +23,10 @@ struct Srv {
 
 impl Srv {
     fn start() -> Srv {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // Not a bind probe: the listener that took the port is dropped before the
+        // server takes it, and under a parallel run something else can be in that
+        // gap. free_port hands out from a block this process owns alone.
+        let port = kevy_testnet::free_port();
         let bin =
             std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
         if !bin.exists() {
@@ -56,9 +61,8 @@ impl Drop for Srv {
 
 fn lint(port: u16, args: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["lint"])
+        .args(["-p", &port.to_string(), "--kevy", "lint"])
         .args(args)
-        .args(["-p", &port.to_string()])
         .output()
         .expect("run kevy-cli");
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();

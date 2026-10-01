@@ -249,9 +249,7 @@ impl<C: Commands> Shard<C> {
                     // The worker sync_all'd the image and journaled the
                     // rename: everything queued before the swap is
                     // durable — release any Always-held replies.
-                    #[cfg(target_os = "linux")]
-                    self.uring_aof_mark_all_durable();
-                    self.epoll_aof_on_swap_finalized();
+                    self.on_aof_reopened();
                     let paths = self
                         .aof
                         .as_mut()
@@ -281,6 +279,16 @@ impl<C: Commands> Shard<C> {
                 self.abort_rewrite_cleanup(&h.tmp);
             }
         }
+    }
+
+    /// The live log was just swapped for a fsynced image holding every
+    /// write so far: release held replies, and move the epoll writer
+    /// lane off its clone of the renamed-away inode — appends it made
+    /// there would be lost at the next boot.
+    pub(crate) fn on_aof_reopened(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.uring_aof_mark_all_durable();
+        self.epoll_aof_on_swap_finalized();
     }
 
     /// Best-effort teardown unlinks that failed — named for the log
@@ -321,6 +329,7 @@ impl<C: Commands> Shard<C> {
                 return;
             }
         };
+        self.on_aof_reopened();
         // Ship the pre-swap log's graveyard link, the spent tee
         // buffers, and any GB-scale warm spare to the worker — all
         // these frees contend the journal/LRU.

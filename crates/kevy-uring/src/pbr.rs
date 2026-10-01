@@ -18,6 +18,32 @@ use crate::layout::IoUringBufReg;
 /// [`recv`](crate::IoUring::prep_recv_multishot)). Owns the buf-ring mapping
 /// and the backing slab; the kernel fills a buffer per arrival, the app
 /// recycles it.
+///
+/// ```
+/// use std::io::Write;
+/// use std::net::{TcpListener, TcpStream};
+/// use std::os::fd::AsRawFd;
+///
+/// let listener = TcpListener::bind("127.0.0.1:0")?;
+/// let mut client = TcpStream::connect(listener.local_addr()?)?;
+/// let (server, _) = listener.accept()?;
+///
+/// let mut ring = kevy_uring::IoUring::new(8)?;
+/// // four 64-byte buffers in group 7
+/// let mut bufs = ring.register_buf_ring(4, 64, 7)?;
+/// assert!(ring.prep_recv_multishot(server.as_raw_fd(), bufs.group(), 1));
+///
+/// client.write_all(b"ping")?;
+/// ring.submit_and_wait(1)?;
+/// let mut reaped = Vec::new();
+/// ring.for_each_completion(|c| reaped.push(c));
+/// let c = reaped[0];
+/// let bid = c.buffer_id().expect("the kernel picked a buffer");
+/// assert_eq!(bufs.bytes(bid, c.res as usize), b"ping");
+/// assert!(c.has_more(), "the recv stays armed for the next arrival");
+/// bufs.recycle(bid); // copied out, so the kernel may reuse it
+/// # Ok::<(), std::io::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct ProvidedBufRing {
     pub(crate) ring_fd: c_int,

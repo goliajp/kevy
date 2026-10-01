@@ -16,73 +16,47 @@
 //!
 //! See [`docs/protocol.md`](../../docs/protocol.md) for the wire-level
 //! spec this struct implements.
+//!
+//! ```
+//! use std::time::Instant;
+//! use kevy_elect::elector::{Elector, Outbound};
+//! use kevy_elect::{Message, Role};
+//!
+//! // the caller owns the clock and the network: feed ticks and messages in,
+//! // send whatever comes out
+//! let mut a = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Primary);
+//! let out: Vec<Outbound> = a.tick(Instant::now());
+//! assert_eq!(out.len(), 1);
+//! assert_eq!(out[0].to, "b");
+//! assert!(matches!(out[0].msg, Message::Hb { epoch: 1, .. }));
+//! ```
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+pub use crate::config::{ElectConfig, ElectJitter};
+use crate::elector_inbound::PeerView;
 use crate::message::{Message, Role};
 use crate::persist::{ElectorPersist, NoPersist};
-
-/// Tunable timeouts. Defaults match the protocol spec — operators
-/// can override via the `[cluster]` config section once the
-/// kevy-server adapter (separate task) wires the live config in.
-#[derive(Debug, Clone, Copy)]
-pub struct ElectConfig {
-    /// Period between outbound `HB` per peer. Default 200 ms.
-    pub hb_interval: Duration,
-    /// Flag a peer DOWN after this duration without an inbound `HB`.
-    /// Default 5 s = 25 × `hb_interval` (a transient 1 s blip
-    /// doesn't trigger an election).
-    pub down_after: Duration,
-    /// Candidate waits this long for quorum `ACCEPT` before backing
-    /// off. Default 3 s.
-    pub election_timeout: Duration,
-    /// Backoff floor after a failed election attempt. Real wait
-    /// adds jitter up to `election_backoff_jitter` to prevent
-    /// dueling candidates from re-running synchronously.
-    pub election_backoff: Duration,
-    /// Random jitter added to `election_backoff` per attempt.
-    /// Default 4 s (so the real range is 1–5 s).
-    pub election_backoff_jitter: Duration,
-}
-
-impl Default for ElectConfig {
-    fn default() -> Self {
-        Self {
-            hb_interval: Duration::from_millis(200),
-            down_after: Duration::from_secs(5),
-            election_timeout: Duration::from_secs(3),
-            election_backoff: Duration::from_secs(1),
-            election_backoff_jitter: Duration::from_secs(4),
-        }
-    }
-}
-
-/// Per-peer scratch the elector keeps. Updated on every inbound `HB`.
-/// `last_epoch` / `last_role` are recorded for future observability
-/// surfaces (INFO replication's "seen-from peer" panel) — the
-/// election algorithm itself only consults `last_seen` (DOWN
-/// detector) and `last_repl_offset` (candidate selection).
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-// struct_field_names: the shared `last_` prefix is the point — every field is
-// the latest observation of that quantity from the peer's most recent HB.
-#[allow(clippy::struct_field_names)]
-pub(crate) struct PeerView {
-    /// Most recent `HB` reception time.
-    pub(crate) last_seen: Instant,
-    /// Epoch the peer claimed in its most recent `HB`.
-    pub(crate) last_epoch: u64,
-    /// Role the peer claimed in its most recent `HB`.
-    pub(crate) last_role: Role,
-    /// `repl_offset` the peer claimed in its most recent `HB`.
-    pub(crate) last_repl_offset: u64,
-}
 
 /// Top-level state machine for a single kevy node in the v3-cluster
 /// Phase 1.5 election. One per process (election is per-node, not
 /// per-shard).
+///
+/// A one-node cluster elects itself once the cold-start grace window
+/// (`down_after`) passes without a primary:
+///
+/// ```
+/// use std::time::{Duration, Instant};
+/// use kevy_elect::{Elector, Role};
+///
+/// let mut a = Elector::new("a", vec!["a".into()], "a:6004", Role::Replica);
+/// let t0 = Instant::now();
+/// a.tick(t0);
+/// a.tick(t0 + Duration::from_secs(5));
+/// assert_eq!((a.role(), a.current_primary(), a.epoch()), (Role::Primary, Some("a"), 2));
+/// ```
 pub struct Elector {
     /// This node's stable id.
     pub(crate) node_id: String,
@@ -141,83 +115,100 @@ pub struct Elector {
     pub(crate) persist: Box<dyn ElectorPersist + Send>,
 }
 
-/// Source of jitter for election backoff. Tests use a fixed value;
-/// production uses `ElectJitter::System` which reads `Instant`
-/// + node_id as a poor-mans entropy. Pure-Rust 0-dep — no `rand` crate.
-#[derive(Debug, Clone)]
-pub enum ElectJitter {
-    /// Fixed value (test-friendly, deterministic).
-    Fixed(Duration),
-    /// Hash of `(now_nanos, node_id)` clamped into
-    /// `[0, max_jitter)`. Deterministic enough for production while
-    /// avoiding zero-cost-jitter dueling.
-    System,
-}
-
-impl ElectJitter {
-    /// Sample a jitter value in `[0, max]`.
-    fn sample(&self, max: Duration, now: Instant, node_id: &str) -> Duration {
-        match self {
-            Self::Fixed(d) => *d.min(&max),
-            Self::System => {
-                // Mix `node_id` bytes into a u64 hash and clamp into
-                // `[0, max.as_nanos())`. Coarse but adequate — the
-                // jitter only needs to break ties between dueling
-                // candidates, not be cryptographically random.
-                let mut h: u64 = 1_469_598_103_934_665_603;
-                for b in node_id.as_bytes() {
-                    h = h.wrapping_mul(1_099_511_628_211) ^ u64::from(*b);
-                }
-                // Pull a u64 worth of bits out of `now`'s elapsed-
-                // since-arbitrary-anchor representation. Using the
-                // low 64 bits of `now.elapsed_since(anchor)` would
-                // need an anchor — instead, hash a stable derivation
-                // of `now` via the elector's lazy anchor approach.
-                // For simplicity: mix `node_id` bytes again with a
-                // per-call seed.
-                let _ = now; // placeholder: production jitter wants per-call entropy.
-                let span_ns = max.as_nanos().max(1) as u64;
-                Duration::from_nanos(h % span_ns)
-            }
-        }
-    }
-}
-
 /// One message + recipient that the elector wants to send. The
 /// transport layer drains
 /// `Transport` each loop iteration and writes to the
 /// per-peer TCP connections.
-#[derive(Debug, Clone)]
+///
+/// ```
+/// use std::time::Instant;
+/// use kevy_elect::{Elector, Outbound, Role};
+///
+/// let mut a = Elector::new("a", vec!["a".into(), "b".into(), "c".into()], "a:6004", Role::Primary);
+/// for Outbound { to, msg, .. } in a.tick(Instant::now()) {
+///     // a transport would write `msg.encode()` to the link for `to`
+///     assert!(to == "b" || to == "c");
+///     assert!(!msg.encode().is_empty());
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Outbound {
     /// Recipient. `"*"` (a sentinel — never a valid node_id since
     /// they're ASCII ≤ 32 B and operators don't use stars) means
     /// "broadcast to every peer except self". The transport
     /// expands the sentinel on its end.
+    ///
+    /// ```
+    /// use std::time::{Duration, Instant};
+    /// use kevy_elect::{Elector, Message, Outbound, Role};
+    ///
+    /// let mut a = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Replica);
+    /// let t0 = Instant::now();
+    /// assert_eq!(a.tick(t0)[0].to, "b"); // a heartbeat names one peer
+    /// let out = a.tick(t0 + Duration::from_secs(5));
+    /// let offer = out.iter().find(|o| matches!(o.msg, Message::Offer { .. }));
+    /// assert_eq!(offer.map(|o| o.to.as_str()), Some(Outbound::BROADCAST)); // an offer names all
+    /// ```
     pub to: String,
     /// The message to send.
+    ///
+    /// ```
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut a = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Primary);
+    /// let out = a.tick(Instant::now());
+    /// let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// assert_eq!(out[0].msg, hb);
+    /// ```
     pub msg: Message,
 }
 
 impl Outbound {
     /// Sentinel for broadcast-to-all.
+    ///
+    /// ```
+    /// use kevy_elect::Outbound;
+    ///
+    /// // how a transport expands it
+    /// fn recipients<'a>(to: &'a str, me: &str, peers: &[&'a str]) -> Vec<&'a str> {
+    ///     if to == Outbound::BROADCAST {
+    ///         peers.iter().copied().filter(|p| *p != me).collect()
+    ///     } else {
+    ///         vec![to]
+    ///     }
+    /// }
+    /// assert_eq!(recipients("*", "a", &["a", "b", "c"]), ["b", "c"]);
+    /// assert_eq!(recipients("c", "a", &["a", "b", "c"]), ["c"]);
+    /// ```
     pub const BROADCAST: &'static str = "*";
 }
 
 impl Elector {
     /// Build an elector for a node with the given stable id, peer
-    /// membership (the full list including self), advertised
-    /// `host:port`, and config tunables.
+    /// membership (the full list including self) and advertised
+    /// `host:port`, with the default timeouts ([`ElectConfig::default`])
+    /// and [`ElectJitter::System`]; [`Self::with_config`] and
+    /// [`Self::with_jitter`] change them.
     ///
     /// `start_role` is `Primary` for the bootstrap node (operator-
     /// declared at first start) and `Replica` for the rest.
+    ///
+    /// ```
+    /// use kevy_elect::{Elector, Role};
+    ///
+    /// let e = Elector::new("a", vec!["a".to_string(), "b".to_string()], "10.0.0.1:6004", Role::Replica);
+    /// assert_eq!((e.role(), e.epoch()), (Role::Replica, 1));
+    /// ```
     pub fn new(
         node_id: impl Into<String>,
         peer_ids: Vec<String>,
         my_advertised_addr: impl Into<String>,
         start_role: Role,
-        config: ElectConfig,
-        jitter: ElectJitter,
     ) -> Self {
+        let config = ElectConfig::default();
+        let jitter = ElectJitter::System;
         let node_id = node_id.into();
         Self {
             node_id,
@@ -240,12 +231,71 @@ impl Elector {
         }
     }
 
+    /// Replace the timeouts.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use kevy_elect::{ElectConfig, Elector, Role};
+    ///
+    /// let cfg = ElectConfig::default().with_hb_interval(Duration::from_millis(50));
+    /// let e = Elector::new("a", vec!["a".to_string()], "10.0.0.1:6004", Role::Primary).with_config(cfg);
+    /// assert_eq!(e.role(), Role::Primary);
+    /// ```
+    #[must_use]
+    pub fn with_config(mut self, config: ElectConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Replace the backoff jitter source (tests fix it for determinism).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use kevy_elect::{ElectJitter, Elector, Role};
+    ///
+    /// let e = Elector::new("a", vec!["a".to_string()], "10.0.0.1:6004", Role::Primary)
+    ///     .with_jitter(ElectJitter::Fixed(Duration::ZERO));
+    /// assert_eq!(e.epoch(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: ElectJitter) -> Self {
+        self.jitter = jitter;
+        self
+    }
+
     /// Attach a persistence backend and restore its saved state.
     /// Restores the persisted epoch (so a restarted node
     /// never re-runs an election under an already-consumed epoch)
     /// and, when a vote was cast, re-arms the one-vote-per-epoch
     /// guard for that epoch. Call right after [`Elector::new`],
     /// before the transport starts driving the elector.
+    ///
+    /// ```
+    /// # use std::sync::{Arc, Mutex};
+    /// # use kevy_elect::ElectorPersist;
+    /// # #[derive(Clone, Default)]
+    /// # struct Mem(Arc<Mutex<(u64, Option<String>)>>);
+    /// # impl ElectorPersist for Mem {
+    /// #     fn save(&self, epoch: u64, voted_for: Option<&str>) {
+    /// #         *self.0.lock().unwrap() = (epoch, voted_for.map(str::to_string));
+    /// #     }
+    /// #     fn load(&self) -> (u64, Option<String>) {
+    /// #         self.0.lock().unwrap().clone()
+    /// #     }
+    /// # }
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let disk = Mem::default();
+    /// let peers = || vec!["b".to_string(), "c".to_string()];
+    /// let mut c = Elector::new("c", peers(), "c:6004", Role::Replica).with_persist(Box::new(disk.clone()));
+    /// let won = Message::Announce { epoch: 5, new_primary_id: "b".into(), new_primary_addr: "b:6004".into() };
+    /// c.on_message("b", won, Instant::now());
+    ///
+    /// // after a restart the epoch picks up where it left off
+    /// let c = Elector::new("c", peers(), "c:6004", Role::Replica).with_persist(Box::new(disk));
+    /// assert_eq!(c.epoch(), 5);
+    /// ```
     #[must_use]
     pub fn with_persist(mut self, persist: Box<dyn ElectorPersist + Send>) -> Self {
         let (epoch, voted_for) = persist.load();
@@ -261,22 +311,62 @@ impl Elector {
 
     /// Update this node's `repl_offset` (called by the kevy-server
     /// adapter when the replication source / runner advances).
+    ///
+    /// ```
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut c = Elector::new("c", vec!["b".into(), "c".into()], "c:6004", Role::Replica);
+    /// c.set_repl_offset(900);
+    /// // a candidate with less data than c gets no vote from it
+    /// let offer = Message::Offer { new_epoch: 2, candidate_id: "b".into(), repl_offset: 800 };
+    /// assert!(c.on_message("b", offer, Instant::now()).is_empty());
+    /// ```
     pub fn set_repl_offset(&mut self, offset: u64) {
         self.my_repl_offset = offset;
     }
 
     /// Current self-perceived role.
+    ///
+    /// ```
+    /// use kevy_elect::{Elector, Role};
+    ///
+    /// let e = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Replica);
+    /// assert_eq!(e.role(), Role::Replica);
+    /// ```
     pub fn role(&self) -> Role {
         self.role
     }
 
     /// Current epoch.
+    ///
+    /// ```
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut c = Elector::new("c", vec!["b".into(), "c".into()], "c:6004", Role::Replica);
+    /// assert_eq!(c.epoch(), 1); // every node boots in epoch 1
+    /// let offer = Message::Offer { new_epoch: 3, candidate_id: "b".into(), repl_offset: 0 };
+    /// c.on_message("b", offer, Instant::now());
+    /// assert_eq!(c.epoch(), 3); // voting moves it to the candidate's epoch
+    /// ```
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
 
     /// Last-known primary id (`None` until first ANNOUNCE / boot
     /// declaration).
+    ///
+    /// ```
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut b = Elector::new("b", vec!["a".into(), "b".into()], "b:6004", Role::Replica);
+    /// assert_eq!(b.current_primary(), None);
+    /// let hb = Message::Hb { epoch: 1, node_id: "a".into(), role: Role::Primary, repl_offset: 0 };
+    /// b.on_message("a", hb, Instant::now());
+    /// assert_eq!(b.current_primary(), Some("a"));
+    /// ```
     pub fn current_primary(&self) -> Option<&str> {
         self.current_primary.as_deref()
     }
@@ -286,6 +376,19 @@ impl Elector {
     /// peers heard from within `down_after`)? A primary that answers
     /// `false` here is on the minority side of a partition and must
     /// fence writes — the lease window is exactly `down_after`.
+    ///
+    /// ```
+    /// use std::time::{Duration, Instant};
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut a = Elector::new("a", vec!["a".into(), "b".into(), "c".into()], "a:6004", Role::Primary);
+    /// let t0 = Instant::now();
+    /// assert!(!a.has_quorum(t0)); // alone: 1 of 3
+    /// let hb = Message::Hb { epoch: 1, node_id: "b".into(), role: Role::Replica, repl_offset: 0 };
+    /// a.on_message("b", hb, t0);
+    /// assert!(a.has_quorum(t0)); // 2 of 3
+    /// assert!(!a.has_quorum(t0 + Duration::from_secs(5))); // b's lease ran out
+    /// ```
     pub fn has_quorum(&self, now: Instant) -> bool {
         let reachable = self
             .peer_views
@@ -301,6 +404,17 @@ impl Elector {
     /// quorum, and runs the candidate's election-timeout fallback.
     /// Returns a fresh batch of outbound messages — callers should
     /// drain in one pass.
+    ///
+    /// ```
+    /// use std::time::{Duration, Instant};
+    /// use kevy_elect::{Elector, Role};
+    ///
+    /// let mut a = Elector::new("a", vec!["a".into(), "b".into()], "a:6004", Role::Primary);
+    /// let t0 = Instant::now();
+    /// assert_eq!(a.tick(t0).len(), 1); // heartbeat to b
+    /// assert!(a.tick(t0).is_empty()); // not due again yet
+    /// assert_eq!(a.tick(t0 + Duration::from_millis(200)).len(), 1);
+    /// ```
     pub fn tick(&mut self, now: Instant) -> Vec<Outbound> {
         let mut out = Vec::new();
         if self.first_tick.is_none() {
@@ -316,6 +430,18 @@ impl Elector {
     /// Updates per-peer view, applies the state machine transitions
     /// the spec defines, returns any outbound messages the
     /// transition produced.
+    ///
+    /// ```
+    /// use std::time::Instant;
+    /// use kevy_elect::{Elector, Message, Role};
+    ///
+    /// let mut c = Elector::new("c", vec!["b".into(), "c".into()], "c:6004", Role::Replica);
+    /// let offer = Message::Offer { new_epoch: 2, candidate_id: "b".into(), repl_offset: 0 };
+    /// let out = c.on_message("b", offer, Instant::now());
+    /// assert_eq!(out.len(), 1);
+    /// assert_eq!(out[0].to, "b");
+    /// assert_eq!(out[0].msg, Message::Accept { epoch: 2, accepter_id: "c".into() });
+    /// ```
     pub fn on_message(&mut self, from_node_id: &str, msg: Message, now: Instant) -> Vec<Outbound> {
         let mut out = Vec::new();
         match msg {
@@ -334,137 +460,6 @@ impl Elector {
         }
         out
     }
-
-    // ─────────── tick helpers ───────────
-
-    fn emit_heartbeats(&mut self, now: Instant, out: &mut Vec<Outbound>) {
-        // One HB per peer per `hb_interval`. Per-peer schedule
-        // staggers (a peer added later gets its own clock).
-        for peer in self.peer_ids.clone() {
-            if peer == self.node_id {
-                continue;
-            }
-            let due = match self.last_hb_sent.get(&peer) {
-                Some(prev) => now.duration_since(*prev) >= self.config.hb_interval,
-                None => true,
-            };
-            if due {
-                self.last_hb_sent.insert(peer.clone(), now);
-                out.push(Outbound {
-                    to: peer,
-                    msg: Message::Hb {
-                        epoch: self.epoch,
-                        node_id: self.node_id.clone(),
-                        role: self.role,
-                        repl_offset: self.my_repl_offset,
-                    },
-                });
-            }
-        }
-    }
-
-    /// Preconditions for starting a candidacy: replica role, out of
-    /// backoff, primary DOWN by my view, and this node winning the
-    /// candidate-selection ordering.
-    fn election_preconditions_met(&self, now: Instant) -> bool {
-        // Only replicas start elections.
-        if self.role != Role::Replica {
-            return false;
-        }
-        // In backoff after a failed candidacy.
-        if let Some(b) = self.backoff_until
-            && now < b
-        {
-            return false;
-        }
-        // Primary must be DOWN by my view. A cluster with NO known
-        // primary (cold start where every node defers to the
-        // election — the role clamp makes this the normal
-        // boot) counts as down after one `down_after` grace window,
-        // giving a live primary's HB time to reach us first.
-        if let Some(primary) = self.current_primary.clone() {
-            if !self.is_peer_down(&primary, now) {
-                return false;
-            }
-        } else {
-            let seen_enough =
-                self.first_tick.is_some_and(|t| now.duration_since(t) >= self.config.down_after);
-            if !seen_enough {
-                return false;
-            }
-        }
-        // Candidate-selection: I must have the highest offset AND
-        // lowest node-id among alive peers (the primary is dead +
-        // not in the tie-break set).
-        self.am_best_candidate(now)
-    }
-
-    fn maybe_start_election(&mut self, now: Instant, out: &mut Vec<Outbound>) {
-        if !self.election_preconditions_met(now) {
-            return;
-        }
-        // Start the candidacy. Raft persistence rule: the bumped
-        // epoch + the implicit self-vote must be durable BEFORE the
-        // OFFER can leave this node — a crash right after the
-        // broadcast must not restart into an elector that reuses
-        // this epoch (or votes for someone else in it).
-        let new_epoch = self.epoch.saturating_add(1);
-        self.persist.save(new_epoch, Some(self.node_id.as_str()));
-        self.epoch = new_epoch;
-        self.role = Role::Candidate;
-        self.accept_votes.clear();
-        // Implicit self-vote — record ourselves in the tally so
-        // single-peer-needed (N=1, degenerate) and quorum=2/N=2
-        // both work.
-        self.accept_votes.insert(self.node_id.clone());
-        self.offer_at = Some(now);
-        out.push(Outbound {
-            to: Outbound::BROADCAST.to_string(),
-            msg: Message::Offer {
-                new_epoch: self.epoch,
-                candidate_id: self.node_id.clone(),
-                repl_offset: self.my_repl_offset,
-            },
-        });
-    }
-
-    fn maybe_finish_candidacy(&mut self, now: Instant, out: &mut Vec<Outbound>) {
-        if self.role != Role::Candidate {
-            return;
-        }
-        let Some(offer_at) = self.offer_at else {
-            return;
-        };
-        let quorum = self.quorum_size();
-        if self.accept_votes.len() >= quorum {
-            // Won — broadcast ANNOUNCE and become primary.
-            self.role = Role::Primary;
-            self.current_primary = Some(self.node_id.clone());
-            self.offer_at = None;
-            self.accept_votes.clear();
-            out.push(Outbound {
-                to: Outbound::BROADCAST.to_string(),
-                msg: Message::Announce {
-                    epoch: self.epoch,
-                    new_primary_id: self.node_id.clone(),
-                    new_primary_addr: self.my_advertised_addr.clone(),
-                },
-            });
-            return;
-        }
-        if now.duration_since(offer_at) >= self.config.election_timeout {
-            // Lost / timed out — back off with jitter, fall back to
-            // Replica.
-            self.role = Role::Replica;
-            self.offer_at = None;
-            self.accept_votes.clear();
-            let jitter =
-                self.jitter.sample(self.config.election_backoff_jitter, now, &self.node_id);
-            self.backoff_until = Some(now + self.config.election_backoff + jitter);
-        }
-    }
-
-    // ─────────── inbound handlers ───────────
 }
 
 impl core::fmt::Debug for Elector {

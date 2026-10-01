@@ -61,9 +61,9 @@ mod tests {
             peers.iter().map(|s| s.to_string()).collect(),
             format!("10.0.0.{}:6004", node.bytes().last().unwrap_or(b'1') as u32 - 48),
             role,
-            cfg_fast(),
-            ElectJitter::Fixed(Duration::from_millis(0)),
         )
+        .with_config(cfg_fast())
+        .with_jitter(ElectJitter::Fixed(Duration::from_millis(0)))
     }
 
     #[test]

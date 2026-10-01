@@ -253,6 +253,15 @@ pub(crate) enum Op {
         argv: Argv,
         write: bool,
     },
+    /// The check an `XREADGROUP` split across shards runs on each
+    /// stream's shard before any is read: `argv` is the same
+    /// single-stream rewrite [`Op::XReadOne`] would run, only checked
+    /// (`Commands::xreadgroup_refusal`), never read. Reply:
+    /// [`Part::XReadElement`] carrying the refusal, or no element.
+    XReadCheck {
+        index: u32,
+        argv: Argv,
+    },
 }
 
 /// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
@@ -324,12 +333,18 @@ pub(crate) enum Inbound {
     /// Batched single-key dispatches to this (owning) shard; replied as one
     /// `ResponseBatch`. The hot -c50 path: amortizes the cross-core ring/fold
     /// overhead that drags 16 shards below 1 (single-shard is 2.1M GET).
+    /// `spare` is an empty envelope for the replies (see [`crate::batch_lane::BatchLane`]).
     RequestBatch {
         origin: usize,
         reqs: ReqBatch,
+        spare: RespBatch,
     },
-    /// Batched replies for a `RequestBatch`, folded by seq on the origin.
-    ResponseBatch(RespBatch),
+    /// Batched replies for a `RequestBatch`, folded by seq on the origin;
+    /// `spare` is the request envelope, emptied, going home.
+    ResponseBatch {
+        resps: RespBatch,
+        spare: ReqBatch,
+    },
     /// A batch of pub/sub messages `(channel, payload)` to deliver to this
     /// shard's subscribers — fire-and-forget (no reply; the publisher already
     /// replied with the receiver count from the registry). Batched per drain so
@@ -383,6 +398,18 @@ pub(crate) enum Inbound {
     BlockServeAck {
         origin: usize,
         conn: u64,
+    },
+    /// A command layer's hook message for this shard
+    /// ([`crate::Commands::apply_ext`]); a nonzero `token` is acknowledged
+    /// with [`Inbound::ExtAck`] once applied.
+    ExtDelta {
+        from: usize,
+        token: u64,
+        payload: Vec<u8>,
+    },
+    /// A shard applied an [`Inbound::ExtDelta`] this shard waits on.
+    ExtAck {
+        token: u64,
     },
     /// origin → src's shard: a cross-shard RENAME's put committed on the
     /// destination, so the source may now record its half (the delete).

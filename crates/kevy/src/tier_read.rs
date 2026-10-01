@@ -107,10 +107,12 @@ mod uring {
         fn read_batch(&mut self, reads: &[ColdRead]) -> io::Result<(Vec<Vec<u8>>, u64)> {
             let plan: Vec<kevy_uring::FileRead> = reads
                 .iter()
-                .map(|r| kevy_uring::FileRead {
-                    fd: r.file.raw_fd(),
-                    offset: r.vref.offset,
-                    len: r.vref.disk_len() as u32,
+                .map(|r| {
+                    kevy_uring::FileRead::new(
+                        std::os::fd::AsRawFd::as_raw_fd(&*r.file),
+                        r.vref.offset,
+                        r.vref.disk_len() as u32,
+                    )
                 })
                 .collect();
             self.ring.read_file_batch(&plan)

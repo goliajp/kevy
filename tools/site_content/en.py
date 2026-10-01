@@ -17,7 +17,7 @@
 # barely ahead (LPUSH: 10%), what we refuse to do (no cluster, no AUTH, no TLS),
 # and which commands do not behave the way Redis's docs say.
 #
-# Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
+# Numbers: PERFORMANCE.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
 
 PAGES = {}
 
@@ -135,7 +135,7 @@ HSET u:1 id 1 name ada age 34 dept eng
 
 # the ORDER BY dept, age DESC walk — one composite index, no planner
 IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name age""",
-                    "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli sql compile. No runtime SQL, no joins: those stay in Postgres.",
+                    "note": "Typed columns, secondary indexes, composite ORDER BY paths — even your PG/MySQL schema file, via kevy-cli --kevy sql compile. No runtime SQL, no joins: those stay in Postgres.",
                     "go": "Single-table serving",
                     "href": "use/app-store/",
                 },
@@ -175,7 +175,7 @@ cargo install kevy && kevy --port 6379
 let db = Db::open("data/")?;
 db.set(b"k", b"v", None)?;
 
-# a browser tab — 481 KB, persists to OPFS
+# a browser tab — 639 KB, persists to OPFS
 const db = await open({ persist: { name: "app" } });
 
 # a microcontroller — no OS, no allocator
@@ -192,24 +192,25 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "RESP2 and RESP3, 206 commands — redis-cli and your client library "
-                "connect unchanged. One machine, 16 cores, loopback, median of five."
+                "RESP2 and RESP3, 209 commands — redis-cli and your client library "
+                "connect unchanged. One machine, 4 cores per engine, loopback, median of 15 windows."
             ),
             "rows": [
-                ["GET", 7800299, 5597865, "1.39×", False],
-                ["SET", 6918058, 2573396, "2.69×", False],
-                ["INCR", 6133940, 3459395, "1.77×", False],
-                ["SADD", 5600597, 3690483, "1.52×", False],
-                ["HSET", 4287217, 3021325, "1.42×", False],
-                ["LPUSH", 3213470, 2862374, "1.12×", True],
-                ["ZADD", 3053101, 2773929, "1.10×", True],
+                ["GET", 8726283, 5467748, "1.60×", False],
+                ["SET", 7409590, 2861941, "≥ 2.59×", False],
+                ["INCR", 7249946, 3788318, "1.91×", False],
+                ["SADD", 6919570, 4204106, "1.65×", False],
+                ["HSET", 5393670, 3352393, "≥ 1.61×", False],
+                ["LPUSH", 4424738, 3220774, "1.37×", False],
+                ["ZADD", 4980252, 3112253, "≥ 1.60×", False],
             ],
-            "us": "kevy 6.3.0",
-            "them": "Redis 8.10.1",
+            "us": "kevy 7.0.0",
+            "them": "Redis 8.10.2",
             "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 10% and 15% ahead.</b> If lists or sorted "
-                "sets are your hot path, speed is not the reason to switch. "
+                "<b>LPUSH is the narrowest lead: 1.37×.</b> If lists are your hot path, "
+                "measure your own workload before you switch for speed. A ≥ marks a "
+                "number the load generator set; kevy does at least that. "
                 "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
                 "too.</a> Migration is three commands — "
                 "<a href=\"~/migrate/\">export, import, digest</a> — and works in "
@@ -290,7 +291,7 @@ PAGES["migrate"] = {
             "h2": "Coming from Redis",
             "body": [
                 "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and "
-                "answers 206 commands. Point your existing library at it, keep your "
+                "answers 209 commands. Point your existing library at it, keep your "
                 "code, keep your redis-cli. There is no SDK to adopt and no new "
                 "protocol to learn.",
                 "<b>So the only real question is what you gain.</b> Four things, and "
@@ -323,7 +324,7 @@ PAGES["migrate"] = {
                 },
                 {
                     "title": "It is faster on the operations you already run",
-                    "body": "1.33× on GET, 2.66× on SET, 2.05× on INCR against Redis 8.10.1 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 10% and 15% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
+                    "body": "1.60× on GET, at least 2.59× on SET, 1.91× on INCR against Redis 8.10.2 on the same machine. Read the whole table before you count on it, though — LPUSH leads by 1.37×, the narrowest row, and at that margin your value sizes and key distribution weigh as much as the engine.",
                 },
                 {
                     "title": "Your dataset no longer has to fit in RAM",
@@ -352,21 +353,21 @@ PAGES["migrate"] = {
             "caption": "Export from Redis, import into kevy, and check the two agree. Every command below was run.",
             "text": """# 1. dump what you want to move. it is a RESP file — readable,
 #    diffable, and it streams rather than loading into memory.
-kevy-cli export -p 6379 --prefix user: dump.resp
+kevy-cli -p 6379 --kevy export --prefix user: dump.resp
 -> exported 41023 keys -> dump.resp
 
 # 2. load it. --strict stops on the first error rather than
 #    limping onward with a half-migrated keyspace.
-kevy-cli import -p 6380 --strict dump.resp
+kevy-cli -p 6380 --kevy import --strict dump.resp
 -> imported 82046 ok, 0 errors, offset 4108331
 
 # 3. prove they agree, rather than hoping.
-kevy-cli digest -p 6379 user:
-kevy-cli digest -p 6380 user:
+kevy-cli -p 6379 --kevy digest user:
+kevy-cli -p 6380 --kevy digest user:
 -> 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
 
 # an interrupted import resumes where it stopped:
-kevy-cli import -p 6380 --resume dump.resp""",
+kevy-cli -p 6380 --kevy import --resume dump.resp""",
         },
         {
             "t": "prose",
@@ -430,7 +431,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
             "title": "And if you want to leave again",
             "body": (
                 "The same three commands run in the other direction. "
-                "<code>kevy-cli export</code> writes a plain RESP file that any "
+                "<code>kevy-cli --kevy export</code> writes a plain RESP file that any "
                 "Redis-compatible server will import, and <code>digest</code> proves "
                 "the copy is faithful. <a href=\"~/docs/migration/\">The migration "
                 "guide covers moving out</a> as carefully as moving in — we would much "
@@ -494,7 +495,7 @@ PAGES["choose"] = {
                 ["One program owns the data", "Embedded",
                  "No socket, no second process, nothing to serialise. A function call, not a round trip."],
                 ["The data belongs to the user's device", "Browser",
-                 "481 KB of WebAssembly. Real TTLs and pub/sub, persisted to the browser's filesystem. Works offline."],
+                 "639 KB of WebAssembly. Real TTLs, pub/sub and streams, persisted to the browser's filesystem. Works offline."],
                 ["Code runs at the edge, per request", "Edge",
                  "Nothing to warm up, no connection to open. The store is in the isolate with your code."],
                 ["A device with no OS and no heap", "Bare metal",
@@ -513,7 +514,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 206 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 206 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 209 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 209 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "Does the dataset have to fit in RAM?",
@@ -521,7 +522,7 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "What happens when the machine dies?",
-                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most a second of writes to a hard kill; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
+                    "a": "Every write goes to an append-only log first, and the log replays on boot. A hard kill costs an embedded store none of the writes that returned, and a server at most its last reactor iteration; with the default <code>everysec</code> fsync a power loss costs about a second. Set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
                 },
                 {
                     "q": "Can I survive a machine failure?",
@@ -529,11 +530,11 @@ PAGES["choose"] = {
                 },
                 {
                     "q": "Is there authentication?",
-                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
+                    "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. Since 7.0 kevy can encrypt its own links, off unless configured: between nodes, both ends proven by their keys, and on a second client port for the Rust clients that can be limited to the client keys you list. <a href=\"~/docs/encrypted-links/\">The encrypted-links guide</a> says what that covers and what it costs. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
                 },
                 {
                     "q": "What if I outgrow it, or just change my mind?",
-                    "a": "<code>kevy-cli export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
+                    "a": "<code>kevy-cli --kevy export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli --kevy digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
                 },
             ],
         },
@@ -719,7 +720,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
                 {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "206 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
+                {"kicker": "Reference", "title": "Every command", "body": "209 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -1249,7 +1250,7 @@ IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
             "items": [
                 {
                     "do": "Columns, indexes and sort paths, in one declaration",
-                    "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.",
+                    "note": "Rows stay ordinary hashes under the prefix — a missing column is NULL, and kevy-cli --kevy sql compile schema.sql emits this line from CREATE TABLE / CREATE INDEX.",
                     "code": """TABLE.DECLARE orders PREFIX order: PK id COLUMN id str COLUMN customer i64 COLUMN status str COLUMN total f64 INDEX status range VALUES total customer ORDERPATH by_customer ON customer THEN total DESC
 -> OK""",
                 },
@@ -1270,7 +1271,7 @@ IDX.COUNT orders.status EQ open
             ],
             "cost": (
                 "<b>No runtime SQL and no joins.</b> The server refuses "
-                "<code>SELECT</code> as an unknown command; <code>kevy-cli sql "
+                "<code>SELECT</code> as an unknown command; <code>kevy-cli --kevy sql "
                 "compile</code> turns a PG/MySQL schema file into these declarations "
                 "at build time and refuses JOIN, subqueries and GROUP BY by name, "
                 "pointing at the recipe that replaces each. Uniqueness is "
@@ -1307,7 +1308,7 @@ PAGES["use/embedded"] = {
             "h1": "Put the store<br>inside the thing",
             "lede": (
                 "No server, no socket, no network. The engine is a struct you call, a "
-                "481 KB WebAssembly module, or a no_std library on a chip with no "
+                "639 KB WebAssembly module, or a no_std library on a chip with no "
                 "operating system — <b>and it is the same engine, with the same "
                 "commands, in all three.</b>"
             ),
@@ -1365,7 +1366,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "In a browser tab",
-            "goal": "481 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
+            "goal": "639 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
             "cost_t": "Cost & limits",
             "items": [
                 {
@@ -1383,6 +1384,13 @@ db.pttl("cart:u881");       // the engine expires it, not your code""",
                 {
                     "do": "Hear the other tabs",
                     "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+                {
+                    "do": "Keep an outbox that survives a reload",
+                    "code": """db.cmd("XGROUP", "CREATE", "outbox", "sync", "$", "MKSTREAM");  // once
+db.cmd("XADD", "outbox", "*", "op", "save", "cart", "u881");
+db.cmd("XREADGROUP", "GROUP", "sync", "tab-1", "STREAMS", "outbox", ">");
+// no BLOCK in a tab: read on a timer, XACK once it is sent""",
                 },
             ],
             "cost": (
@@ -1456,26 +1464,28 @@ PAGES["benchmarks"] = {
             "t": "table",
             "h2": "Four engines, one machine",
             "intro": (
-                "50 connections, small values. Median of five runs, counted from each "
-                "server's own command counter over a three-second steady window rather "
-                "than from the benchmark client's reported rate."
+                "50 connections, pipelines of 16, small values, each engine on 4 cores. "
+                "Median of 15 windows (3 rounds of 5), counted from each server's own "
+                "command counter over three-second windows rather than from the "
+                "benchmark client's reported rate. A ≥ marks a number the load "
+                "generator set: the engine does at least that, and such a competitor "
+                "number gets no ratio."
             ),
-            "head": ["", "kevy 6.3.0", "Redis 8.10.1", "valkey 9.1.2", "Dragonfly 1.40.2", "vs Redis 8.10.1"],
+            "head": ["", "kevy 7.0.0", "Redis 8.10.2", "valkey 9.1.2", "Dragonfly 2.0.0", "vs Redis 8.10.2"],
             "rows": [
-                ["GET", "7,489,119", "5,631,398", "2,980,764", "2,845,704", "*1.33×"],
-                ["SET", "6,824,662", "2,567,607", "1,683,227", "1,943,358", "*2.66×"],
-                ["INCR", "6,753,558", "3,294,927", "2,279,738", "1,953,406", "*2.05×"],
-                ["SADD", "6,152,617", "3,753,131", "2,214,659", "1,899,967", "*1.64×"],
-                ["HSET", "4,002,580", "2,966,288", "1,857,532", "1,773,498", "*1.35×"],
-                ["LPUSH", "3,142,699", "2,860,306", "1,859,265", "1,505,141", "!1.10×"],
-                ["ZADD", "3,242,967", "2,818,626", "1,786,230", "1,794,335", "!1.15×"],
+                ["GET", "8,726,283", "5,467,748", "4,041,855", "≥ 3,364,079", "*1.60×"],
+                ["SET", "≥ 7,409,590", "2,861,941", "2,011,380", "2,019,740", "*≥ 2.59×"],
+                ["INCR", "7,249,946", "3,788,318", "2,750,827", "2,223,491", "*1.91×"],
+                ["SADD", "6,919,570", "4,204,106", "2,728,331", "1,911,038", "*1.65×"],
+                ["HSET", "≥ 5,393,670", "3,352,393", "2,283,589", "1,964,211", "*≥ 1.61×"],
+                ["LPUSH", "4,424,738", "3,220,774", "2,260,722", "1,700,519", "*1.37×"],
+                ["ZADD", "≥ 4,980,252", "3,112,253", "2,159,811", "1,804,781", "*≥ 1.60×"],
             ],
             "note": (
-                "<b>LPUSH is 10% ahead of Redis 8.10.1, and ZADD 15%.</b> At that margin "
-                "your value sizes and key distribution decide the winner, not the "
-                "engine — so if lists or sorted sets are your hot path, benchmark your "
-                "own workload and do not switch for speed. The rows are coloured that "
-                "way on purpose."
+                "<b>LPUSH is 37% ahead of Redis 8.10.2, the narrowest row.</b> At that "
+                "margin your value sizes and key distribution weigh as much as the "
+                "engine — if lists are your hot path, benchmark your own workload "
+                "before you switch for speed."
             ),
         },
         {
@@ -1484,7 +1494,7 @@ PAGES["benchmarks"] = {
             "body": [
                 "<b>It is loopback.</b> There is no network here, and in a real "
                 "deployment the network is usually what you are waiting for. An engine "
-                "2.6× faster at GET will not make your p99 2.6× better if most of your "
+                "2× faster at GET will not make your p99 2× better if most of your "
                 "latency is the wire.",
                 "<b>The values are small.</b> At 64 KB per value the whole thing "
                 "becomes bound by the kernel's TCP path and the gap closes to single "
@@ -1499,8 +1509,8 @@ PAGES["benchmarks"] = {
             "intro": "What you actually ship to a tab.",
             "head": ["", "Size", ""],
             "rows": [
-                ["kevy.wasm", "1442 KB", "the engine, uncompressed"],
-                ["gzipped", "481 KB", "what crosses the wire"],
+                ["kevy.wasm", "1865 KB", "the engine, uncompressed"],
+                ["gzipped", "639 KB", "what crosses the wire"],
                 ["Cold start", "&lt; 20 ms", "compile and instantiate, warm cache"],
             ],
             "note": (
@@ -1515,7 +1525,7 @@ PAGES["benchmarks"] = {
             "t": "code",
             "h2": "Reproduce it",
             "caption": "Two scripts. Everything on this page comes out of them.",
-            "text": "git clone https://github.com/goliajp/kevy && cd kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh\n\n# the regression gate CI runs on every push\nbash bench/perfgate.sh",
+            "text": "git clone https://github.com/goliajp/kevy && cd kevy\ncargo build --release -p kevy\n\n# four-way: kevy, Redis 8, valkey, Dragonfly\nbash bench/arena.sh target/release/kevy\n\n# two kevy builds side by side: the last release against this tree\nbash bench/perfgate.sh compare last-release HEAD",
         },
     ],
 }

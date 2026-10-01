@@ -2,7 +2,6 @@
 # compressgate — the v5 memory-experiment gate for kevy-compress.
 #
 # Measures K1..K7 of the kevy-compress contract.
-# Accounting contract: bench/V5-ACCOUNTING-CONTRACT.md §2
 #
 # One line per acceptance criterion; a line is either a real assertion or
 # PENDING(<train>). RED until every line it owns is green — the
@@ -63,7 +62,6 @@ line() { # name, status, detail
 }
 
 echo "compressgate — kevy-compress acceptance (RFC 2026-07-26-v5-kevy-compress §6)"
-echo "contract: bench/V5-ACCOUNTING-CONTRACT.md §2"
 echo
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

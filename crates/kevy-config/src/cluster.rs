@@ -8,6 +8,8 @@
 //! bounded (per-peer TLS, auth, and region are explicitly out of
 //! charter for the election subsystem).
 
+pub use crate::peer::{PeerEntry, ScopeEntry};
+
 /// `[cluster]` section — single-node cluster mode: keys route by
 /// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
 /// gets a second, deterministic listener at `port_base + i` that answers
@@ -21,376 +23,137 @@
 /// hold owned vectors). Most call sites just clone the per-tick
 /// `Config` snapshot via `Arc<Config>`, so this is invisible in the
 /// hot path.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// ```
+/// let cfg = kevy_config::Config::from_toml_str(
+///     "[cluster]\nenabled = true\nport_base = 7001\n",
+///     None,
+/// )?;
+/// assert!(cfg.cluster.enabled);
+/// assert_eq!(cfg.cluster.port_base, 7001); // shard i at 7001 + i
+/// assert!(cfg.cluster.peers.is_empty(), "no election configured");
+/// # Ok::<(), kevy_config::ConfigError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[non_exhaustive]
 pub struct ClusterSection {
     /// Enable cluster mode. Default `false` (zero change).
+    ///
+    /// ```
+    /// assert!(!kevy_config::Config::default().cluster.enabled);
+    /// let cfg = kevy_config::Config::from_toml_str("[cluster]\nenabled = true\n", None)?;
+    /// assert!(cfg.cluster.enabled);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub enabled: bool,
     /// First cluster port (shard `i` listens at `port_base + i`).
     /// `0` (default) = `server.port + 1`.
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::Config::default().cluster.port_base, 0); // server.port + 1
+    /// let cfg = kevy_config::Config::from_toml_str("[cluster]\nport_base = 7001\n", None)?;
+    /// assert_eq!(cfg.cluster.port_base, 7001);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub port_base: u16,
     /// This node's stable id for the quorum election (≤ 32 B
     /// ASCII; unique across the cluster). Default empty —
     /// `kevy-elect` is dormant unless both `node_id` and `peers`
     /// are set, so existing configs need no edit.
+    ///
+    /// ```
+    /// assert!(kevy_config::Config::default().cluster.node_id.is_empty()); // election dormant
+    /// let cfg = kevy_config::Config::from_toml_str("[cluster]\nnode_id = \"n1\"\n", None)?;
+    /// assert_eq!(cfg.cluster.node_id, "n1");
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub node_id: String,
     /// First election-control listener port; shard `i` binds at
     /// `elect_port_base + i`. Default `0` → `server.port + 200`
     /// (locked by the `resolved_elect_port_base` unit test).
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::Config::default().cluster.elect_port_base, 0); // server.port + 200
+    /// let cfg = kevy_config::Config::from_toml_str("[cluster]\nelect_port_base = 6204\n", None)?;
+    /// assert_eq!(cfg.cluster.elect_port_base, 6204);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub elect_port_base: u16,
+    /// Address advertised in `CLUSTER SLOTS/NODES/SHARDS` and `-MOVED`
+    /// instead of the bind address — for a node reached through a
+    /// proxy or NAT. `None` (default) advertises the bind address, with
+    /// `127.0.0.1` for a `0.0.0.0` bind.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     "[cluster]\nenabled = true\nannounce_ip = \"203.0.113.7\"\n",
+    ///     None,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.cluster.announce_ip, Some([203, 0, 113, 7]));
+    /// ```
+    pub announce_ip: Option<[u8; 4]>,
+    /// First advertised cluster port, paired with `announce_ip` when the
+    /// proxy maps the per-shard ports to a different range. `0`
+    /// (default) advertises the ports kevy listens on.
+    ///
+    /// ```
+    /// let cfg =
+    ///     kevy_config::Config::from_toml_str("[cluster]\nannounce_port_base = 7001\n", None).unwrap();
+    /// assert_eq!(cfg.cluster.announce_port_base, 7001);
+    /// ```
+    pub announce_port_base: u16,
+    /// Encrypt and authenticate the election links with Noise. Needs
+    /// `[secure] private_key_file` and a `peer_keys` entry for every peer.
+    ///
+    /// ```
+    /// assert!(!kevy_config::Config::default().cluster.secure);
+    /// ```
+    pub secure: bool,
+    /// Each peer's public key, as `(node_id, key)`. A peer whose election
+    /// link does not present its key is refused.
+    ///
+    /// ```
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     &format!("[cluster]\npeer_keys = [\"n2={}\"]\n", "ab".repeat(32)),
+    ///     None,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(cfg.cluster.peer_keys, vec![("n2".to_string(), [0xab; 32])]);
+    /// ```
+    pub peer_keys: Vec<(String, [u8; 32])>,
     /// Operator-declared peer list for `kevy-elect`. Empty when
     /// failover is not configured. Each entry is one cluster node
     /// (including potentially *this* node — kevy-elect filters
     /// self by matching `node_id`).
+    ///
+    /// ```
+    /// use kevy_config::PeerEntry;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     "[cluster]\nnode_id = \"n1\"\npeers = [\"n1@10.0.0.1:6204\", \"n2@10.0.0.2:6204\"]\n",
+    ///     None,
+    /// )?;
+    /// assert_eq!(cfg.cluster.peers.len(), 2);
+    /// assert_eq!(cfg.cluster.peers[1], PeerEntry::new("n2".into(), "10.0.0.2".into(), 6204));
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
     pub peers: Vec<PeerEntry>,
     /// Scope declarations: each entry pins a key prefix to a writer
     /// node (and optional fallback). Empty when scope-based
     /// multi-writer is off. Same flat-string TOML shape as `peers`
     /// — `scopes = "prefix=writer[|fallback],..."`.
-    pub scopes: Vec<ScopeEntry>,
-}
-
-/// One scope declaration parsed from the TOML
-/// `scopes = "prefix=writer[|fallback],..."` shape. Mirrors the
-/// `kevy_scope::Scope` data; kept duplicated here so kevy-config
-/// stays leaf-level and doesn't depend on kevy-scope (the dependency
-/// direction is kevy-scope ← kevy-config consumer, not the other
-/// way).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScopeEntry {
-    /// Key-prefix bytes the scope owns. Bytes (not String) because
-    /// kevy keys are arbitrary; common keys (`app:billing:`) are
-    /// UTF-8 but the type signature stays honest.
-    pub prefix: Vec<u8>,
-    /// Declared writer's node id.
-    pub writer: String,
-    /// Optional fallback node id (F4).
-    pub fallback: Option<String>,
-}
-
-impl ScopeEntry {
-    /// Render back to the `prefix=writer[|fallback]` token shape —
-    /// exact inverse of [`Self::parse_one`] for entries it produced.
-    /// The prefix is parsed from TOML text, so it is UTF-8 whenever
-    /// this is used on a config round-trip (`CONFIG REWRITE`).
-    pub fn to_token(&self) -> String {
-        let prefix = String::from_utf8_lossy(&self.prefix);
-        match &self.fallback {
-            Some(fb) => format!("{prefix}={}|{fb}", self.writer),
-            None => format!("{prefix}={}", self.writer),
-        }
-    }
-
-    /// Parse one `prefix=writer[|fallback]` token. The first `=`
-    /// splits prefix from owner spec; the writer may carry an
-    /// optional `|fallback` suffix. Returns `None` on any shape
-    /// problem (missing `=`, empty fields, prefix containing `,`).
-    pub fn parse_one(token: &str) -> Option<Self> {
-        // Reject commas inside the token — `parse_list` already
-        // split on commas, so a comma here means the operator typed
-        // `prefix=a,b` (ambiguous owner list); we treat that as a
-        // parse error rather than silently take only `a`.
-        if token.contains(',') {
-            return None;
-        }
-        let (prefix, owners) = token.split_once('=')?;
-        if prefix.is_empty() || owners.is_empty() {
-            return None;
-        }
-        let (writer, fallback) = match owners.split_once('|') {
-            Some((w, f)) if !w.is_empty() && !f.is_empty() => (w, Some(f.to_string())),
-            Some(_) => return None, // `|` present but one side empty
-            None => (owners, None),
-        };
-        Some(ScopeEntry {
-            prefix: prefix.as_bytes().to_vec(),
-            writer: writer.to_string(),
-            fallback,
-        })
-    }
-
-    /// Parse a `scopes = "..."` value — comma-separated list of
-    /// `prefix=writer[|fallback]` tokens. Empty + whitespace-only
-    /// tokens are dropped; trailing comma tolerated. Same
-    /// error-on-first-bad-token contract as
-    /// [`PeerEntry::parse_list`].
-    pub fn parse_list(s: &str) -> Result<Vec<ScopeEntry>, String> {
-        let mut out = Vec::new();
-        for raw in s.split(',') {
-            let token = raw.trim();
-            if token.is_empty() {
-                continue;
-            }
-            match Self::parse_one(token) {
-                Some(p) => out.push(p),
-                None => return Err(token.to_string()),
-            }
-        }
-        Ok(out)
-    }
-}
-
-/// One peer in the `kevy-elect` quorum, parsed from the TOML
-/// shape `peers = "id@host:port,id@host:port,..."` — a
-/// parser-extension-free representation
-/// that works with kevy-config's flat KV-only TOML.
-///
-/// The extended syntax adds an optional second port for the
-/// **client-facing** address (used by `-MISDIRECTED writer is`
-/// replies): `id@host:elect_port:client_port`. When the extended
-/// form is used, kevy-elect still binds the elect_port, while
-/// kevy-scope's MISDIRECTED encoder reports `host:client_port` to
-/// the client so the client can actually reconnect to the writer.
-/// Without the extended form, MISDIRECTED reports `host:elect_port`
-/// (documented legacy behaviour, retained for compat).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerEntry {
-    /// Peer's stable node id.
-    pub node_id: String,
-    /// Peer's host (IPv4 dotted literal or DNS-resolvable name).
-    pub host: String,
-    /// Peer's election-control port (= peer's
-    /// `cluster.elect_port_base + 0`, the shard 0 listener).
-    pub port: u16,
-    /// Peer's client-facing TCP port (the port other
-    /// kevy nodes / `redis-cli` connect to for normal operations).
-    /// `None` = unset (legacy syntax `id@host:port`); MISDIRECTED
-    /// replies fall back to `port` in that case. Set via extended
-    /// syntax `id@host:elect_port:client_port`.
-    pub client_port: Option<u16>,
-}
-
-impl PeerEntry {
-    /// Render back to the `id@host:port[:client_port]` token shape —
-    /// exact inverse of [`Self::parse_one`] for entries it produced.
-    pub fn to_token(&self) -> String {
-        match self.client_port {
-            Some(cp) => format!("{}@{}:{}:{cp}", self.node_id, self.host, self.port),
-            None => format!("{}@{}:{}", self.node_id, self.host, self.port),
-        }
-    }
-
-    /// Parse one peer token. Accepts two shapes:
-    /// - **Legacy**: `id@host:port` (`port` = elect port).
-    /// - **Extended**: `id@host:elect_port:client_port` (sets
-    ///   `client_port` so MISDIRECTED reports a port the client
-    ///   can actually connect to).
     ///
-    /// Returns `None` on any shape problem (empty fields, non-numeric
-    /// ports, port overflow).
-    pub fn parse_one(token: &str) -> Option<Self> {
-        let (node_id, rest) = token.split_once('@')?;
-        if node_id.is_empty() {
-            return None;
-        }
-        // Find the last colon (== client_port if extended, else elect_port).
-        let last_colon = rest.rfind(':')?;
-        let after_last: u16 = rest[last_colon + 1..].parse().ok()?;
-        let before_last = &rest[..last_colon];
-        // Try the extended form: split `before_last` on its own last colon.
-        if let Some(second_last) = before_last.rfind(':') {
-            // before_last = `host:elect_port`; after_last = `client_port`.
-            let host = &before_last[..second_last];
-            if host.is_empty() {
-                return None;
-            }
-            if let Ok(elect) = before_last[second_last + 1..].parse::<u16>() {
-                return Some(PeerEntry {
-                    node_id: node_id.to_string(),
-                    host: host.to_string(),
-                    port: elect,
-                    client_port: Some(after_last),
-                });
-            }
-        }
-        // Legacy form: `host:port` (port = elect).
-        let host = before_last;
-        if host.is_empty() {
-            return None;
-        }
-        Some(PeerEntry {
-            node_id: node_id.to_string(),
-            host: host.to_string(),
-            port: after_last,
-            client_port: None,
-        })
-    }
-
-    /// Parse the `peers = "..."` value — a comma-separated list of
-    /// `id@host:port` tokens. Empty + all-whitespace tokens are
-    /// dropped silently (a trailing comma after the last entry is
-    /// tolerated). Returns `Err(token)` on the first unparseable
-    /// token, with the offending token in the error for diagnostic.
-    pub fn parse_list(s: &str) -> Result<Vec<PeerEntry>, String> {
-        let mut out = Vec::new();
-        for raw in s.split(',') {
-            let token = raw.trim();
-            if token.is_empty() {
-                continue;
-            }
-            match Self::parse_one(token) {
-                Some(p) => out.push(p),
-                None => return Err(token.to_string()),
-            }
-        }
-        Ok(out)
-    }
-}
-
-#[cfg(test)]
-mod peer_entry_tests {
-    use super::*;
-
-    #[test]
-    fn parse_one_basic() {
-        let p = PeerEntry::parse_one("node-1@10.0.0.1:6004").unwrap();
-        assert_eq!(p.node_id, "node-1");
-        assert_eq!(p.host, "10.0.0.1");
-        assert_eq!(p.port, 6004);
-        assert_eq!(p.client_port, None);
-    }
-
-    #[test]
-    fn parse_one_extended_form_sets_client_port() {
-        // `id@host:elect_port:client_port` syntax — added after
-        // finding MISDIRECTED replies used the elect_port instead
-        // of the main client port.
-        let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004").unwrap();
-        assert_eq!(p.node_id, "node-1");
-        assert_eq!(p.host, "10.0.0.1");
-        assert_eq!(p.port, 6011);
-        assert_eq!(p.client_port, Some(6004));
-    }
-
-    #[test]
-    fn parse_one_extended_form_dns_host() {
-        let p = PeerEntry::parse_one("primary@db-east.local:6011:6004").unwrap();
-        assert_eq!(p.host, "db-east.local");
-        assert_eq!(p.port, 6011);
-        assert_eq!(p.client_port, Some(6004));
-    }
-
-    #[test]
-    fn parse_one_dns_host() {
-        let p = PeerEntry::parse_one("primary@db-east.local:6105").unwrap();
-        assert_eq!(p.host, "db-east.local");
-        assert_eq!(p.port, 6105);
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_id_host_or_bad_port() {
-        assert!(PeerEntry::parse_one("@host:6004").is_none());
-        assert!(PeerEntry::parse_one("id@:6004").is_none());
-        assert!(PeerEntry::parse_one("id@host:NaN").is_none());
-        assert!(PeerEntry::parse_one("id@host:99999").is_none()); // u16 overflow
-        assert!(PeerEntry::parse_one("no-at-or-colon").is_none());
-    }
-
-    #[test]
-    fn parse_list_three_peers_trim_tolerated() {
-        let s = "a@1.1.1.1:6004, b@1.1.1.2:6004 ,c@1.1.1.3:6004";
-        let peers = PeerEntry::parse_list(s).unwrap();
-        assert_eq!(peers.len(), 3);
-        assert_eq!(peers[1].node_id, "b");
-    }
-
-    #[test]
-    fn parse_list_trailing_comma_ok() {
-        let peers = PeerEntry::parse_list("a@h:1,b@h:2,").unwrap();
-        assert_eq!(peers.len(), 2);
-    }
-
-    #[test]
-    fn parse_list_first_bad_token_errs() {
-        let err = PeerEntry::parse_list("a@h:1,bad-token,c@h:3").unwrap_err();
-        assert_eq!(err, "bad-token");
-    }
-
-    #[test]
-    fn parse_list_empty_is_empty() {
-        assert_eq!(PeerEntry::parse_list("").unwrap(), Vec::<PeerEntry>::new());
-        assert_eq!(PeerEntry::parse_list("  ").unwrap(), Vec::<PeerEntry>::new());
-    }
-
-    #[test]
-    fn to_token_round_trips() {
-        for tok in ["node-1@10.0.0.1:6004", "node-1@10.0.0.1:6011:6004", "p@db-east.local:6105"] {
-            let p = PeerEntry::parse_one(tok).unwrap();
-            assert_eq!(p.to_token(), tok);
-            assert_eq!(PeerEntry::parse_one(&p.to_token()), Some(p));
-        }
-    }
-}
-
-#[cfg(test)]
-mod scope_entry_tests {
-    use super::*;
-
-    #[test]
-    fn parse_one_writer_only() {
-        let s = ScopeEntry::parse_one("app:billing:=embed-billing-1").unwrap();
-        assert_eq!(s.prefix, b"app:billing:");
-        assert_eq!(s.writer, "embed-billing-1");
-        assert_eq!(s.fallback, None);
-    }
-
-    #[test]
-    fn parse_one_writer_and_fallback() {
-        let s = ScopeEntry::parse_one("app:billing:=embed-1|fb-server-eu").unwrap();
-        assert_eq!(s.writer, "embed-1");
-        assert_eq!(s.fallback.as_deref(), Some("fb-server-eu"));
-    }
-
-    #[test]
-    fn parse_one_prefix_with_colons() {
-        // Colon-heavy prefixes are the common case; only `=` and `,`
-        // are reserved.
-        let s = ScopeEntry::parse_one("ns:tenant:42:=w").unwrap();
-        assert_eq!(s.prefix, b"ns:tenant:42:");
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_prefix_or_writer() {
-        assert!(ScopeEntry::parse_one("=writer").is_none());
-        assert!(ScopeEntry::parse_one("prefix=").is_none());
-        assert!(ScopeEntry::parse_one("no-equals").is_none());
-    }
-
-    #[test]
-    fn parse_one_rejects_empty_fallback_side() {
-        assert!(ScopeEntry::parse_one("p=writer|").is_none());
-        assert!(ScopeEntry::parse_one("p=|fb").is_none());
-    }
-
-    #[test]
-    fn parse_one_rejects_embedded_comma() {
-        // The split-on-comma in `parse_list` makes commas inside a
-        // token a parse error — operator probably typo'd
-        // `prefix=writer,fallback` instead of `prefix=writer|fallback`.
-        assert!(ScopeEntry::parse_one("p=writer,other").is_none());
-    }
-
-    #[test]
-    fn parse_list_two_scopes() {
-        let v = ScopeEntry::parse_list("app:billing:=w-bill|fb, app:auth:=w-auth").unwrap();
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0].writer, "w-bill");
-        assert_eq!(v[0].fallback.as_deref(), Some("fb"));
-        assert_eq!(v[1].writer, "w-auth");
-        assert!(v[1].fallback.is_none());
-    }
-
-    #[test]
-    fn parse_list_first_bad_token_errs() {
-        let err = ScopeEntry::parse_list("p1=w1,no-eq,p3=w3").unwrap_err();
-        assert_eq!(err, "no-eq");
-    }
-
-    #[test]
-    fn to_token_round_trips() {
-        for tok in ["app:billing:=embed-billing-1", "app:billing:=embed-1|fb-server-eu"] {
-            let s = ScopeEntry::parse_one(tok).unwrap();
-            assert_eq!(s.to_token(), tok);
-            assert_eq!(ScopeEntry::parse_one(&s.to_token()), Some(s));
-        }
-    }
+    /// ```
+    /// use kevy_config::ScopeEntry;
+    ///
+    /// let cfg = kevy_config::Config::from_toml_str(
+    ///     "[cluster]\nscopes = [\"app:billing:=n1|n2\"]\n",
+    ///     None,
+    /// )?;
+    /// let want = ScopeEntry::new(b"app:billing:".to_vec(), "n1".into()).with_fallback("n2".into());
+    /// assert_eq!(cfg.cluster.scopes, vec![want]);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
+    pub scopes: Vec<ScopeEntry>,
 }

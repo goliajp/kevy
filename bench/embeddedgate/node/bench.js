@@ -1,14 +1,13 @@
 // embeddedgate — Node track. kevy-node scalar get/set vs better-sqlite3
 // (synchronous, the real bar) and classic-level (asynchronous, a labeled
-// cross-model reference — NOT a latency peer). See
-// bench/EMBEDDED-LEDGER.md for the fairness rules this
+// cross-model reference — NOT a latency peer). The fairness rules this
 // harness encodes: durability tiers compared within-tier only, sync and
 // async never in the same table, cold-single-op AND amortized both reported,
 // value-size sweep, each side's durability config printed for audit.
 //
 // Relative standing from the dev host is meaningful (kevy vs peer, same env,
 // same run, interleaved so box drift cancels); absolute ns are not an SLA —
-// the definitive pass is lx64 (perf methodology §9).
+// the definitive pass is on the Linux reference box.
 //
 // Run: cargo build --release -p kevy-napi && KEVY_NAPI_LIB=.../libkevy_napi.dylib \
 //      npm --prefix bench/embeddedgate/node install && \

@@ -168,8 +168,8 @@ global snapshot (SCAN-class).
 - `VIEW.REBUILD` is answer-preserving (asserted in the e2e suite);
   `VIEW.VERIFY` makes drift falsifiable (members / bytes /
   order-exclusions).
-- The view catalog persists in a data-dir sidecar; materialized
-  CONTENT is derived state — rebuilt after restart, never
+- The view catalog is recorded in the log and every snapshot, and
+  replicates; materialized CONTENT is derived state — rebuilt after restart, never
   snapshotted.
 
 ## Embedded
@@ -180,8 +180,8 @@ call returns `KevyResult` (4.0's single error currency):
 
 ```rust
 use kevy_embedded::{
-    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
-    ViewMode, ViewTree,
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
 };
 
 fn main() -> kevy_embedded::KevyResult<()> {
@@ -192,18 +192,18 @@ fn main() -> kevy_embedded::KevyResult<()> {
                      IndexKind::Range)?;
 
     let tree = ViewTree::And(
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_pri".to_vec(),
-            min: IndexValue::I64(0),
-            max: IndexValue::I64(100),
-        })),
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_state".to_vec(),
-            min: IndexValue::Str(b"ready".to_vec()),
-            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
-        })),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_pri",
+            IndexValue::I64(0),
+            IndexValue::I64(100),
+        ))),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_state",
+            IndexValue::Str(b"ready".to_vec()),
+            IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        ))),
     );
-    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
                       ViewMode::Materialized { top_k: 100 })?;
 
     store.hset(b"job:1", &[
@@ -220,7 +220,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 }
 ```
 
-- `view_create(name, tree, order_by, desc, mode)` builds
+- `view_create(name, tree, order_by, order, mode)` builds
   synchronously; every referenced index (leaves + ORDER BY) must
   already be declared (`KevyError::InvalidInput` otherwise).
 - `view_query(name, after, limit)` pages `(key, order_value)` rows;

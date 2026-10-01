@@ -27,7 +27,7 @@ On Linux with io_uring available, an AOF with `appendfsync everysec`
 (or `no`) now queues appends onto the shard's ring instead of writing
 synchronously on the reactor. This is the change behind the release's
 tail-latency headline; durability semantics are unchanged (the
-`everysec` crash window is still ≤ 1 s, verified by the crash gate in
+`everysec` crash window is unchanged, verified by the crash gate in
 both modes).
 
 - `KEVY_AOF_OFFLOAD=0` restores the 4.x synchronous path.

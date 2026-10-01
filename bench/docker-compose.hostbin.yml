@@ -1,0 +1,11 @@
+# Layered over docker-compose.yml when compat3 is handed a prebuilt server
+# (KEVY_BIN): the same binary the other gates start runs in the base the
+# shipped image uses, instead of a second release build inside Docker.
+# Building the image from source is proven where the image is published.
+services:
+  kevy:
+    build: !reset null
+    image: debian:trixie-slim
+    volumes:
+      - ${KEVY_BIN:?}:/usr/local/bin/kevy:ro
+    entrypoint: ["/usr/local/bin/kevy"]

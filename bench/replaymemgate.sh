@@ -14,9 +14,13 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET_MB=${1:-512}
 MAX_RSS_MB=${2:-192}
 
-cargo build -q -p kevy-embedded --example crash_writer --example crash_check || exit 1
-WRITER="$HERE/target/debug/examples/crash_writer"
-CHECK="$HERE/target/debug/examples/crash_check"
+# The writer's automatic compaction is off: its live data is ~256 KB, so with
+# it on the log was rewritten every time it passed 64 MB and never came near
+# the target, and the gate measured a log smaller than its own RSS cap. The
+# fsync barriers are off too; replay memory does not depend on them.
+cargo build -q --profile release-tests -p kevy-embedded --example crash_writer --example crash_check || exit 1
+WRITER="$HERE/target/release-tests/examples/crash_writer"
+CHECK="$HERE/target/release-tests/examples/crash_check"
 
 WORK=$(mktemp -d /tmp/replaymem.XXXXXX)
 WPID=""
@@ -26,7 +30,7 @@ trap cleanup EXIT
 dir="$WORK/db"
 mkdir -p "$dir"
 echo "replaymemgate: growing a ~${TARGET_MB}MB v2 AOF…"
-"$WRITER" "$dir" > "$WORK/w.log" 2>/dev/null &
+"$WRITER" "$dir" --no-sync --no-auto-rewrite > "$WORK/w.log" 2>/dev/null &
 WPID=$!
 aof="$dir/aof-0.aof"
 for _ in $(seq 600); do
@@ -37,6 +41,11 @@ done
 kill -9 "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; WPID=""
 size=$(stat -f%z "$aof" 2>/dev/null || stat -c%s "$aof")
 echo "replaymemgate: AOF = $((size / 1024 / 1024))MB"
+# the promise is about a log much larger than the cap; a smaller one proves nothing
+if [ "$size" -lt $((TARGET_MB * 1024 * 1024)) ]; then
+    echo "replaymemgate: REFUSED — the log reached $((size / 1024 / 1024))MB of ${TARGET_MB}MB" >&2
+    exit 2
+fi
 
 # Peak RSS of the reopen (replay + valid-prefix + report), portable field
 # scrape: macOS `time -l` prints bytes, Linux `time -v` prints KB.

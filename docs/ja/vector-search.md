@@ -22,7 +22,7 @@ kevy-cli -p 6004 IDX.QUERY embs KNN "csv:0.1,0.2,0.3,0.4" LIMIT 2 FIELDS title
 
 応答は`key, distance`の組の昇順です（最も近いものが先）。`FIELDS`は、各ヒットを所有するシャード上で、同じ呼び出しの中でハッシュフィールドをhydrateします。本番では、ベクトルの値はクライアントライブラリが書くバイナリのblob（リトルエンディアンf32の`dim × 4`バイト）です。上の`csv:`形式はデバッグ用の便宜です。
 
-補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。`IDX.REBUILD`はANN固有です——「削除と再構築」を参照してください。
+補助verbは、ほかのどのkindとも同じように効きます。`IDX.EXPLAIN embs KNN …`（実行を伴わないパースとプラン）、`IDX.VERIFY` / `IDX.LIST`（ライブの統計）、`IDX.DROP`。ANNインデックスでは`IDX.REBUILD`がグラフを詰め直します——「削除と再構築」を参照してください。
 
 ## クイックスタート（組み込み）
 
@@ -34,11 +34,9 @@ use kevy_embedded::{AnnSpec, Config, Store};
 fn main() -> kevy_embedded::KevyResult<()> {
     let store = Store::open(Config::default())?;
 
-    // m / ef of 0 select the defaults (16 / 200);
+    // AnnSpec::new starts at M 16 / EF 200;
     // distance: 0 = cosine, 1 = l2, 2 = ip.
-    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec {
-        dim: 4, distance: 0, m: 0, ef: 0,
-    })?;
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
 
     let v1: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
         .iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -98,14 +96,14 @@ IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN <f32-le-blob>
 
 ## 整合性
 
-どのインデックスkindとも同じ包絡線です（[indexes.md](indexes.md)）。書き込みとそのグラフ更新は所有シャードの内側でアトミックです。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとのtop-kをマージします（SCANクラス）。カタログはデータディレクトリのサイドカーに永続化されます。グラフの**内容**は派生状態であり、再起動後に再構築されます。
+どのインデックスkindとも同じ包絡線です（[indexes.md](indexes.md)）。書き込みとそのグラフ更新は所有シャードの内側でアトミックです。シャードをまたぐクエリは、グローバルスナップショットなしにシャードごとのtop-kをマージします（SCANクラス）。カタログはログと各スナップショットに記録され、レプリケーションで配られます。グラフの**内容**は派生状態であり、再起動後に再構築されます。
 
 ## パフォーマンス
 
 計測された包絡線です（領収書はbenchツリーにあります）。
 
 - [`bench/vectorgate.sh`](../../bench/vectorgate.sh)は、実サーバーに対して1M × 128次元でKNN LIMIT 10のp95 < 30msをゲートし、同時にEF 400で再現率0.90以上が成立していることもゲートします（2つのclampを同時に——速いが間違った答えは通りません）。あわせて、メモリの式を実RSSの増分に対して（0.5〜1.5倍で）ゲートします。
-- [`bench/PERF-LEDGER.md`](../../bench/PERF-LEDGER.md)が比較対決を記録しています。再現率を1.000に揃えたうえで、KNNは0.48 msで答えます（redis-stack 7.4.7のRediSearchのHNSWは同一コーパス上で0.79 ms）——**1.64倍の優位**です。
+- [`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md)が比較対決を記録しています。再現率を1.000に揃えたうえで、KNNは0.48 msで答えます（redis-stack 7.4.7のRediSearchのHNSWは同一コーパス上で0.79 ms）——**1.64倍の優位**です。
 
 書き込み側のコストは標準的なインデックス税です（マッチするインデックス1つにつき、書き込みごとにフィールドのパース1回とグラフ挿入1回）。構築コストは`EF`（構築時のビーム）に比例して増えます。だからこそ、これは宣言時のパラメータなのです。
 

@@ -6,32 +6,33 @@
 
 use crate::store::Store;
 
-use super::util::{arr, bulk, int, simple, wrong_args};
-// Every remaining `err` call in this file sits inside the same cfg. Left
-// unconditional the import is dead on wasm32, and `warnings = "deny"` makes
-// that a build failure on a target nothing else here compiles for.
+use kevy_resp::{encode_array_len, encode_bulk, encode_integer, encode_simple_string};
+use kevy_verbs::reply::wrong_args;
+// Every remaining `encode_error` call in this file sits inside the same cfg.
+// Left unconditional the import is dead on wasm32, and `warnings = "deny"`
+// makes that a build failure on a target nothing else here compiles for.
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
-use super::util::err;
+use kevy_resp::encode_error;
 
 /// One conn/digest/feed request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one reply-emitter arm per verb.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     match up {
         b"PING" => match argv.len() {
-            1 => simple(out, "PONG"),
-            2 => bulk(out, &argv[1]),
+            1 => encode_simple_string(out, "PONG"),
+            2 => encode_bulk(out, &argv[1]),
             _ => wrong_args(out, "ping"),
         },
         b"ECHO" => {
             if argv.len() == 2 {
-                bulk(out, &argv[1]);
+                encode_bulk(out, &argv[1]);
             } else {
                 wrong_args(out, "echo");
             }
         }
         b"PUBLISH" => {
             if argv.len() == 3 {
-                int(out, s.publish(&argv[1], &argv[2]) as i64);
+                encode_integer(out, s.publish(&argv[1], &argv[2]) as i64);
             } else {
                 wrong_args(out, "publish");
             }
@@ -39,9 +40,9 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         b"PREFIX.DIGEST" => {
             if argv.len() == 2 {
                 let (count, xor) = s.prefix_digest(&argv[1]);
-                arr(out, 2);
-                int(out, count as i64);
-                bulk(out, format!("{xor:016x}").as_bytes());
+                encode_array_len(out, 2);
+                encode_integer(out, count as i64);
+                encode_bulk(out, format!("{xor:016x}").as_bytes());
             } else {
                 wrong_args(out, "prefix.digest");
             }
@@ -64,7 +65,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
         b"FEED.SHARDS" => {
             if argv.len() == 1 {
-                int(out, s.feed_shards() as i64);
+                encode_integer(out, s.feed_shards() as i64);
             } else {
                 wrong_args(out, "feed.shards");
             }
@@ -75,12 +76,12 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
                 wrong_args(out, "feed.tail");
             } else {
                 match s.changes_tail() {
-                    Ok((g, o)) => {
-                        arr(out, 2);
-                        int(out, g as i64);
-                        int(out, o as i64);
+                    Ok(tail) => {
+                        encode_array_len(out, 2);
+                        encode_integer(out, tail.generation as i64);
+                        encode_integer(out, tail.offset as i64);
                     }
-                    Err(e) => err(out, &format!("ERR feed: {e:?}")),
+                    Err(e) => encode_error(out, &e.wire_text()),
                 }
             }
         }
@@ -89,7 +90,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
             if argv.len() >= 4 {
                 cmd_feed_read(s, argv, out);
             } else {
-                err(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
+                encode_error(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
             }
         }
         _ => return false,
@@ -101,31 +102,32 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
 /// wire shape (`listener/verbs.rs::cmd_feed_read`), byte for byte.
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    use super::util::arg_i64;
+    use kevy_verbs::args::arg_i64;
     let (Some(g), Some(o), Some(limit)) = (arg_i64(&argv[1]), arg_i64(&argv[2]), arg_i64(&argv[3]))
     else {
-        return err(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
+        return encode_error(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
     };
     let mut prefixes: Vec<&[u8]> = Vec::new();
     if argv.len() > 4 {
         if !argv[4].eq_ignore_ascii_case(b"PREFIX") || argv.len() < 6 {
-            return err(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
+            return encode_error(out, "ERR FEED.READ gen offset limit [PREFIX p…]");
         }
         prefixes = argv[5..].iter().map(Vec::as_slice).collect();
     }
-    match s.changes_since(g as u64, o as u64, limit.clamp(1, 10_000) as usize, &prefixes) {
+    let from = crate::FeedPosition::new(g as u64, o as u64);
+    match s.changes_since(from, limit.clamp(1, 10_000) as usize, &prefixes) {
         Ok(batch) => {
-            arr(out, 3);
-            int(out, batch.next.0 as i64);
-            int(out, batch.next.1 as i64);
-            arr(out, batch.changes.len());
+            encode_array_len(out, 3);
+            encode_integer(out, batch.next.generation as i64);
+            encode_integer(out, batch.next.offset as i64);
+            encode_array_len(out, batch.changes.len() as i64);
             for f in &batch.changes {
-                arr(out, f.argv.len());
+                encode_array_len(out, f.argv.len() as i64);
                 for a in &f.argv {
-                    bulk(out, a);
+                    encode_bulk(out, a);
                 }
             }
         }
-        Err(e) => err(out, &format!("ERR feed: {e:?}")),
+        Err(e) => encode_error(out, &e.wire_text()),
     }
 }

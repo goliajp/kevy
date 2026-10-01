@@ -53,6 +53,16 @@ KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
 KEVY_IO_URING=0 kevy --port 6004   # force epoll
 ```
 
+**Receive buffers (io_uring).** Each shard receives into a ring of 16 KiB buffers that the kernel fills as data arrives. The ring holds `recv_buffers` × 16 KiB per shard, and all of it becomes resident once traffic has cycled through it: 16 MiB a shard at the default of 1024, which kept throughput unchanged from the previous fixed 4096 (64 MiB a shard) on the benchmark sweep. A ring that runs dry is not an error — the receive that found it empty is re-armed and the data waits in the socket — so the setting trades memory against re-arming under bursts. Raise it when thousands of connections per shard send at once; lower it when the memory matters more. It is read at startup, must be a power of two from 1 to 32768, and does nothing on the epoll or kqueue reactors.
+
+```toml
+[server]
+port = 6004
+
+[advanced]
+recv_buffers = 2048   # 32 MiB per shard
+```
+
 ### Persistence
 
 AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The three values match Redis semantics:
@@ -60,7 +70,7 @@ AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The thr
 | `appendfsync` | Durability | Cost |
 |---------------|------------|------|
 | `always` | every write `fsync`-ed before reply | highest latency; bounded by NVMe sync latency |
-| `everysec` (default) | `fsync` once per second on a background thread | bounded data loss window of 1 s; near-zero hot-path cost |
+| `everysec` (default) | `fsync` about once per second on a background thread | power-loss window of about 1 s plus one `fsync`; near-zero hot-path cost |
 | `no` | never `fsync`; kernel flushes on its own schedule | fastest; data loss window = page-cache flush interval |
 
 The background `fsync` for `everysec` runs on a dedicated bio thread off the shard hot path, so shard tail latency is not coupled to disk latency. For a pure cache or a read-replica, also consider disabling AOF entirely with `--no-aof` (no AOF file is written at all, not even buffered).
@@ -79,7 +89,7 @@ Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `all
 
 **Size containers from `process_rss_bytes`, not `used_memory`.** `INFO memory` reports both: `used_memory` is the store's keyspace accounting — what `maxmemory` and the tiering budget act on — while `process_rss_bytes` is what the OS actually holds resident for the process, which additionally carries indexes and views, connection and replication buffers, and allocator overhead/fragmentation. A container memory limit set from `used_memory` will OOM-kill a healthy process; set limits against observed RSS with headroom.
 
-**The opt-in allocator.** A build with `--features kevy-alloc` swaps glibc malloc for kevy's own span allocator: ~10 % smaller steady-state RSS under churn, at a throughput cost only on saturated collection-write shards. When memory capacity is the binding constraint, it is worth the build; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measured trade.
+**The allocator.** The server runs on kevy's own span allocator, `kevy-alloc`, by default: one heap per shard, free 4 KiB pages handed back to the OS, and a compaction pass on the shard tick that packs the holes demotion and deletes leave, which is what holds a tiered server's RSS at its budget × 1.05. Against glibc it costs as many instructions per write command or fewer, and `LPUSH` and `ZADD` run about 11 % faster. `INFO modules` shows `module:name=alloc,impl=kevy-alloc`. Build with `--no-default-features` for the system allocator — for tools that hook malloc, or on a system whose pages are larger than 4 KiB, where it cannot return pages; see [docs/alloc.md](https://github.com/goliajp/kevy/blob/develop/docs/alloc.md) for the measurements.
 
 ### Network
 
@@ -92,7 +102,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 The server dual-binds: TCP stays available for remote clients, UDS handles local ones. Same RESP semantics, same shard runtime. The gain on local-client workloads is large (the loopback TCP path is the dominant cost at small payload sizes); see [docs/uds.md](https://github.com/goliajp/kevy/blob/develop/docs/uds.md) for the full numbers, the permissions model, and the cases where UDS does not apply.
 
-**Bind address warning.** kevy has no AUTH and no TLS today. Binding to a non-loopback address (`--bind 0.0.0.0` or any public interface) prints a startup warning, because anything on the network can then issue commands. Run kevy behind a private network boundary or behind a proxy that terminates auth.
+**Bind address warning.** kevy has no AUTH and no TLS. Binding to a non-loopback address (`--bind 0.0.0.0` or any public interface) prints a startup warning, because anything on the network can then issue commands. Run kevy behind a private network boundary or behind a proxy that terminates auth. Turning on the encrypted client port ([encrypted-links.md](encrypted-links.md)) does not close the plaintext one, so the warning still applies.
 
 **Connection introspection.** `INFO clients` reports live `connected_clients` and `blocked_clients` gauges, summed across all shards (`blocked_clients` counts each connection parked in a blocking command once, wherever it is registered). `CLIENT LIST` / `CLIENT INFO` render one Redis-7.x-shaped row per real client connection — peer address, a globally unique `id`, `name`, subscription counts, MULTI queue depth, input/output buffer sizes (`cmd=NULL`: the last-command name is not tracked). `CLIENT SETNAME` labels the connection for LIST; `CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>` (or the legacy positional `CLIENT KILL <ip:port>`) closes every matching connection, including ones parked in blocking commands. Teardown waits for the victim's pending output to drain, so a connection that kills itself still receives its own reply.
 
@@ -188,7 +198,7 @@ On Linux ≥ 5.19 with a workload that batches submissions, yes, materially. On 
 
 **What's the production sweet spot for `appendfsync`?**
 
-`everysec` for almost everyone. It bounds data loss to one second, runs the `fsync` off the hot path, and has near-zero impact on tail latency. Use `always` only when your durability story actually requires zero data loss (and accept that NVMe `fsync` latency now bounds your tail latency). Use `no` only for pure caches where the AOF exists just for warm-restart speed.
+`everysec` for almost everyone. It bounds data loss to about one second plus one `fsync`, runs the `fsync` off the hot path, and has near-zero impact on tail latency. Use `always` only when your durability story actually requires zero data loss (and accept that NVMe `fsync` latency now bounds your tail latency). Use `no` only for pure caches where the AOF exists just for warm-restart speed.
 
 **When do I need `MADV_HUGEPAGE`?**
 

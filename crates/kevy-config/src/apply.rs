@@ -30,6 +30,7 @@ impl Config {
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
+            "secure" => self.apply_secure(item),
             other => Err(schema_err(item, format!("unknown section [{other}]"))),
         }
     }
@@ -144,11 +145,8 @@ impl Config {
         match item.key.as_str() {
             "notify_keyspace_events" => {
                 let s = value_as_string(item)?;
-                if let Err(c) = crate::parse_notification_flags(&s) {
-                    return Err(schema_err(
-                        item,
-                        format!("unknown notify_keyspace_events flag char {c:?}"),
-                    ));
+                if let Err(e) = s.parse::<crate::NotificationFlags>() {
+                    return Err(schema_err(item, format!("notify_keyspace_events: {e}")));
                 }
                 self.notification.notify_keyspace_events = s;
             }
@@ -163,6 +161,16 @@ impl Config {
             "park_timeout_ms" => self.advanced.park_timeout_ms = value_as_u32(item)?,
             "tick_check_every" => self.advanced.tick_check_every = value_as_u32(item)?,
             "ring_capacity" => self.advanced.ring_capacity = value_as_usize(item)?,
+            "recv_buffers" => {
+                let n = value_as_u32(item)?;
+                if !n.is_power_of_two() || n > 32_768 {
+                    return Err(schema_err(
+                        item,
+                        "recv_buffers must be a power of two, 1 to 32768",
+                    ));
+                }
+                self.advanced.recv_buffers = n;
+            }
             k => return Err(schema_err(item, format!("unknown [advanced] key: {k}"))),
         }
         Ok(())
@@ -202,6 +210,15 @@ impl Config {
             "port_base" => self.cluster.port_base = value_as_u16(item)?,
             "node_id" => self.cluster.node_id = value_as_string(item)?,
             "elect_port_base" => self.cluster.elect_port_base = value_as_u16(item)?,
+            "announce_ip" => {
+                let ip = parse_ipv4(&value_as_string(item)?).ok_or_else(|| {
+                    schema_err(item, "announce_ip must be a dotted-quad IPv4 string")
+                })?;
+                self.cluster.announce_ip = Some(ip);
+            }
+            "announce_port_base" => self.cluster.announce_port_base = value_as_u16(item)?,
+            "secure" => self.cluster.secure = value_as_bool(item)?,
+            "peer_keys" => self.cluster.peer_keys = crate::secure::peer_keys_item(item)?,
             // Both accept `["a", "b"]` and the legacy `"a,b"`. Neither a peer
             // (`id@host:port`) nor a scope (`prefix=writer|fallback`) may itself
             // contain a comma, so re-joining an array and handing it to the
@@ -209,12 +226,12 @@ impl Config {
             "peers" => {
                 let raw = value_as_list(item)?.join(",");
                 self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(item, format!("bad peer token: {tok:?}")))?;
+                    .map_err(|e| schema_err(item, e.to_string()))?;
             }
             "scopes" => {
                 let raw = value_as_list(item)?.join(",");
                 self.cluster.scopes = crate::cluster::ScopeEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(item, format!("bad scope token: {tok:?}")))?;
+                    .map_err(|e| schema_err(item, e.to_string()))?;
             }
             k => return Err(schema_err(item, format!("unknown [cluster] key: {k}"))),
         }
@@ -265,6 +282,9 @@ impl Config {
             "replica_read_only" => {
                 self.replication.replica_read_only = value_as_bool(item)?;
             }
+            "secure" => self.replication.secure = value_as_bool(item)?,
+            "upstream_key" => self.replication.upstream_key = Some(crate::secure::key_item(item)?),
+            "replica_keys" => self.replication.replica_keys = crate::secure::keys_item(item)?,
             k => return Err(schema_err(item, format!("unknown [replication] key: {k}"))),
         }
         Ok(())
@@ -339,7 +359,7 @@ fn value_as_bool(item: &Item) -> Result<bool, ConfigError> {
     }
 }
 
-fn value_as_u16(item: &Item) -> Result<u16, ConfigError> {
+pub(crate) fn value_as_u16(item: &Item) -> Result<u16, ConfigError> {
     let n = value_as_i64(item)?;
     u16::try_from(n).map_err(|_| schema_err(item, format!("value {n} out of range for u16")))
 }
@@ -366,7 +386,7 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
     match &item.value {
         Value::Int(n) => u64::try_from(*n)
             .map_err(|_| schema_err(item, format!("size value {n} must be non-negative"))),
-        Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e)),
+        Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e.to_string())),
         other @ (Value::Bool(_) | Value::Arr(_)) => {
             Err(schema_err(item, format!("expected size literal, got {other:?}")))
         }
@@ -383,7 +403,7 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
 ///
 /// Empty entries are dropped either way, so a trailing comma in the string form
 /// (`"a,b,"`) means the same as it does in the array form.
-fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
+pub(crate) fn value_as_list(item: &Item) -> Result<Vec<String>, ConfigError> {
     match &item.value {
         Value::Arr(v) => {
             Ok(v.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())

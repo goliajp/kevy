@@ -8,6 +8,8 @@ mod advise;
 mod agg;
 mod chunk;
 mod claused;
+mod global;
+mod global_verify;
 mod query;
 mod ranked;
 
@@ -34,6 +36,13 @@ pub(crate) fn extension_reduce(
     chunks: Vec<Vec<u8>>,
 ) -> ExtensionReduced {
     let catalogs = &state.catalogs;
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(crate::cmd_index_query::PART_VERB)) {
+        let orig = &argv[crate::cmd_index_query::PART_ORIG..];
+        if let Some(err) = triage_status(orig, &chunks) {
+            return ExtensionReduced::Reply(err);
+        }
+        return global::next_phase(state, argv, &chunks);
+    }
     if let Some(err) = triage_status(argv, &chunks) {
         advise::on_refused(state, argv, &chunks);
         return ExtensionReduced::Reply(err);
@@ -57,6 +66,11 @@ pub(crate) fn extension_reduce(
         return ExtensionReduced::Reply(ranked::reduce_ranked(argv, &chunks, true));
     }
     // REBUILD: all shards OK → +OK.
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
+        && let Some(reply) = global::rebuild(state, argv, &chunks)
+    {
+        return ExtensionReduced::Reply(reply);
+    }
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
         return ExtensionReduced::Reply(query::reduce_rebuild(&chunks));
     }
@@ -77,6 +91,10 @@ pub(crate) fn extension_reduce(
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return ExtensionReduced::Reply(query::reduce_compose(argv, &chunks));
     }
+    // A global index's page in order: partitions concatenate, never merge.
+    if let Some(reduced) = global::first_phase(state, argv, &chunks) {
+        return reduced;
+    }
     // IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
     ExtensionReduced::Reply(query::reduce_query(argv, &chunks))
 }
@@ -96,7 +114,7 @@ fn reduce_admin(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -
         return Some(query::reduce_list(catalogs, chunks));
     }
     if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
-        return Some(query::reduce_verify(chunks));
+        return Some(global_verify::reduce(chunks).unwrap_or_else(|| query::reduce_verify(chunks)));
     }
     None
 }

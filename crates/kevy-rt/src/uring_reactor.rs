@@ -41,19 +41,12 @@ use std::time::{Duration, Instant};
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
-/// Nap rung (batch-gated, see the idle ladder): deaf-sleep length. Long
-/// enough for all 7 origin shards to enqueue another round of forwards,
-/// short enough that a once-per-burst straggler barely notices.
-const NAP_US: u64 = 200;
-/// Minimum size of the previous inbound drain for the nap rung to arm.
-/// Sequential -c1 traffic drains 1 message per request and must never
-/// nap (that was the 15× -c1 bug the batch gate exists to prevent).
-const NAP_BATCH_MIN: usize = 4;
 // The `user_data` op-tag layout (`OP_*` / `CONN_MASK`), the writev
 // iovec cap, and the special-cased errnos live in [`crate::uring_ops`]
 // — split out so this file stays under the 500-LOC house rule.
 // Re-exported so the sibling uring modules keep their
 // `crate::uring_reactor::…` paths.
+use crate::uring_idle::{IdleStep, idle_step};
 pub(crate) use crate::uring_ops::{
     CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN, OP_AOF,
     OP_BIG_CANCEL, OP_BIG_READ, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
@@ -103,11 +96,11 @@ impl<C: Commands> Shard<C> {
         let mut idle_spins: u32 = 0;
         let stall_dump_every = crate::uring_stalldump::stall_dump_interval();
         let mut last_stall_dump = crate::uring_stall_cadence::stall_dump_start(stall_dump_every);
-        // Nap rung (restored, batch-gated): size of the last
-        // non-empty inbound drain + whether this idle episode already
-        // napped. See the idle-ladder comment below.
+        // Hot-idle rung (batch-gated): size of the last non-empty inbound
+        // drain, and when this idle episode's hot window ends. See the
+        // idle-ladder comment below.
         let mut last_inbound_batch: usize = 0;
-        let mut napped = false;
+        let mut hot_until: Option<std::time::Instant> = None;
         let mut park = ParkState::default();
         let mut woke_from_park = false;
 
@@ -227,7 +220,8 @@ impl<C: Commands> Shard<C> {
                         io_work = true;
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
-                            let sock = unsafe { Socket::from_raw_fd(c.res) };
+                            let sock =
+                                unsafe { <Socket as std::os::fd::FromRawFd>::from_raw_fd(c.res) };
                             // Refuse client conns past max_clients_per_shard
                             // (cluster-bus links exempt as infrastructure).
                             if !cluster
@@ -279,6 +273,8 @@ impl<C: Commands> Shard<C> {
             // discarded; with the dirty-set arm loop, the marks are
             // load-bearing.
             self.flush_backlog();
+            // unacknowledged hook messages (see `exec_ext`)
+            self.send_ext(false);
             self.flush_requests();
             self.flush_publish();
             self.flush_wakes();
@@ -374,36 +370,29 @@ impl<C: Commands> Shard<C> {
                 self.drain_replica_inbox();
             }
 
-            // Idle ladder — spin, then a BATCH-GATED deaf nap, then park:
+            // Idle ladder — spin, then a batch-gated hot idle, then park:
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
             //      client's next request is reaped immediately;
-            //   2. nap (only when the last inbound drain was a real batch,
-            //      `>= NAP_BATCH_MIN`, and once per idle episode): a
-            //      bounded `thread::sleep(NAP_US)` that lets the 7 origin
-            //      shards' forwards accumulate so the owner drains one big
-            //      batch per wake instead of park/wake-churning per small
-            //      batch;
+            //   2. hot idle (only when the last inbound drain was a real
+            //      batch, `>= HOT_IDLE_BATCH_MIN`): keep polling, unparked, for
+            //      up to HOT_IDLE. The origin shards see this owner as
+            //      not parked and queue forwards without waking it, which
+            //      is what the 8-shard cross-shard shape needs; the owner
+            //      picks them up — and any socket input — on its next
+            //      iteration instead of after a fixed delay;
             //   3. park: io_uring blocking wait, woken by any socket I/O
             //      CQE, the waker pipe, or the bounding timeout. A truly
             //      idle shard costs ~zero CPU.
             //
-            // Why the batch gate exists: the original
-            // nap was UNCONDITIONAL `thread::sleep(200 µs)` —
-            // great for the 8-shard cross-shard shape (aggregation), but
-            // wake-deaf, so a sequential -c1 Rust client paid the full
-            // 200 µs per request (~4 k ops/s, 15× slower than valkey).
-            // A later change removed the rung entirely, fixing -c1
-            // but silently costing a measured −18~21 % on the 8-shard
-            // shape (`legacy_8sh_set` 9.98M → 7.6M across that single
-            // change). The batch gate keeps
-            // both: -c1 traffic drains batches of 1 (< NAP_BATCH_MIN) and
-            // goes straight to the wake-aware park — its 15 µs steady
-            // state is untouched; the cross-shard owner sees large drains
-            // and earns the aggregation nap. Worst-case added latency for
-            // a lone request that lands right after a burst: one NAP_US,
-            // once (the `napped` flag forces park next).
-            // Full evidence chain: the legacy8sh owner-starvation
-            // PERF-DECOMP note in bench/.
+            // The middle rung used to be `thread::sleep(200 µs)`. It kept
+            // the owner unparked too, but deaf: a client that paused
+            // between pipelined batches whose keys lived on another shard
+            // paid up to 200 µs per batch, about 15x its latency, and so
+            // did every client behind a proxy. Removing the rung instead
+            // cost the 8-shard shape 18–21 % (`legacy_8sh_set`
+            // 9.98M → 7.6M): parked owners make every origin pay a wake.
+            // The price of polling is CPU: up to HOT_IDLE of one core
+            // per idle episode that follows forwarded work.
             //
             // A non-empty backlog means a peer ring is full — keep
             // spinning to re-attempt the flush (nothing would wake us
@@ -425,14 +414,15 @@ impl<C: Commands> Shard<C> {
                 }
                 idle_spins = idle_spins.saturating_add(1);
                 if idle_spins >= URING_SPIN_LIMIT {
-                    if !napped && last_inbound_batch >= NAP_BATCH_MIN {
-                        std::thread::sleep(Duration::from_micros(NAP_US));
-                        napped = true;
-                    } else {
-                        self.uring_park(&mut ring, &mut park)?;
-                        woke_from_park = true;
-                        napped = false;
-                        last_inbound_batch = 0;
+                    let now = std::time::Instant::now();
+                    match idle_step(last_inbound_batch, &mut hot_until, now) {
+                        IdleStep::Poll => std::hint::spin_loop(),
+                        IdleStep::Park => {
+                            self.uring_park(&mut ring, &mut park)?;
+                            woke_from_park = true;
+                            hot_until = None;
+                            last_inbound_batch = 0;
+                        }
                     }
                 } else {
                     // E12: signal the CPU that we are in a spin-wait loop.
@@ -448,7 +438,7 @@ impl<C: Commands> Shard<C> {
                 idle_spins = 0;
                 if did_inbound > 0 {
                     last_inbound_batch = did_inbound;
-                    napped = false;
+                    hot_until = None;
                 }
             }
         }

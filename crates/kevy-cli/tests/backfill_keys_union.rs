@@ -6,6 +6,8 @@
 //! The arithmetic of "unique to this source" is pinned without a server
 //! in `kevy_cli::backfill_keys`'s own tests; this is about the reading.
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use std::process::{Child, Command};
 
 use kevy_resp_client::RespClient;
@@ -22,7 +24,10 @@ struct Srv {
 
 impl Srv {
     fn start() -> Srv {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // Not a bind probe: the listener that took the port is dropped before the
+        // server takes it, and under a parallel run something else can be in that
+        // gap. free_port hands out from a block this process owns alone.
+        let port = kevy_testnet::free_port();
         let bin =
             std::path::Path::new(env!("CARGO_BIN_EXE_kevy-cli")).parent().unwrap().join("kevy");
         if !bin.exists() {
@@ -57,7 +62,7 @@ impl Drop for Srv {
 
 fn run(port: u16, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_kevy-cli"))
-        .args(["backfill-keys", "-p", &port.to_string()])
+        .args(["-p", &port.to_string(), "--kevy", "backfill-keys"])
         .args(args)
         .output()
         .expect("run kevy-cli");

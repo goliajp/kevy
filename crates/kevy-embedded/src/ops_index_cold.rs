@@ -57,7 +57,7 @@ impl Store {
                 // (its limit fills with pre-cursor entries that all
                 // drop).
                 let cold = w
-                    .cold_hits(spec.ty, min, max, cursor, limit)
+                    .cold_hits(spec.ty(), min, max, cursor, limit)
                     .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
                 all.extend(cold.into_iter().map(|(k, v)| (v, k)));
             }
@@ -91,7 +91,7 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = win.filter(|w| w.has_cold()) {
                 total += w
-                    .cold_count(spec.ty, min, max)
+                    .cold_count(spec.ty(), min, max)
                     .map_err(|e| KevyError::Io(std::io::Error::other(e)))?;
             }
             #[cfg(target_arch = "wasm32")]
@@ -116,7 +116,7 @@ impl Store {
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             let segs = &inner.idx_segs;
-            if let Some((spec, seg)) = segs.segs.iter().find(|(s, _)| s.name == name) {
+            if let Some((spec, seg)) = segs.segs.iter().find(|(s, _)| s.name() == name) {
                 found = true;
                 #[cfg(not(target_arch = "wasm32"))]
                 let win = segs.window_of(name);

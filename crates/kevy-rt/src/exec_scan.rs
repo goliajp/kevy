@@ -22,9 +22,9 @@
 
 use crate::Commands;
 use crate::message::{Agg, Op, Part, SmallReply};
-use crate::route::ScanArgs;
 use crate::shard::Shard;
 use kevy_resp::{encode_array_len, encode_bulk};
+use kevy_verbs::args::{ScanOpts, ScanOptsError};
 
 /// Bits of the wire cursor carrying the in-shard position.
 pub(crate) const SCAN_POS_BITS: u32 = 54;
@@ -55,13 +55,13 @@ impl<C: Commands> Shard<C> {
     /// via a pre-baked `Agg::First` reply.
     pub(crate) fn build_scan_targets(
         &self,
-        spec: Result<ScanArgs, &'static str>,
+        spec: Result<ScanOpts, ScanOptsError>,
     ) -> (Vec<(usize, Op)>, Agg) {
         let args = match spec {
             Ok(a) => a,
-            Err(msg) => {
+            Err(e) => {
                 let mut out = Vec::new();
-                kevy_resp::encode_error(&mut out, msg);
+                kevy_resp::encode_error(&mut out, e.as_wire());
                 return (Vec::new(), Agg::First(Some(SmallReply::from_vec(out))));
             }
         };

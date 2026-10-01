@@ -3,7 +3,7 @@
 //! `ops_index.rs` to keep it under the 500-LOC project ceiling;
 //! behaviour unchanged).
 
-use kevy_index::{IndexKind, IndexSpec, Segment};
+use kevy_index::{AggRow, IndexKind, IndexSpec, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
@@ -63,27 +63,27 @@ pub(crate) fn tier_floor_check(shards: &crate::store::Shards) -> crate::KevyResu
 /// positional side-channel when it asked for `WITH POSITIONS`.
 #[cfg(feature = "text")]
 pub(crate) fn new_text(spec: &IndexSpec) -> kevy_text::TextSegment {
-    kevy_text::TextSegment::with_shape(kevy_text::SegmentShape {
-        fields: spec.fields.len(),
-        positions: spec.with_positions,
-        values: spec.values.len(),
-    })
+    kevy_text::TextSegment::with_shape(
+        kevy_text::SegmentShape::default()
+            .with_fields(spec.fields().len())
+            .with_positions(spec.has_positions())
+            .with_values(spec.values().len()),
+    )
 }
 
 #[cfg(feature = "vector")]
 pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
-    let a = spec.ann.as_ref().expect("ann spec");
+    let a = spec.ann().expect("an ann index carries its parameters");
     kevy_vector::Hnsw::new(
         a.dim as usize,
-        kevy_vector::HnswParams {
-            m: a.m as usize,
-            ef_construction: a.ef as usize,
-            distance: match a.distance {
+        kevy_vector::HnswParams::default()
+            .with_m(a.m as usize)
+            .with_ef_construction(a.ef as usize)
+            .with_distance(match a.distance {
                 1 => kevy_vector::Distance::L2,
                 2 => kevy_vector::Distance::Ip,
                 _ => kevy_vector::Distance::Cosine,
-            },
-        },
+            }),
     )
 }
 
@@ -91,12 +91,18 @@ pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
 /// backfill from this shard's live keys (we hold the shard's write
 /// lock — no concurrent writes can race the scan).
 pub(crate) fn sync_segs(reg: &IndexReg, shard_segs: &mut ShardSegs, store: &mut kevy_store::Store) {
-    let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (ver, cat) = &*g;
-    if shard_segs.version == *ver {
-        return;
+    {
+        let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (ver, cat) = &*g;
+        if shard_segs.version != *ver {
+            rebuild_seg_lists(cat, *ver, shard_segs, store);
+        }
     }
-    rebuild_seg_lists(cat, *ver, shard_segs, store);
+    // every row the store saw written since the last drain, however it
+    // was written
+    if crate::ops_index_changes::drain(shard_segs, store) {
+        shard_segs.mark_stats_dirty();
+    }
 }
 
 /// The out-of-date half of `sync_segs`: rebuild every per-kind segment
@@ -119,7 +125,7 @@ fn rebuild_seg_lists(
     let mut next_agg: Vec<(IndexSpec, kevy_index::AggSegment)> = Vec::new();
     for (spec, _) in cat.iter() {
         let (segs, st) = (&mut *shard_segs, &mut *store);
-        match spec.kind {
+        match spec.kind() {
             IndexKind::Agg => next_agg.push(take_or_backfill(
                 &mut segs.agg,
                 spec,
@@ -150,13 +156,21 @@ fn rebuild_seg_lists(
             )),
             #[cfg(not(feature = "text"))]
             IndexKind::Text => {}
-            _ => next.push(take_or_backfill(
-                &mut segs.segs,
-                spec,
-                st,
-                || new_scalar(spec),
-                apply_key,
-            )),
+            _ => {
+                let fresh = !segs.segs.iter().any(|(s, _)| s == spec);
+                let mut built = take_or_backfill(
+                    &mut segs.segs,
+                    spec,
+                    st,
+                    || new_scalar(spec),
+                    |st, sp, sg, k| apply_key(st, sp, sg, k, None),
+                );
+                if fresh {
+                    // the walk filled leaves in hash order; pack them
+                    built.1.repack();
+                }
+                next.push(built);
+            }
         }
     }
     shard_segs.segs = next;
@@ -173,6 +187,9 @@ fn rebuild_seg_lists(
     shard_segs.mark_stats_dirty();
 }
 
+/// Buckets visited per page of a backfill walk.
+const BACKFILL_PAGE_BUCKETS: usize = 4096;
+
 /// Keep `spec`'s existing segment from `have` (position move), or
 /// backfill a fresh one from this shard's live keys in the spec's
 /// prefix domain.
@@ -187,12 +204,21 @@ fn take_or_backfill<S>(
         return have.swap_remove(i);
     }
     let mut seg = empty();
-    let mut pat = spec.prefix.clone();
+    let mut pat = spec.prefix().to_vec();
     pat.push(b'*');
-    for key in store.collect_keys(Some(&pat), None) {
-        apply(store, spec, &mut seg, &key);
+    // a page of keys at a time rather than a copy of every key under the
+    // prefix; the store is held for the whole walk, so no key is missed
+    let mut cursor = 0;
+    loop {
+        let (next, keys) = store.walk_page(cursor, BACKFILL_PAGE_BUCKETS, Some(&pat));
+        for key in &keys {
+            apply(store, spec, &mut seg, key);
+        }
+        if next == 0 {
+            return (spec.clone(), seg);
+        }
+        cursor = next;
     }
-    (spec.clone(), seg)
 }
 
 fn apply_agg_key(
@@ -204,18 +230,19 @@ fn apply_agg_key(
     // Both fields in ONE row peek (server twin: `apply_row_agg`) —
     // one record read on a cold row, no promotion, no gate mark; the
     // `Ok(None)`/`Err` arms carry the old `exists()` distinction.
-    let group_field = spec.group_by.as_deref().unwrap_or_default();
+    let group_field = spec.group_by().unwrap_or_default();
     match store.peek_hash_fields(key, &[group_field, spec.field()]) {
         Ok(Some(mut vals)) => {
             let group = vals[0].take();
-            let val = vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty, &raw));
+            let val =
+                vals[1].take().and_then(|raw| kevy_index::IndexValue::coerce(spec.ty(), &raw));
             match (group, val) {
-                (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-                _ => a.apply(key, None, true),
+                (Some(g), Some(v)) => a.apply(key, AggRow::Member { group: g, value: v }),
+                _ => a.apply(key, AggRow::Excluded),
             }
         }
-        Ok(None) => a.apply(key, None, false),
-        Err(_) => a.apply(key, None, true),
+        Ok(None) => a.apply(key, AggRow::Removed),
+        Err(_) => a.apply(key, AggRow::Excluded),
     }
 }
 
@@ -251,10 +278,10 @@ fn apply_text_key(
     // read on a cold row, no promotion, no gate mark); `read_row`
     // resolves from the prefetch, not per-field hgets.
     let names: Vec<&[u8]> = spec
-        .fields
+        .fields()
         .iter()
         .map(|f| f.name.as_slice())
-        .chain(spec.values.iter().map(|v| v.name.as_slice()))
+        .chain(spec.values().iter().map(|v| v.name.as_slice()))
         .collect();
     let fetched = store.peek_hash_fields(key, &names).ok().flatten();
     let (fields, values) = spec.read_row(|f| {
@@ -290,14 +317,6 @@ pub(crate) fn on_commit(
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         reset_all_segs(shard_segs);
         shard_segs.mark_stats_dirty();
-        return;
-    }
-    let mut touched = false;
-    each_written_key(verb, parts, |key| {
-        touched |= apply_one_key(shard_segs, store, key);
-    });
-    if touched {
-        shard_segs.mark_stats_dirty();
     }
 }
 
@@ -309,7 +328,7 @@ pub(crate) fn on_commit(
 fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
     let mut touched = false;
     for (spec, ts) in &mut shard_segs.text {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_text_key(store, spec, ts, key);
             touched = true;
         }
@@ -318,7 +337,7 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
     {
         let ShardSegs { text, cold_text, .. } = &mut *shard_segs;
         for (name, dir) in cold_text.iter_mut() {
-            if text.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+            if text.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 dir.on_row_write(key);
             }
         }
@@ -326,14 +345,20 @@ fn apply_text_arm(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key
     touched
 }
 
-/// Apply one written key to every matching segment of every kind.
-/// Returns whether any segment was touched (the cache-invalidation
-/// signal).
-fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key: &[u8]) -> bool {
+/// Apply one written key to every matching segment of every kind;
+/// `olds` is, per scalar segment, the value the row was indexed under
+/// before the write. Returns whether any segment was touched (the
+/// cache-invalidation signal).
+pub(crate) fn apply_one_key(
+    shard_segs: &mut ShardSegs,
+    store: &mut kevy_store::Store,
+    key: &[u8],
+    olds: &[Option<kevy_index::IndexValue>],
+) -> bool {
     let mut touched = false;
-    for (spec, seg) in &mut shard_segs.segs {
-        if key.starts_with(&spec.prefix) {
-            apply_key(store, spec, seg, key);
+    for ((spec, seg), old) in shard_segs.segs.iter_mut().zip(olds) {
+        if key.starts_with(spec.prefix()) {
+            apply_key(store, spec, seg, key, old.as_ref());
             touched = true;
         }
     }
@@ -343,7 +368,7 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     {
         let ShardSegs { segs, windows, .. } = &mut *shard_segs;
         for (name, win) in windows.iter_mut() {
-            if segs.iter().any(|(s, _)| &s.name == name && key.starts_with(&s.prefix)) {
+            if segs.iter().any(|(s, _)| s.name() == name && key.starts_with(s.prefix())) {
                 win.on_row_write(key);
             }
         }
@@ -354,13 +379,13 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
     }
     #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_ann_key(store, spec, g, key);
             touched = true;
         }
     }
     for (spec, a) in &mut shard_segs.agg {
-        if key.starts_with(&spec.prefix) {
+        if key.starts_with(spec.prefix()) {
             apply_agg_key(store, spec, a, key);
             touched = true;
         }
@@ -369,9 +394,12 @@ fn apply_one_key(shard_segs: &mut ShardSegs, store: &mut kevy_store::Store, key:
 }
 
 /// FLUSHALL / FLUSHDB: every segment resets to empty.
-fn reset_all_segs(shard_segs: &mut ShardSegs) {
-    for (_, seg) in &mut shard_segs.segs {
-        *seg = Segment::new();
+pub(crate) fn reset_all_segs(shard_segs: &mut ShardSegs) {
+    for (spec, seg) in &mut shard_segs.segs {
+        // a view reads the new segment by key as it read the old one
+        let key_dir = seg.key_dir().is_some();
+        *seg = new_scalar(spec);
+        seg.set_key_dir(key_dir);
     }
     #[cfg(feature = "text")]
     for (spec, ts) in &mut shard_segs.text {
@@ -417,11 +445,9 @@ fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
     }
 }
 
-/// A fresh scalar segment shaped by the spec — with the stored-value
-/// side-channel iff it declared `VALUES` (undeclared = the plain
-/// `Segment::new()`, byte-identical to before; A5).
+/// A fresh scalar segment shaped by the spec.
 fn new_scalar(spec: &IndexSpec) -> Segment {
-    if spec.values.is_empty() { Segment::new() } else { Segment::with_values(spec.values.len()) }
+    Segment::for_spec(spec)
 }
 
 /// The primary field AND every declared VALUES column read with
@@ -430,7 +456,13 @@ fn new_scalar(spec: &IndexSpec) -> Segment {
 /// advances the 2nd-touch gate (the server twin is
 /// `index_runtime::apply_scalar_row`). The peek's `Ok(None)`/`Err`
 /// arms replace the old `exists()` disambiguation probe exactly.
-fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment, key: &[u8]) {
+fn apply_key(
+    store: &mut kevy_store::Store,
+    spec: &IndexSpec,
+    seg: &mut Segment,
+    key: &[u8],
+    old: Option<&kevy_index::IndexValue>,
+) {
     // The driving columns (composite or single FIELD) + VALUES in one
     // row peek; the derivation is the spec's own
     // ([`IndexSpec::derive_scalar`]) — the single implementation the
@@ -439,15 +471,19 @@ fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment,
     let names = spec.scalar_read_names();
     let w = spec.primary_width();
     match store.peek_hash_fields(key, &names) {
-        Ok(None) | Err(_) => seg.remove(key),
+        Ok(None) | Err(_) => {
+            if let Some(o) = old {
+                seg.remove(key, o);
+            }
+        }
         Ok(Some(vals)) => {
             let primary = spec.derive_scalar(&vals[..w]);
             match primary {
-                None => seg.apply_with_values(key, None, &[]),
-                Some(v) if spec.values.is_empty() => seg.apply(key, Some(v)),
+                None => seg.apply_with_values(key, old, None, &[]),
+                Some(v) if spec.values().is_empty() => seg.apply(key, old, Some(v)),
                 Some(v) => {
                     let refs: Vec<Option<&[u8]>> = vals[w..].iter().map(|o| o.as_deref()).collect();
-                    seg.apply_with_values(key, Some(v), &refs);
+                    seg.apply_with_values(key, old, Some(v), &refs);
                 }
             }
         }

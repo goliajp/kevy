@@ -29,42 +29,124 @@
 //! Arity is Redis semantics: positive = exact argc including the verb
 //! itself; negative = at least |n|. Values are derived from each
 //! handler's own argc check, not from Redis docs.
+//!
+//! ```
+//! use kevy::verb_meta::{VERB_META, verb_meta};
+//! assert!(VERB_META.len() > 100);
+//! let set = verb_meta("SET").ok_or("SET has a row")?;
+//! assert_eq!((set.group, set.flags), ("string", &["write"][..]));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 /// One verb's documentation row (semantic classification lives in
 /// kevy_resp::ops_table::OP_TABLE — this table is the DOC face).
-#[derive(Debug, Clone, Copy)]
+///
+/// ```
+/// let get = kevy::verb_meta::verb_meta("GET").ok_or("GET has a row")?;
+/// assert_eq!(get.syntax, "GET key");
+/// assert_eq!(get.summary, "Return the string value of a key.");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VerbMeta {
     /// Canonical uppercase name, as `COMMAND DOCS` reports it and as the
     /// dispatch tables spell it.
+    ///
+    /// ```
+    /// let row = kevy::verb_meta::verb_meta("HSET").ok_or("HSET has a row")?;
+    /// assert_eq!(row.name, "HSET");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub name: &'static str,
     /// Which family the reference groups it under — `string`, `index`,
     /// `server` and so on.
+    ///
+    /// ```
+    /// use kevy::verb_meta::VERB_META;
+    /// let strings = VERB_META.iter().filter(|m| m.group == "string").count();
+    /// assert!(VERB_META.iter().any(|m| m.name == "APPEND" && m.group == "string"));
+    /// assert!(strings > 5);
+    /// ```
     pub group: &'static str,
     /// Redis's arity convention: positive is an exact argument count
     /// INCLUDING the verb, negative is a minimum. `-4` means "at least
     /// four". This is the field the dispatch chain consults before
     /// reporting a verb unknown.
+    ///
+    /// ```
+    /// use kevy::verb_meta::verb_meta;
+    /// let fits = |arity: i8, argc: usize| match usize::try_from(arity) {
+    ///     Ok(exact) => argc == exact,
+    ///     Err(_) => argc >= usize::from(arity.unsigned_abs()),
+    /// };
+    /// let get = verb_meta("GET").ok_or("GET")?.arity;
+    /// let mset = verb_meta("MSET").ok_or("MSET")?.arity;
+    /// assert_eq!((get, mset), (2, -3));
+    /// assert!(fits(get, 2) && !fits(get, 3));
+    /// assert!(fits(mset, 5) && !fits(mset, 2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub arity: i8,
     /// `COMMAND` flags — `readonly`, `write`, `admin`, `blocking`,
     /// `extension`. Documentation only; the write classification the AOF
     /// and replication paths actually gate on lives in
     /// `kevy_resp::ops_table`.
+    ///
+    /// ```
+    /// let get = kevy::verb_meta::verb_meta("GET").ok_or("GET has a row")?;
+    /// assert!(get.flags.contains(&"readonly"));
+    /// let blpop = kevy::verb_meta::verb_meta("BLPOP").ok_or("BLPOP has a row")?;
+    /// assert!(blpop.flags.contains(&"blocking"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub flags: &'static [&'static str],
     /// One sentence, present tense, for the reference and `COMMAND DOCS`.
+    ///
+    /// ```
+    /// let get = kevy::verb_meta::verb_meta("GET").ok_or("GET has a row")?;
+    /// assert_eq!(get.summary, "Return the string value of a key.");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub summary: &'static str,
     /// The kevy version this verb first shipped in — not the Redis one.
+    ///
+    /// ```
+    /// let get = kevy::verb_meta::verb_meta("GET").ok_or("GET has a row")?;
+    /// assert_eq!(get.since, "1.0.0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub since: &'static str,
     /// The full call form, `VERB arg [optional …]`, as the reference
     /// prints it and as an arity error points a caller at.
+    ///
+    /// ```
+    /// let set = kevy::verb_meta::verb_meta("SET").ok_or("SET has a row")?;
+    /// assert!(set.syntax.starts_with("SET key value ["));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub syntax: &'static str,
     /// Time complexity of THIS engine's implementation, derived by reading it.
     /// Never copied from Redis's docs: several of ours genuinely differ in
     /// both directions (LINDEX/LSET are O(1) on a VecDeque where Redis's
     /// quicklist is O(N); SSCAN copies the whole set in one batch).
+    ///
+    /// ```
+    /// let lindex = kevy::verb_meta::verb_meta("LINDEX").ok_or("LINDEX has a row")?;
+    /// assert!(lindex.complexity.contains("O(1)"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub complexity: &'static str,
     /// How this verb differs from Redis, if it does: `full`, `differs: …`, or
     /// `kevy-only…`. This is the field a person migrating off Redis actually
     /// needs, and the one Redis's own reference cannot have.
+    ///
+    /// ```
+    /// use kevy::verb_meta::verb_meta;
+    /// assert_eq!(verb_meta("GET").ok_or("GET")?.compat, "full");
+    /// assert!(verb_meta("MSET").ok_or("MSET")?.compat.starts_with("differs:"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub compat: &'static str,
 }
 
@@ -148,9 +230,22 @@ static TABLE: [VerbMeta; TOTAL] = concat();
 /// Every dispatch-reachable verb, in family order. The single source of truth
 /// for `COMMAND DOCS`, `llms.txt`, the MCP schema, and the command reference on
 /// the site — one table, so none of them can drift from the others.
+///
+/// ```
+/// use kevy::verb_meta::VERB_META;
+/// let writes = VERB_META.iter().filter(|m| m.flags.contains(&"write")).count();
+/// assert!(writes > 0 && writes < VERB_META.len());
+/// ```
 pub const VERB_META: &[VerbMeta] = &TABLE;
 
 /// Look one verb up by its uppercased name.
+///
+/// ```
+/// use kevy::verb_meta::verb_meta;
+/// assert_eq!(verb_meta("INCR").map(|m| m.arity), Some(2));
+/// assert!(verb_meta("incr").is_none(), "the name is matched as given");
+/// assert!(verb_meta("NOSUCHVERB").is_none());
+/// ```
 pub fn verb_meta(name: &str) -> Option<&'static VerbMeta> {
     VERB_META.iter().find(|m| m.name == name)
 }

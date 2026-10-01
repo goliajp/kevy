@@ -3,8 +3,8 @@
 # `-c50 -P1` valkey-benchmark. Exercises the protocol end-to-end so a fresh
 # clone can verify "it runs and answers". NOT a perf benchmark — docker NAT
 # softirq, no pipelining, and short N depress kevy's busy-poll path. For
-# headline perf numbers use `bench/loopback_c50.sh` (host-loopback, pinned,
-# isolated; see bench/REPORT.md).
+# headline perf numbers use `bench/arena.sh` (host-loopback, pinned,
+# isolated; see PERFORMANCE.md).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -14,8 +14,8 @@ TESTS=${TESTS:-ping,set,get,incr}
 cat <<'BANNER'
 ### NOTE: this is a portability smoke (docker-bridge, no pipeline). It is NOT
 ### the perf harness — for headline kevy-vs-valkey numbers run
-###   bash bench/loopback_c50.sh   # host-loopback, pinned, isolated
-### See bench/REPORT.md for the methodology and current numbers.
+###   bash bench/arena.sh <kevy-binary>   # host-loopback, pinned, isolated
+### See PERFORMANCE.md for the methodology and current numbers.
 BANNER
 
 echo "### Bringing up valkey 9.1.2 + kevy (building kevy --release) ..."
@@ -61,8 +61,8 @@ cat <<'FOOTER'
 
 ### Reminder: this is a smoke run, not a perf measurement. docker-bridge NAT
 ### and `-P1` favour blocking servers and depress kevy's busy-poll path; on
-### host-loopback with pinning + pipelining (bench/loopback_c50.sh) kevy
-### currently leads valkey ~1.5×/2.0× GET/SET at -c50 -P16. See bench/REPORT.md.
+### host-loopback with pinning + pipelining (bench/arena.sh) kevy
+### currently leads valkey ~1.5×/2.0× GET/SET at -c50 -P16. See PERFORMANCE.md.
 
 FOOTER
 

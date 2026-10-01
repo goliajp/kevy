@@ -12,6 +12,19 @@ pub(crate) fn parse_create_view(p: &mut P<'_>) -> Result<Stmt, SqlError> {
     let (name, line, col) = p.ident("a view name")?;
     p.expect_kw("as", "after the view name")?;
     p.expect_kw("select", "after AS")?;
+    let v = parse_select_body(p, name, line, col)?;
+    p.expect_sym(';', "after CREATE VIEW")?;
+    Ok(Stmt::View(v))
+}
+
+/// Everything after `SELECT`: the list, `FROM`, `WHERE` and the tail.
+/// `name` / `line` / `col` anchor the query the way a view name does.
+pub(crate) fn parse_select_body(
+    p: &mut P<'_>,
+    name: String,
+    line: u32,
+    col: u32,
+) -> Result<CreateView, SqlError> {
     let select = parse_select_list(p)?;
     p.expect_kw("from", "after the select list")?;
     let (table, ..) = p.ident("the table name")?;
@@ -31,8 +44,7 @@ pub(crate) fn parse_create_view(p: &mut P<'_>) -> Result<Stmt, SqlError> {
         v.preds = parse_preds(p)?;
     }
     parse_view_tail(p, &mut v)?;
-    p.expect_sym(';', "after CREATE VIEW")?;
-    Ok(Stmt::View(v))
+    Ok(v)
 }
 
 /// `*` or a bare column list; aliases / functions / DISTINCT refuse.

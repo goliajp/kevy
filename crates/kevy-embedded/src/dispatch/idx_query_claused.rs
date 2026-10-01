@@ -7,9 +7,9 @@ use crate::store::Store;
 
 use kevy_index::IndexValue;
 
-use super::super::idx::{encode_cursor, value_repr};
-use super::super::util::{arr, bulk, err};
+use super::super::idx::encode_cursor;
 use super::{emit_row, idx_err, tail};
+use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
 /// The clause-carrying scalar page, matching the server reduce's reply
 /// bytes: the `[cursor, rows]` envelope, rows in the merged order, and
@@ -37,24 +37,24 @@ pub(super) fn claused_query(
             // A clause this index cannot answer — the server frames it
             // as `ERR <verb> '<name>': <explanation>`.
             let n = String::from_utf8_lossy(name);
-            err(out, &format!("ERR IDX.QUERY '{n}': {m}"));
+            encode_error(out, &format!("ERR IDX.QUERY '{n}': {m}"));
         }
         Err(e) => idx_err(out, name, &e),
         Ok(page) => {
-            arr(out, 2);
+            encode_array_len(out, 2);
             match &page.cursor {
-                Some(c) => bulk(out, &encode_cursor(&c.value, &c.key)),
-                None => bulk(out, b"0"),
+                Some(c) => encode_bulk(out, &encode_cursor(&c.value, &c.key)),
+                None => encode_bulk(out, b"0"),
             }
             let extra = usize::from(!t.facets.is_empty());
             if t.fields.is_empty() {
-                arr(out, page.rows.len() * 2 + extra);
+                encode_array_len(out, (page.rows.len() * 2 + extra) as i64);
                 for (k, v) in &page.rows {
-                    bulk(out, k);
-                    bulk(out, &value_repr(v));
+                    encode_bulk(out, k);
+                    encode_bulk(out, &v.render());
                 }
             } else {
-                arr(out, page.rows.len() + extra);
+                encode_array_len(out, (page.rows.len() + extra) as i64);
                 for (k, v) in &page.rows {
                     emit_row(s, out, k, Some(v), &t.fields);
                 }
@@ -69,13 +69,13 @@ fn emit_scalar_facets(out: &mut Vec<u8>, names: &[Vec<u8>], buckets: &[Vec<(Vec<
     if names.is_empty() {
         return;
     }
-    arr(out, names.len() * 2);
+    encode_array_len(out, (names.len() * 2) as i64);
     for (name, field) in names.iter().zip(buckets) {
-        bulk(out, name);
-        arr(out, field.len() * 2);
+        encode_bulk(out, name);
+        encode_array_len(out, (field.len() * 2) as i64);
         for (label, n) in field {
-            bulk(out, label);
-            bulk(out, n.to_string().as_bytes());
+            encode_bulk(out, label);
+            encode_bulk(out, n.to_string().as_bytes());
         }
     }
 }

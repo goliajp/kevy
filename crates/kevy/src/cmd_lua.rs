@@ -74,7 +74,12 @@ fn cross_shard_violation(
     if nshards > 1
         && let Some(target_key) = argv.get(1)
     {
-        let target_shard = kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
+        let routing = if cfg.cluster.enabled {
+            kevy_persist::Routing::Slots
+        } else {
+            kevy_persist::Routing::KevyHash
+        };
+        let target_shard = kevy_rt::shard_of_key(target_key, nshards, routing);
         if target_shard != my_shard {
             return Some(b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec());
         }
@@ -475,3 +480,7 @@ fn cross_slot_check(ctx: &Ctx<'_>, keys: &[&[u8]]) -> Option<Vec<u8>> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "cmd_lua_tests.rs"]
+mod tests;

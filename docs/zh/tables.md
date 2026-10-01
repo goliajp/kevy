@@ -17,7 +17,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 > **正在从手工维护的索引迁移？**先读 [table-migration.md](table-migration.md)——八条在生产上付过学费的经验，以及"表为什么存在"的实测漂移数字（89% 从未写入、76% 从未移除）。
 
-> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `compile_table` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
+> **声明绝不 panic。** `TABLE.DECLARE` / `Store::table_declare` 对每一个非法 spec——未知列、重名、缺 PK，无论什么——都以一个具名错误作答，而被拒绝的声明什么也不安装。这是一条硬保证，由 `TableSpec::compile` 自行校验来强制，并被持续 fuzz（`table_spec`）：你启动路径上的一个坏 spec 是一行日志，不是一个重启循环。
 
 ## 声明模型
 
@@ -30,7 +30,7 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20
 
 编译出的名字共用一个命名空间——`<table>.<col>` 与 `<table>.<orderpath>`——所以与被索引列同名的 ORDERPATH 在声明期就被按名拒绝。编译是服务端与嵌入式 store 共用的单一实现（dispatch oracle 在 CI 里对两个面做逐字节比对），并且是**原子的**：任何错误都导致什么也不装——不存在半声明的表。
 
-编译出的索引做的一切，与手工 `IDX.CREATE` 声明的完全相同：同样的回填行为、同样的 `-INDEXBUILDING` 纪律、同样的 sidecar 持久化、同样的预算拒绝（[indexes.md](indexes.md)）。`TABLE.DROP` 删除表和它编译出的所有索引。
+编译出的索引做的一切，与手工 `IDX.CREATE` 声明的完全相同：同样的回填行为、同样的 `-INDEXBUILDING` 纪律、同样的目录记录方式、同样的预算拒绝（[indexes.md](indexes.md)）。`TABLE.DROP` 删除表和它编译出的所有索引。
 
 ## 语法
 
@@ -145,18 +145,18 @@ IDX.QUERY user.by_dept_age WHERE dept EQ eng LIMIT 20 FIELDS name email
 
 ## kevy-sql：编译 schema，而不是发送 schema
 
-`kevy-sql`（及其 `kevy-cli sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
+`kevy-sql`（及其 `kevy-cli --kevy sql` 面）是一个**声明期编译器**——像迁移工具一样，把一份 PG/MySQL 方言的 schema 文件读一次，产出显式声明：
 
 ```console
-kevy-cli sql compile schema.sql                          # print the declarations
-kevy-cli sql compile schema.sql --apply --url 127.0.0.1:6004
-kevy-cli sql plan schema.sql                             # 每条查询会变成什么
+kevy-cli --kevy sql compile schema.sql                          # print the declarations
+kevy-cli -p 6004 --kevy sql compile schema.sql --apply
+kevy-cli --kevy sql plan schema.sql                             # 每条查询会变成什么
 ```
 
 `compile` 与 `plan` 读同一份文件，回答的却是两个问题。`compile` 是构建期：它产出的是要执行的命令，所以遇到一条服务不了的视图就是错误、就停在那里。`plan` 是迁移那天——它报告**每一条**查询的去向，因为*"你这 40 条里 34 条能跑，另外 6 条各缺什么"*才是一个拿着 schema 来的人真正在问的：
 
 ```console
-$ kevy-cli sql plan shop.sql
+$ kevy-cli --kevy sql plan shop.sql
 2 table(s) to declare:
   users
   orders
@@ -200,7 +200,7 @@ match store.table_ensure(spec)? {    // 开机动词：验证、编译、同步�
 let tables = store.table_list();
 let report = store.table_verify_report(b"user")?;  // 具名的 fresh 计数
 assert_eq!(report.per_index[0].missing, 0);        //   + 抽查
-store.table_drop(b"user");
+store.table_drop(b"user")?;
 ```
 
 wire 形式（`db.cmd("TABLE.DECLARE", …)`）同样可用，用完全相同的共享语法解析——服务端 / 嵌入式的逐字节一致由 dispatch oracle 在 CI 里钉死。
@@ -214,6 +214,7 @@ wire 形式（`db.cmd("TABLE.DECLARE", …)`）同样可用，用完全相同的
 ## 参见
 
 - [indexes.md](indexes.md)——表所编译到的索引引擎。
+- [relational-cli.md](relational-cli.md)——kevy-cli 里处理表的工具：describe、查询、导出与恢复、CSV、`sql run`。
 - [tiering.md](tiering.md)——与表一起设计的另一半：索引热、行冷。
 - [rds-workloads.md](rds-workloads.md)——完整的 SQL 词汇映射（什么可编译、什么是配方、什么被拒绝）。
 - [cookbook.md](cookbook.md)——复合排序与 schema 迁移配方。

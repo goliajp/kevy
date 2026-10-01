@@ -35,23 +35,112 @@ use crate::{SmallBytes, Store, StoreError, Value, now_unix_ms};
 /// Per-field reply codes for `HEXPIRE`-family calls (Redis 7.4):
 /// `-2` key or field missing, `0` condition (NX/XX/GT/LT) not met,
 /// `1` deadline set, `2` field deleted (deadline already due).
+///
+/// ```
+/// use kevy_store::{HExpireCode, HExpireCond, Store};
+/// let mut s = Store::new();
+/// s.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b", b"2")])?;
+/// let far = kevy_store::now_unix_ms() + 60_000;
+/// let codes: Vec<HExpireCode> =
+///     s.hexpire_at(b"h", &[b"a".as_slice(), b"zz"], far, HExpireCond::Always)?;
+/// assert_eq!(codes, [1, -2]);
+/// assert_eq!(s.hexpire_at(b"h", &[b"b".as_slice()], 1, HExpireCond::Always)?, [2]);
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type HExpireCode = i8;
 
 /// Condition flags for `HEXPIRE` (`NX`/`XX`/`GT`/`LT`; at most one).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// ```
+/// assert_eq!(kevy_store::HExpireCond::default(), kevy_store::HExpireCond::Always);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum HExpireCond {
     /// Unconditional.
+    ///
+    /// ```
+    /// use kevy_store::{HExpireCond, Store};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let t = kevy_store::now_unix_ms() + 60_000;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Always)?, [1]);
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t + 1, HExpireCond::Always)?, [1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     #[default]
     Always,
     /// Only when the field has no TTL.
+    ///
+    /// ```
+    /// use kevy_store::{HExpireCond, Store};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let t = kevy_store::now_unix_ms() + 60_000;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Nx)?, [1]);
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Nx)?, [0]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Nx,
     /// Only when the field already has a TTL.
+    ///
+    /// ```
+    /// use kevy_store::{HExpireCond, Store};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let t = kevy_store::now_unix_ms() + 60_000;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Xx)?, [0]);
+    /// s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Always)?;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Xx)?, [1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Xx,
     /// Only when the new deadline is later than the current one
     /// (no TTL counts as infinitely late — GT never replaces it).
+    ///
+    /// ```
+    /// use kevy_store::{HExpireCond, Store};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let t = kevy_store::now_unix_ms() + 60_000;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Gt)?, [0]);
+    /// s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Always)?;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t + 1, HExpireCond::Gt)?, [1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Gt,
     /// Only when the new deadline is earlier (no TTL = always).
+    ///
+    /// ```
+    /// use kevy_store::{HExpireCond, Store};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let t = kevy_store::now_unix_ms() + 60_000;
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t, HExpireCond::Lt)?, [1]);
+    /// assert_eq!(s.hexpire_at(b"h", &[b"f".as_slice()], t + 1, HExpireCond::Lt)?, [0]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     Lt,
+}
+
+impl HExpireCond {
+    /// The command keyword for this condition (`NX` / `XX` / `GT` /
+    /// `LT`), or `None` for the unconditional form, which has none.
+    ///
+    /// ```
+    /// use kevy_store::HExpireCond;
+    /// assert_eq!(HExpireCond::Gt.keyword(), Some("GT"));
+    /// assert_eq!(HExpireCond::Always.keyword(), None);
+    /// ```
+    pub fn keyword(self) -> Option<&'static str> {
+        match self {
+            Self::Always => None,
+            Self::Nx => Some("NX"),
+            Self::Xx => Some("XX"),
+            Self::Gt => Some("GT"),
+            Self::Lt => Some("LT"),
+        }
+    }
 }
 
 impl Store {
@@ -112,6 +201,23 @@ impl Store {
         }
         self.prune_hfttl_key(key);
         Ok(codes)
+    }
+
+    /// Each field's absolute deadline (unix ms) as stored, `None` for a
+    /// field with no TTL. A read with no side effects: unlike [`Self::hpttl`]
+    /// it purges nothing, so a deadline already passed is still reported,
+    /// and removing that field stays the expiry sweep's job.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f", b"v"), (b"g", b"w")]).unwrap();
+    /// let at = kevy_store::now_unix_ms() + 60_000;
+    /// s.hexpire_at(b"h", &[b"f"], at, kevy_store::HExpireCond::Always).unwrap();
+    /// assert_eq!(s.hash_field_deadlines(b"h", &[b"f", b"g"]), [Some(at), None]);
+    /// ```
+    pub fn hash_field_deadlines(&self, key: &[u8], fields: &[&[u8]]) -> Vec<Option<u64>> {
+        let per_key = self.hfttl.get(key);
+        fields.iter().map(|f| per_key.and_then(|m| m.get(*f)).copied()).collect()
     }
 
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,

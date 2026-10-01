@@ -28,7 +28,7 @@ kevy-cli -p 6004 IDX.QUERY posts MATCH "search" LIMIT 10 FIELDS title
 
 - `IDX.EXPLAIN posts MATCH "full-text rust"`——只解析、不执行：kind、构建状态、估算行数，以及计划行。
 - `IDX.VERIFY posts` / `IDX.LIST`——实时的 entries / bytes / postings / token 统计。
-- `IDX.DROP posts`——删掉这条声明（目录变更，落在 sidecar 文件里）。
+- `IDX.DROP posts`——删掉这条声明（目录变更，写入日志并随复制下发）。
 
 `MATCH` 接受 `LIMIT`（≤ 1000）和 `FIELDS`；没有 `CURSOR` 形态（原因见“匹配与排名”）。
 
@@ -75,7 +75,7 @@ bigram 方案就是 CJK 故事的全部：没有词典要随包发布，没有�
 
 **分数是全局的，不是每个 shard 各算各的。** `df`、`n_docs`、`avgdl` 取的是整个语料，在查询时收集：第一趟向每个 shard 询问这次查询自己那些词的计数，原点把它们加起来，第二趟拿这个总量给所有 shard 打分。所以一个查询在 1 个 shard 上和在 8 个 shard 上返回**相同的排名和相同的分数**——有一个测试原样断言这件事，并且它在 CI 里跑。
 
-是查询时，不是周期性快照：什么都不缓存，所以没有陈旧窗口需要写进文档，写入路径上也不协调任何东西。第二趟在 100 万篇文档上只占 28 ms p95 里的 0.06 ms（实测——[PERF-LEDGER.md](../../bench/PERF-LEDGER.md)），因为第一趟只搬运真正被查询的那些词的 `(term, df)` 对。
+是查询时，不是周期性快照：什么都不缓存，所以没有陈旧窗口需要写进文档，写入路径上也不协调任何东西。第二趟在 100 万篇文档上只占 28 ms p95 里的 0.06 ms（实测），因为第一趟只搬运真正被查询的那些词的 `(term, df)` 对。
 
 还剩一处声明在明处的近似：
 
@@ -129,7 +129,7 @@ Top-K 求值用 MaxScore 剪枝（最罕见的词优先；常见词的列表一�
 实测信封（凭据在 bench 目录）：
 
 - [`bench/textgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/textgate.sh) 对着一台真服务器，钳住 100 万篇混合书写系统文档（每篇约 100 字节）上的 `MATCH` p95 < 20ms，外加内存公式与真实 RSS 增长的对钳。它跑在与 CI 相邻的 release 检查里——这些数字是钳制，不是愿望。
-- [`bench/PERF-LEDGER.md`](https://github.com/goliajp/kevy/blob/develop/bench/PERF-LEDGER.md) 记录了对打结果：在同一语料上，BM25 top-10 的 qps 比 redis-stack 7.4.7 里 RediSearch 的 `FT.SEARCH` 高 21%，p95 打平。
+- [`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) 记录了对打结果：在同一语料上，BM25 top-10 的 qps 比 redis-stack 7.4.7 里 RediSearch 的 `FT.SEARCH` 高 21%，p95 打平。
 
 写入侧就是标准的索引税：每次写入、每命中一个索引，付一次 hash 字段读加一次段更新；空目录的代价是每次写入一个不被走到的分支。
 

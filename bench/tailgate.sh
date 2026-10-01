@@ -33,6 +33,13 @@ if [ "${WORK_FSTYPE:-}" = "tmpfs" ] && [ -z "${TAILGATE_ALLOW_TMPFS:-}" ]; then
     rm -rf "$WORK"
     exit 2
 fi
+# the prober is an example, which no binaries requirement builds; a missing
+# one would read as three cells with no measurement
+cargo build -q --release -p kevy --example tail_probe || {
+    echo "tailgate: REFUSED — the prober (examples/tail_probe) did not build"
+    rm -rf "$WORK"
+    exit 2
+}
 SRV=""
 BENCH=""
 fail=0
@@ -120,14 +127,34 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     # FOREIGN cpu, not idle%. The first version of this printed idle% during
     # the probe and read 51% — which was this gate's own load generator, so
     # the figure could not tell "I am busy" from "someone else is", the one
-    # thing it exists to answer. Sum %CPU over everything that is not this
-    # gate's server, its benchmark, or the kernel's own workers.
+    # thing it exists to answer. Sum the CPU everything else used over one
+    # second, not ps's %CPU: that is each process's lifetime average, so
+    # long-running processes stopped with SIGSTOP read as hundreds of
+    # percent of load that is not there.
     local foreign
-    foreign=$(ps -eo pcpu,pid,comm --no-headers 2>/dev/null \
-        | awk -v s="${SRV:-0}" -v b="${BENCH:-0}" \
-              '$2!=s && $2!=b && $3!~/^(kworker|ksoftirqd|migration|rcu_)/ {t+=$1} END {printf "%.0f", t+0}')
+    foreign=$(python3 - "${SRV:-0}" "${BENCH:-0}" <<'PY'
+import os, sys, time
+skip = {int(sys.argv[1]), int(sys.argv[2]), os.getpid()}
+def ticks():
+    out = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) in skip:
+            continue
+        try:
+            raw = open(f"/proc/{d}/stat").read()
+        except OSError:
+            continue
+        comm = raw[raw.index("(") + 1:raw.rindex(")")]
+        if comm.startswith(("kworker", "ksoftirqd", "migration", "rcu_")):
+            continue
+        f = raw.rsplit(")", 1)[1].split()
+        out[d] = int(f[11]) + int(f[12])
+    return out
+a = ticks(); time.sleep(1); b = ticks()
+print(round(sum(v - a.get(k, v) for k, v in b.items()) * 100 / os.sysconf("SC_CLK_TCK")))
+PY
+)
     printf '  [%s] foreign cpu %s%% while probing\n' "$name" "${foreign:-?}"
-    LAST_FOREIGN=${foreign:-999}
     target/release/examples/tail_probe $PORT 60
     kill -9 "$BENCH" 2>/dev/null; wait "$BENCH" 2>/dev/null; BENCH=""
     kill -9 "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
@@ -153,7 +180,7 @@ one_run() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
 # second full sample, and only a trip that repeats is a verdict.
 cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
     local name=$1 reactor=$2; shift 2
-    local p999s=() gaps=() out p g
+    local p999s=() gaps=() out p g foreign
     local taken=0 attempts=0 dirty=0
     while [ "$taken" -lt "$RUNS" ]; do
         attempts=$((attempts + 1))
@@ -173,9 +200,12 @@ cell() { # $1 = name, $2 = reactor (auto|epoll), $3... = load args
         out=$(one_run "$name" "$reactor" "$@")
         i=$((taken + 1))
         echo "$name[$i/$RUNS]: $out"
-        if [ "${LAST_FOREIGN:-0}" -gt "$FOREIGN_MAX" ]; then
+        # read from the output: one_run runs in the $(...) subshell above, so
+        # a variable it sets never reaches this shell, and the guard read 0
+        foreign=$(echo "$out" | grep -oE 'foreign cpu [0-9]+%' | grep -oE '[0-9]+')
+        if [ "${foreign:-999}" -gt "$FOREIGN_MAX" ]; then
             dirty=$((dirty + 1))
-            echo "  ~ $name: discarding this probe — foreign cpu ${LAST_FOREIGN}% > ${FOREIGN_MAX}%"
+            echo "  ~ $name: discarding this probe — foreign cpu ${foreign:-unknown}% > ${FOREIGN_MAX}%"
             continue
         fi
         p=$(echo "$out" | grep -oE 'p999us=[0-9]+' | cut -d= -f2)

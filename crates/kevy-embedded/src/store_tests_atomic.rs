@@ -303,7 +303,8 @@ fn atomic_new_writes_survive_reopen() {
 fn zadd_flags_facade_pipeline_atomic_and_reopen() {
     use crate::ZaddFlags;
     use crate::config::AppendFsync;
-    let gt = ZaddFlags { gt: true, ..ZaddFlags::default() };
+    use kevy_store::{ScoreCompare, SetCondition};
+    let gt = ZaddFlags::new(SetCondition::Always, ScoreCompare::Greater).unwrap();
     let dir = crate::store::test_suites::tests::tmp_dir("zadd-flags-reopen");
     {
         let s = Store::open(
@@ -337,15 +338,8 @@ fn zadd_flags_facade_pipeline_atomic_and_reopen() {
             Ok(())
         })
         .unwrap();
-        // Invalid combo rejected at the typed boundary.
-        assert!(
-            s.zadd_flags(
-                b"z",
-                &[(1.0, b"q")],
-                ZaddFlags { nx: true, xx: true, ..ZaddFlags::default() }
-            )
-            .is_err()
-        );
+        // The combination Redis refuses cannot be built at all.
+        assert!(ZaddFlags::new(SetCondition::IfAbsent, ScoreCompare::Greater).is_none());
     }
     // Reopen: the logged *effects* replay to the exact same state.
     let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
@@ -485,8 +479,8 @@ fn atomic_collection_reads_see_the_closures_own_writes() {
         tx.zadd(b"z", &[(1.0, &b"m"[..])])?;
         let hits = tx.zrangebyscore(
             b"z",
-            kevy_store::ScoreBound { value: 0.0, exclusive: false },
-            kevy_store::ScoreBound { value: 2.0, exclusive: false },
+            kevy_store::ScoreBound::inclusive(0.0),
+            kevy_store::ScoreBound::inclusive(2.0),
         )?;
         assert_eq!(hits.len(), 1);
         Ok::<(), crate::KevyError>(())

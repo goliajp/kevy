@@ -14,14 +14,19 @@
 //!   has no bus and is rejected; use a named bus to actually receive
 //!   messages from a [`crate::Connection::publish`] on the same URL.
 //!
-//! ```no_run
-//! use kevy_client::{Subscriber, PubsubEvent};
+//! ```
+//! use kevy_client::{Connection, PubsubEvent, Subscriber};
+//! # mod doc { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doc_server/kevy.rs")); }
+//! # let port = kevy_testnet::free_port();
+//! # let _kevy = doc::kevy(port);
+//! # let url = format!("kevy://localhost:{port}");
 //!
-//! let mut sub = Subscriber::connect_channels("kevy://localhost:6379", &[b"news"])?;
+//! let mut sub = Subscriber::connect_channels(&url, &[b"news"])?;
+//! Connection::connect(&url)?.publish(b"news", b"hello")?;
 //! loop {
 //!     if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-//!         println!("{}: {}", String::from_utf8_lossy(&channel),
-//!                            String::from_utf8_lossy(&payload));
+//!         assert_eq!((&channel[..], &payload[..]), (&b"news"[..], &b"hello"[..]));
+//!         break;
 //!     }
 //! }
 //! # Ok::<(), kevy_client::KevyError>(())
@@ -30,19 +35,20 @@
 use crate::{KevyError, KevyResult};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
 use kevy_embedded::Subscription;
 use kevy_resp::{Reply, encode_command};
 use kevy_resp_client::ReplyReadBuf;
 
-use crate::subscribe_io::{await_acks, frame_to_event, invalid, recv_remote, send_to, shape};
+use crate::subscribe_io::{await_acks, invalid, recv_remote, send_to, shape};
 use crate::{Target, parse_url, resolve_store};
 
 /// One subscribed connection. Owns either a TCP socket or an in-process
 /// [`Subscription`]; the variant is chosen by the URL scheme in
 /// [`Subscriber::connect_channels`] / [`Subscriber::connect`].
+///
+#[doc = include_str!("subscribe_docs/subscriber.md")]
 #[derive(Debug)]
 pub struct Subscriber {
     inner: Inner,
@@ -52,7 +58,7 @@ pub struct Subscriber {
 enum Inner {
     /// TCP RESP2 connection, drained one reply at a time.
     Remote {
-        stream: TcpStream,
+        stream: kevy_resp_client::ClientStream,
         buf: ReplyReadBuf,
         /// Events read while waiting for a subscribe ack, held in arrival
         /// order for [`Subscriber::recv`]. Waiting for the ack means
@@ -94,9 +100,8 @@ impl Subscriber {
                 timeout: None,
             },
             Target::Remote(remote_url) => {
-                let (host, port) = remote_host_port(&remote_url)?;
-                let stream = TcpStream::connect((host.as_str(), port))?;
-                stream.set_nodelay(true).ok();
+                check_no_userinfo(&remote_url)?;
+                let stream = kevy_resp_client::ClientStream::connect_url(&remote_url)?;
                 Inner::Remote {
                     stream,
                     buf: ReplyReadBuf::with_capacity(8192),
@@ -188,13 +193,10 @@ impl Subscriber {
                 Some(ev) => Ok(ev),
                 None => recv_remote(stream, buf),
             },
-            Inner::Embedded { subscription, timeout } => {
-                let frame = match *timeout {
-                    Some(d) => subscription.recv_timeout(d)?,
-                    None => subscription.recv()?,
-                };
-                Ok(frame_to_event(frame))
-            }
+            Inner::Embedded { subscription, timeout } => Ok(match *timeout {
+                Some(d) => subscription.recv_timeout(d)?,
+                None => subscription.recv()?,
+            }),
         }
     }
 
@@ -282,7 +284,7 @@ impl Subscriber {
     /// `TimedOut` when no frame arrives within `dur`.
     pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> KevyResult<()> {
         match &mut self.inner {
-            Inner::Remote { stream, .. } => Ok(stream.set_read_timeout(dur)?),
+            Inner::Remote { stream, .. } => Ok(stream.socket().set_read_timeout(dur)?),
             Inner::Embedded { timeout, .. } => {
                 *timeout = dur;
                 Ok(())
@@ -315,6 +317,8 @@ impl Subscriber {
 /// Iterator returned by [`Subscriber::events`]. Yields every pubsub
 /// frame (acks + payloads). See the method docs for termination + error
 /// semantics.
+///
+#[doc = include_str!("subscribe_docs/subscriber_events.md")]
 #[derive(Debug)]
 pub struct SubscriberEvents<'a> {
     sub: &'a mut Subscriber,
@@ -333,6 +337,8 @@ impl Iterator for SubscriberEvents<'_> {
 /// Iterator returned by [`Subscriber::messages`]. Yields one
 /// `(channel, payload)` per published `message` / `pmessage`; ack frames
 /// are silently consumed and not yielded.
+///
+#[doc = include_str!("subscribe_docs/subscriber_messages.md")]
 #[derive(Debug)]
 pub struct SubscriberMessages<'a> {
     sub: &'a mut Subscriber,
@@ -361,7 +367,7 @@ fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
     }
 }
 
-// `send_to` / `recv_remote` / `frame_to_event` / `classify` and the
+// `send_to` / `recv_remote` / `classify` and the
 // per-field reply unwrap helpers live in [`crate::subscribe_io`] —
 // split out so this file stays under the 500-LOC house rule.
 
@@ -371,27 +377,18 @@ fn classify_hello3_reply(reply: Reply) -> KevyResult<PubsubEvent> {
 // is global, not db-scoped — any /N path segment is ignored).
 // ─────────────────────────────────────────────────────────────────────────
 
-fn remote_host_port(url: &str) -> KevyResult<(String, u16)> {
-    let (_scheme, rest) =
-        url.split_once("://").ok_or_else(|| KevyError::InvalidInput("URL missing '://'".into()))?;
-    if rest.contains('@') {
+/// kevy has no AUTH: a `user:pass@` in the host part is refused before
+/// connecting. Only the host part is looked at, since a `kevys://` key
+/// file path may itself contain `@`.
+fn check_no_userinfo(url: &str) -> KevyResult<()> {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    if authority.contains('@') {
         return Err(KevyError::Unsupported(
             "userinfo (user:pass@host) is unsupported — kevy has no AUTH".into(),
         ));
     }
-    let authority = rest.split('/').next().unwrap_or("");
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            let port: u16 =
-                p.parse().map_err(|_| KevyError::InvalidInput(format!("bad port: {p}")))?;
-            (h.to_string(), port)
-        }
-        None => (authority.to_string(), 6379),
-    };
-    if host.is_empty() {
-        return Err(KevyError::InvalidInput("empty host".into()));
-    }
-    Ok((host, port))
+    Ok(())
 }
 
 #[cfg(test)]

@@ -5,42 +5,106 @@
 
 use std::path::PathBuf;
 
-use kevy_persist::Fsync;
+use kevy_persist::{Fsync, ReplayMode};
 
 use crate::Commands;
 use crate::runtime::Runtime;
 
 impl<C: Commands> Runtime<C> {
     /// v3-cluster replication producer side: when `enabled`, each shard
-    /// runs a per-shard `ReplicationSource` with `buffer_size` byte
-    /// budget. Every applied mutation is pushed to the backlog for
-    /// connected replicas to consume. `enabled = false` (default) is
-    /// zero hot-path cost — each write checks `Option::is_some()` and
-    /// skips. The replication TCP listener / streaming loop are gated
-    /// separately by [`Self::with_replication_listener`]; enabling the
-    /// producer without a listener means the backlog fills and frames
-    /// are dropped per the source's eviction policy, but writes
-    /// proceed normally.
+    /// runs a per-shard `ReplicationSource` whose byte budget
+    /// [`Self::with_replication_buffer_size`] sets. Every applied
+    /// mutation is pushed to the backlog for connected replicas to
+    /// consume. `enabled = false` (default) is zero hot-path cost — each
+    /// write checks `Option::is_some()` and skips. The replication TCP
+    /// listener / streaming loop are gated separately by
+    /// [`Self::with_replication_listener`]; enabling the producer without
+    /// a listener means the backlog fills and frames are dropped per the
+    /// source's eviction policy, but writes proceed normally.
+    ///
+    /// ```
+    /// # #[derive(Clone)] struct Cmds;
+    /// # impl kevy_rt::Commands for Cmds {
+    /// #     fn route<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::Route { kevy_rt::Route::Local }
+    /// #     fn dispatch<A: kevy_rt::ArgvView + ?Sized>(&self, _: &mut kevy_rt::Store, _: &A) -> Vec<u8> { Vec::new() }
+    /// #     fn is_quit<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::TxnKind { kevy_rt::TxnKind::Other }
+    /// # }
+    /// let rt = kevy_rt::Runtime::builder(Cmds)
+    ///     .with_replication(true)
+    ///     .with_replication_buffer_size(1 << 20);
+    /// ```
     #[must_use]
-    pub fn with_replication(mut self, enabled: bool, buffer_size: u64) -> Self {
+    pub fn with_replication(mut self, enabled: bool) -> Self {
         self.enable_replication = enabled;
-        if buffer_size > 0 {
-            self.replication_buffer_size = buffer_size;
+        self
+    }
+
+    /// Byte budget of each shard's replication backlog; `0` keeps the
+    /// default. Takes effect when [`Self::with_replication`] is on.
+    ///
+    /// ```
+    /// # #[derive(Clone)] struct Cmds;
+    /// # impl kevy_rt::Commands for Cmds {
+    /// #     fn route<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::Route { kevy_rt::Route::Local }
+    /// #     fn dispatch<A: kevy_rt::ArgvView + ?Sized>(&self, _: &mut kevy_rt::Store, _: &A) -> Vec<u8> { Vec::new() }
+    /// #     fn is_quit<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::TxnKind { kevy_rt::TxnKind::Other }
+    /// # }
+    /// let rt = kevy_rt::Runtime::builder(Cmds).with_replication_buffer_size(256 * 1024);
+    /// ```
+    #[must_use]
+    pub fn with_replication_buffer_size(mut self, bytes: u64) -> Self {
+        if bytes > 0 {
+            self.replication_buffer_size = bytes;
         }
         self
     }
 
     /// Enable the FEED.* consumer surface. Keeps a per-shard
     /// backlog (even with no replicas) and persists the (generation,
-    /// offset) cursor via the feed sidecars. `buffer_size` = 0 keeps
-    /// the default (64 MB/shard); effective budget is
+    /// offset) cursor via the feed sidecars. Its budget is
+    /// [`Self::with_feed_buffer_size`]; the effective budget is
     /// `max(replication_buffer_size, feed_buffer_size)` when both
     /// features are on.
+    ///
+    /// ```
+    /// # #[derive(Clone)] struct Cmds;
+    /// # impl kevy_rt::Commands for Cmds {
+    /// #     fn route<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::Route { kevy_rt::Route::Local }
+    /// #     fn dispatch<A: kevy_rt::ArgvView + ?Sized>(&self, _: &mut kevy_rt::Store, _: &A) -> Vec<u8> { Vec::new() }
+    /// #     fn is_quit<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::TxnKind { kevy_rt::TxnKind::Other }
+    /// # }
+    /// let rt = kevy_rt::Runtime::builder(Cmds).with_feed(true);
+    /// ```
     #[must_use]
-    pub fn with_feed(mut self, enabled: bool, buffer_size: u64) -> Self {
+    pub fn with_feed(mut self, enabled: bool) -> Self {
         self.feed_enabled = enabled;
-        if buffer_size > 0 {
-            self.feed_buffer_size = buffer_size;
+        self
+    }
+
+    /// Byte budget of each shard's feed backlog; `0` keeps the default
+    /// (64 MB/shard). Takes effect when [`Self::with_feed`] is on.
+    ///
+    /// ```
+    /// # #[derive(Clone)] struct Cmds;
+    /// # impl kevy_rt::Commands for Cmds {
+    /// #     fn route<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::Route { kevy_rt::Route::Local }
+    /// #     fn dispatch<A: kevy_rt::ArgvView + ?Sized>(&self, _: &mut kevy_rt::Store, _: &A) -> Vec<u8> { Vec::new() }
+    /// #     fn is_quit<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::TxnKind { kevy_rt::TxnKind::Other }
+    /// # }
+    /// let rt = kevy_rt::Runtime::builder(Cmds).with_feed(true).with_feed_buffer_size(8 << 20);
+    /// ```
+    #[must_use]
+    pub fn with_feed_buffer_size(mut self, bytes: u64) -> Self {
+        if bytes > 0 {
+            self.feed_buffer_size = bytes;
         }
         self
     }
@@ -55,6 +119,122 @@ impl<C: Commands> Runtime<C> {
     #[must_use]
     pub fn with_replication_listener(mut self, port_base: u16) -> Self {
         self.replication_port_base = Some(port_base);
+        self
+    }
+
+    /// Require a Noise IK handshake on every replica link before any
+    /// replication bytes flow; everything after it is encrypted. Off unless
+    /// called.
+    ///
+    /// ```
+    /// use kevy_noise::Keypair;
+    /// use kevy_rt::{ArgvView, Commands, ReplicationSecurity, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let sec = ReplicationSecurity::new(Keypair::from_secret([1; 32]));
+    /// let _rt = Runtime::builder(Minimal).with_replication_listener(16004).with_replication_security(sec);
+    /// ```
+    #[must_use]
+    pub fn with_replication_security(mut self, security: crate::ReplicationSecurity) -> Self {
+        self.replication_security = Some(std::sync::Arc::new(security));
+        self
+    }
+
+    /// [`Self::with_replication_security`] when `security` is `Some`; a
+    /// no-op otherwise, so a caller can pass its configuration straight
+    /// through.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _plain = Runtime::builder(Minimal).with_replication_security_opt(None);
+    /// ```
+    #[must_use]
+    pub fn with_replication_security_opt(
+        self,
+        security: Option<crate::ReplicationSecurity>,
+    ) -> Self {
+        match security {
+            Some(s) => self.with_replication_security(s),
+            None => self,
+        }
+    }
+
+    /// Let a front end that relays clients from elsewhere set the address
+    /// `CLIENT LIST` shows for each one: `CLIENT SETPEER <token> <ip:port>`,
+    /// with `token` as 64 hex characters, rewrites the calling
+    /// connection's peer. Without a token the subcommand does not exist.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _rt = Runtime::builder(Minimal).with_peer_token([7; 32]);
+    /// ```
+    #[must_use]
+    pub fn with_peer_token(mut self, token: [u8; 32]) -> Self {
+        self.peer_token = Some(token);
+        self
+    }
+
+    /// In cluster mode, where encrypted clients reach shard `i`: a
+    /// relayed client (see [`Self::with_peer_token`]) is redirected to
+    /// `port_base + i` instead of the plaintext cluster port.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// let _rt = Runtime::builder(Minimal).with_cluster(6005).with_secure_cluster_announce(6410);
+    /// ```
+    #[must_use]
+    pub fn with_secure_cluster_announce(mut self, port_base: u16) -> Self {
+        self.secure_cluster_announce = Some(port_base);
         self
     }
 
@@ -98,6 +278,36 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Advertise `ip` and/or `port_base` in `-MOVED` redirects instead of
+    /// the bind address and the listening ports — for a node reached
+    /// through a proxy or NAT. Only meaningful with [`Self::with_cluster`].
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    ///
+    /// #[derive(Clone)]
+    /// struct Minimal;
+    /// impl Commands for Minimal {
+    ///     fn route<A: ArgvView + ?Sized>(&self, _a: &A) -> Route { Route::Local }
+    ///     fn dispatch<A: ArgvView + ?Sized>(&self, _s: &mut Store, _a: &A) -> Vec<u8> {
+    ///         b"+OK\r\n".to_vec()
+    ///     }
+    ///     fn is_quit<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn is_write<A: ArgvView + ?Sized>(&self, _a: &A) -> bool { false }
+    ///     fn txn_kind<A: ArgvView + ?Sized>(&self, _a: &A) -> TxnKind { TxnKind::Other }
+    /// }
+    ///
+    /// // shards listen on 6005.., clients are told 203.0.113.7:7001..
+    /// let _rt = Runtime::builder(Minimal)
+    ///     .with_cluster(6005)
+    ///     .with_cluster_announce(Some([203, 0, 113, 7]), Some(7001));
+    /// ```
+    #[must_use]
+    pub fn with_cluster_announce(mut self, ip: Option<[u8; 4]>, port_base: Option<u16>) -> Self {
+        self.cluster_announce = (ip, port_base);
+        self
+    }
+
     /// SLOWLOG tuning (`[slowlog]` config section). Default
     /// `slower_than_micros = -1` (OFF) so the hot path never reads the
     /// clock — every enabled command otherwise pays an `Instant::now()`
@@ -128,6 +338,34 @@ impl<C: Commands> Runtime<C> {
         self.park_timeout_ms = park_timeout_ms;
         self.tick_check_every = tick_check_every;
         self.ring_capacity = ring_capacity;
+        self
+    }
+
+    /// Buffers in each shard's io_uring receive ring (`[advanced]
+    /// recv_buffers`), 16 KiB each: the ring's memory is this times 16 KiB
+    /// per shard, all of it resident once traffic has cycled through the
+    /// ring. Rounded up to a power of two, at most 32,768 (the kernel's
+    /// ceiling). A ring that runs dry costs a re-armed receive, not an
+    /// error. Ignored off Linux and on the epoll reactor.
+    ///
+    /// ```
+    /// use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
+    /// # #[derive(Clone, Debug)] struct Cmds;
+    /// # impl Commands for Cmds {
+    /// #     fn route<A: ArgvView + ?Sized>(&self, _: &A) -> Route { Route::Local }
+    /// #     fn dispatch<A: ArgvView + ?Sized>(&self, _: &mut Store, _: &A) -> Vec<u8> { b"+OK\r\n".to_vec() }
+    /// #     fn is_quit<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: ArgvView + ?Sized>(&self, _: &A) -> TxnKind { TxnKind::Other }
+    /// # }
+    /// // 1,000 buffers round up to 1,024: 16 MiB a shard
+    /// let rt = Runtime::builder(Cmds).with_recv_buffers(1000);
+    /// assert!(format!("{rt:?}").contains("recv_buffers: 1024"));
+    /// ```
+    #[must_use]
+    pub fn with_recv_buffers(mut self, buffers: u16) -> Self {
+        let max = crate::runtime::MAX_RECV_BUFFERS;
+        self.recv_buffers = buffers.clamp(1, max).next_power_of_two();
         self
     }
 
@@ -192,9 +430,10 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// fsync policy for the AOF. Default `EverySec` matches Redis (lose at
-    /// most ~1 s of writes on a crash). `Always` is zero-loss but ~50 %
-    /// throughput; `No` defers everything to the OS pagecache.
+    /// fsync policy for the AOF. Default `EverySec` matches Redis (a power
+    /// loss loses about 1 s of writes plus the time one fsync takes).
+    /// `Always` is zero-loss but ~50 % throughput; `No` never fsyncs and
+    /// leaves the disk to the OS.
     #[must_use]
     pub fn with_appendfsync(mut self, fsync: Fsync) -> Self {
         self.appendfsync = fsync;
@@ -230,11 +469,24 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// Best-effort boot replay: recover the good records behind a corrupt
-    /// v2 AOF record instead of dropping them. Default false (strict).
+    /// What boot replay and the AOF open do at a corrupt v2 AOF record:
+    /// stop there ([`ReplayMode::Strict`], the default), or recover the
+    /// good records behind it ([`ReplayMode::Resync`]).
+    ///
+    /// ```
+    /// # #[derive(Clone)] struct Cmds;
+    /// # impl kevy_rt::Commands for Cmds {
+    /// #     fn route<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::Route { kevy_rt::Route::Local }
+    /// #     fn dispatch<A: kevy_rt::ArgvView + ?Sized>(&self, _: &mut kevy_rt::Store, _: &A) -> Vec<u8> { Vec::new() }
+    /// #     fn is_quit<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn is_write<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> bool { false }
+    /// #     fn txn_kind<A: kevy_rt::ArgvView + ?Sized>(&self, _: &A) -> kevy_rt::TxnKind { kevy_rt::TxnKind::Other }
+    /// # }
+    /// let rt = kevy_rt::Runtime::builder(Cmds).with_replay_mode(kevy_persist::ReplayMode::Resync);
+    /// ```
     #[must_use]
-    pub fn with_replay_resync(mut self, resync: bool) -> Self {
-        self.replay_resync = resync;
+    pub fn with_replay_mode(mut self, mode: ReplayMode) -> Self {
+        self.replay_mode = mode;
         self
     }
 }

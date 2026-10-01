@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 
 kevyは同一のエンジンから三つの形態で提供されます。
 
-- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、94個の
+- **サーバー** — Redisワイヤ互換のデーモンです。RESP2を話し、99個の
   コマンドについてvalkey 9.1と返答をバイト単位で照合しています。
 - **組み込みライブラリ** — `kevy-embedded`はネットワークのない同じ
   エンジンです。Rustバイナリに組み込んで`Store`を直接呼び出せます。
@@ -57,7 +57,9 @@ verbコントラクト（`COMMAND DOCS`、自動生成リファレンス、`kevy
 ください。
 4.0はこれらを確定させます。公開Rust APIは一度だけ整備され——エラー
 型の統一（`KevyError`）、builderの統一、書き込み面の借用スライス化
-（[docs/UPGRADING.md](docs/UPGRADING.md)）——以後は追加のみで凍結。
+（[docs/UPGRADING.md](docs/UPGRADING.md)）——6.x の間は追加のみでした（7.0 で
+Rust API Guidelines に合わせてもう一度変わりました。[docs/rust-api-7.0.md](docs/rust-api-7.0.md)
+を参照）。
 ランタイムはインスタンススコープになり、一つのプロセスで独立した
 複数のkevyを走らせられます。そして同じエンジンがブラウザにも
 エッジデバイスにも届きます（下の二つのセクション）。
@@ -78,15 +80,15 @@ RAMだけで答えます。
 行リストページのp99 < 1ms、書き込みファンアウトのp99 < 200µs、
 ANN recall ≥ 0.9 — [設計マップ](docs/designing-on-kevy.md)、
 [クックブック](docs/cookbook.md)、
-[検証台帳](bench/VALIDATION-LEDGER.md)を参照してください。
+[性能ページ](PERFORMANCE.md)を参照してください。
 
 ## どれを使えばよいか
 
 | 状況 | 選ぶもの |
 |---|---|
-| すでにRedisクライアントライブラリがあり、より速く軽いRedisが欲しい | サーバー（`kevy`） |
-| Rustアプリがあり、別プロセスを起動したくない | 組み込みライブラリ（`kevy-embedded`） |
-| RustからkevyまたはRedisサーバーと話したい | `kevy-client`（ブロッキング） |
+| すでにRedisクライアントライブラリがあり、より速く軽いRedisが欲しい | サーバー（`kevy`）|
+| Rustアプリがあり、別プロセスを起動したくない | 組み込みライブラリ（`kevy-embedded`）|
+| RustからkevyまたはRedisサーバーと話したい | `kevy-client`（ブロッキング）|
 | `tokio` / `smol` / `async-std`のRustで書いている | `kevy-client-async` |
 | URL一つで組み込みとサーバーを切り替えられる同一コードが欲しい | `kevy-client` + `kevy-embedded` |
 
@@ -104,7 +106,7 @@ raw コマンド経路から届きます。うち6言語は、push のたびにC
 | Go | `go get github.com/redis/go-redis/v9` | `client.Do(ctx, ...)` |
 | .NET | `dotnet add package StackExchange.Redis` | `db.Execute(...)` |
 | Python | `pip install redis` | `execute_command(...)` |
-| C | `hiredis`（パッケージマネージャで） | `redisCommand(...)` |
+| C | `hiredis`（パッケージマネージャで）| `redisCommand(...)` |
 | Rust | `cargo add kevy-client` | 型付きAPI＋`cmd(...)` |
 
 言語ごとの完全な例は [docs/clients.md](docs/clients.md)（英語）にあります。
@@ -118,7 +120,7 @@ Flutter／React Native／Electronの公式パッケージは [`bindings/`](bindi
 npm i @goliapkg/kevy-ts                          # Node / TypeScript
 pip install kevy                                 # Python
 dotnet add package kevy                          # C#
-go get github.com/goliajp/kevy-go/v6             # Go
+go get github.com/goliajp/kevy-go/v7             # Go
 flutter pub add flutter_kevy                     # Flutter
 npx expo install expo-kevy                       # React Native (Expo)
 npm i react-native-kevy-nitro                    # React Native (Nitro)
@@ -126,7 +128,7 @@ npm i @goliapkg/kevy-electron                    # Electron
 ```
 ```xml
 <dependency>                                     <!-- Java / Kotlin -->
-  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>6.4.0</version>
+  <groupId>jp.golia</groupId><artifactId>kevy</artifactId><version>7.0.0</version>
 </dependency>
 ```
 
@@ -230,7 +232,7 @@ kevyはブラウザの中で本物のストアとして動きます。npmパッ�
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、
 `wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
 ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
-両側とも依存ゼロ。六ファイル、パックで231 KB（回線上はgzipで218 KB）です。
+両側とも依存ゼロ。七ファイル、パックで653 KB（回線上はgzipで639 KB）です。
 
 ```sh
 npm install @goliapkg/kevy
@@ -281,29 +283,31 @@ featureで段階化されており（`core` / `persist` / `index` / `text` /
 
 ベアメタルベンチマークスイートからの代表的な抜粋です（16コアのLinux
 マシン、サーバーとクライアントは互いに重ならないコアにピン留め、TCP
-loopback）。下記のKV行は`bench/arena.sh`を2026-07-19に再測定した値で、
-median-of-5、スループットは各サーバー自身のコマンドカウンタを計測窓で
-読んだものです。詳細な手法、全ワークロード、注意点は
-[`bench/REPORT.md`](bench/REPORT.md)にあり、すべての数値は
+loopback）。下記のKV行は`bench/arena.sh`を2026-10-01に再測定した値（kevy 7.0.0）
+です。エンジンごとに4コアを与え、セルごとに15の計測窓（5窓を3ラウンド）の
+中央値を取っています。スループットは各サーバー自身のコマンドカウンタで
+読んだものです。`≥`の付いた数字は負荷生成側が追いつかなかったときの値で、
+エンジンは少なくともその速さが出ます。競合のそうした数字には倍率を付けて
+いません（下のDragonflyのGET）。詳細な手法、全ワークロード、注意点は
+[`PERFORMANCE.md`](PERFORMANCE.md)にあり、すべての数値は
 [`bench/`](bench/)のスクリプトから再現可能です。
 
 | ワークロード | kevy | valkey 9.1 | 比率 |
 |---|---:|---:|---:|
-| `GET -c 50 -P 16` | 7.49 M/s | 2.98 M/s | **2.51×** |
-| `SET -c 50 -P 16` | 6.82 M/s | 1.68 M/s | **4.05×** |
-| Pub/subファンアウト（50 subs） | 23.1 M/s | 5.1 M/s | **4.52×** |
-| 組み込み`get`（ヒット） | 9.0 M/s | — | （in-processのRedisは無い） |
+| `GET -c 50 -P 16` | 8.73 M/s | 4.04 M/s | **2.16×** |
+| `SET -c 50 -P 16` | ≥ 7.41 M/s | 2.01 M/s | **≥ 3.68×** |
+| Pub/subファンアウト（50 subs）| 23.1 M/s | 5.1 M/s | **4.52×** |
+| 組み込み`get`（ヒット）| 9.0 M/s | — | （in-processのRedisは無い）|
 
 同じ`GET -c 50 -P 16`の面を、同一マシン上で四つのエンジンと対戦
-——kevyは7.24 M/sでそれぞれに対して（median-of-5。手法と
-エンジンごとのサイクル記録は
-[`bench/REPORT.md`](bench/REPORT.md)）：
+——kevyは8.73 M/sでそれぞれに対して（同じ測定。手法は
+[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | エンジン | kevyのリード |
 |---|---:|
-| valkey 9.1.2 | **2.34×** |
-| redis 8.10.1 | **1.26×** |
-| dragonfly 1.40.2 | **2.62×** |
+| valkey 9.1.2 | **2.16×** |
+| redis 8.10.2 | **1.60×** |
+| dragonfly 2.0.0 | — |
 
 これらの比率は**2026-07-19以前に公表した値より低い**ですが、原因は
 エンジンではなく物差しです。以前の数値は`redis-benchmark`自身の
@@ -317,28 +321,39 @@ Pub/subと組み込みの2行はそれぞれ別のハーネスによるもので
 再測定の対象外です。
 
 サービング面はredis-stack 7.4.7（RediSearch）と同一シード・
-同一コーパスでrecallを揃えて比較（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
+同一コーパスでrecallを揃えて比較（[`PERFORMANCE.md`](PERFORMANCE.md)）：
 
 | クエリ種別 | kevy | RediSearch | 判定 |
 |---|---:|---:|---|
-| 全文検索（BM25 top-10） | 330 qps | 273 qps | **+21% qps**、p95同等 |
+| 全文検索（BM25 top-10）| 330 qps | 273 qps | **+21% qps**、p95同等 |
 | ANN KNN @ recall 1.000 | 0.48 ms | 0.79 ms | **1.64×高速** |
-| GROUP BY top-100 | 1.9 ms | 202.9 ms | **110×**（書き込み時集約） |
+| GROUP BY top-100 | 1.9 ms | 202.9 ms | **110×**（書き込み時集約）|
 | 数値レンジ + hydrate | 0.19 ms | 0.43 ms | **2.3×** |
 
 完全なサーバーはストリップ後768 KBのバイナリで、5 MB未満のRSSで
 起動します。
 
-**アップグレードは？** [docs/UPGRADING.md](docs/UPGRADING.md)が
-両方のホップを一か所でカバーします——3.x → 4.0（ワイヤとディスクは
-そのまま。Rust APIは一度だけ変わり、リネームごとに対照表と規則が
-あります）と2.x → 3.x（バイナリ差し替え + 依存バージョンアップ）
-です。アップグレード方向では、スナップショットとAOFはメジャーを
-またいでそのまま読み込めます。
+**アップグレードは？** 今のホップは[docs/ja/upgrading-6.4-to-7.0.md](docs/ja/upgrading-6.4-to-7.0.md)
+です。プロトコル経由のクライアントはコードの変更不要で、データ
+ディレクトリはそのまま開けます。バイナリを差し替える前に `maxmemory`
+を確認してください（同じデータで `used_memory` が約 1.5 倍に読めます）。
+レプリカがあるならプライマリを先に上げます。Rust から使う場合は
+[docs/rust-api-7.0.md](docs/rust-api-7.0.md)に従い、Go からは `kevy-go/v7`
+を import し、`kevy-cli doctor` などのツールを裸の単語で呼ぶスクリプトは
+ツールを `--kevy` の後ろに移します。6.4 に戻す前にすること、直した
+データ喪失の欠陥もガイドにあり、バージョン混在についての記述はどれも
+6.4.0 のバイナリに対して実測しています。その前のホップは
+[docs/ja/upgrading-6.3-to-6.4.md](docs/ja/upgrading-6.3-to-6.4.md)と
+[docs/ja/upgrading-6.2-to-6.3.md](docs/ja/upgrading-6.2-to-6.3.md)です。
+[docs/UPGRADING.md](docs/UPGRADING.md)はそれより古いメジャーを扱います——
+3.x → 4.0（ワイヤとディスクはそのまま。Rust APIは一度だけ変わり、
+リネームごとに対照表と規則があります）と2.x → 3.x（バイナリ差し替え +
+依存バージョンアップ）です。アップグレード方向では、スナップショットと
+AOFはメジャーをまたいでそのまま読み込めます。
 
 ## 互換性
 
-94個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
+99個のコマンドがvalkey 9.1と返答をバイト単位で照合されており、Redisの
 5つのデータ型（String、Hash、List、Set、Sorted Set）すべてに加えて
 Streams、Pub/Sub（channel + pattern）、トランザクション（`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`）、ブロッキングpop、および標準的な
@@ -384,9 +399,9 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | [`kevy-uring`](crates/kevy-uring) | 純粋Rustのio_uringバインディング。liburingにリンクしない |
 | [`kevy-geo`](crates/kevy-geo) | 地理空間コマンドプリミティブ |
 | [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliapkg/kevy`ローダー |
-| [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる） |
+| [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる）|
 
-残りのクレート（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
+残りのクレート（`kevy-store`、`kevy-verbs`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
 `kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、
 `kevy-chaos`、`kevy-bench`、`kevy-pubsub-bench`）はサーバーと組み込み
 ライブラリのための内部インフラです。ワークスペースが再現可能にビルド
@@ -395,17 +410,17 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 
 **AIエージェント・ツール向け**：[`llms.txt`](llms.txt)（マシン
 ファーストの索引）· [verbリファレンス](docs/verb-reference.md)
-（全189 verb。サーバー自身のメタデータから生成され、`COMMAND DOCS`が
+（全209 verb。サーバー自身のメタデータから生成され、`COMMAND DOCS`が
 返すのと同じ行です）。
 
 ## トピックガイド
 
 | トピック | ドキュメント |
 |---|---|
-| RDSワークロードのマッピング（SQL → kevy） | [`docs/rds-workloads.md`](docs/rds-workloads.md) |
+| RDSワークロードのマッピング（SQL → kevy）| [`docs/rds-workloads.md`](docs/rds-workloads.md) |
 | 移行プレイブックとツールチェーン | [`docs/migration.md`](docs/migration.md) |
 | 設定チューニング | [`docs/ja/tuning.md`](docs/ja/tuning.md) |
-| 永続化（AOF + RDB） | [`docs/ja/persistence.md`](docs/ja/persistence.md) |
+| 永続化（AOF + RDB）| [`docs/ja/persistence.md`](docs/ja/persistence.md) |
 | Pub/Sub | [`docs/ja/pubsub.md`](docs/ja/pubsub.md) |
 | レプリケーション | [`docs/ja/replication.md`](docs/ja/replication.md) |
 | クラスタモード | [`docs/ja/cluster.md`](docs/ja/cluster.md) |
@@ -422,9 +437,11 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 kevyはやらないことについて正直です。チャーターにより、以下は永続的に
 スコープ外で、追加する計画はありません。
 
-- **AUTHとTLS。** kevyは信頼されたネットワークを前提とします。どちらかが
+- **クライアント向けのAUTHとTLS。** kevyは信頼されたネットワークを前提とします。どちらかが
   必要なら、TLS終端のサイドカー（envoy、stunnel）と認証プロキシを前段に
-  置いてください。
+  置いてください。手順は[`docs/deploy-behind-a-proxy.md`](docs/ja/deploy-behind-a-proxy.md)にあります。
+  kevy自身の暗号化は任意で、設定しない限りオフです。Rustクライアント向けの暗号化クライアントポート（`kevys://`）と、
+  ノード間のレプリケーションと選挙の暗号化リンクがあります。[`docs/encrypted-links.md`](docs/ja/encrypted-links.md)を参照してください。
 - **マルチDCのアクティブ-アクティブおよびDC間レプリケーション。** 単一DCのみです。
 - **マルチデータベース`SELECT`。** サーバーごとに一つのキースペースです。
 - **ACL。** 信頼ドメインは一つです。
@@ -447,12 +464,15 @@ macOSでビルドできます。`kevy-embedded`とその依存クロージャは
 
 ## ロードマップと安定性
 
-ワークスペースはv4.xラインに乗っています。永続化フォーマット、RESP
+ワークスペースは7.xラインに乗っています。永続化フォーマット、RESP
 ワイヤプロトコル、公開Rust API、CLIフラグ、環境変数、TOMLスキーマ、
 エビクションセマンティクスは各メジャーラインを通じて追加のみです。
-さらにオンディスクフォーマットはメジャーをまたいで引き継がれます。
-v2.0で書かれたスナップショットやAOFは、すべての3.x・4.xビルドで
-そのまま読み込めます（[docs/UPGRADING.md](docs/UPGRADING.md)を参照）。追加
+さらにアップグレード方向では、オンディスクフォーマットはメジャーを
+またいで引き継がれます。v2.0で書かれたスナップショットやAOFは、
+すべての3.x・4.xビルドでそのまま読み込め、7.0は6.4のディレクトリを
+そのまま開けます（[docs/UPGRADING.md](docs/UPGRADING.md)と各ホップの
+ガイドを参照）。一つ前のメジャーに戻すのは文書化された手順が必要で、
+そのまま使えることは保証しません。追加
 機能は既存コードを壊すことなくマイナーリリースで導入されます。完全な
 安定性契約は
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)

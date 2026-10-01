@@ -1,0 +1,350 @@
+//! Holding a tiered server's memory to its budget, from a thread of its own.
+//!
+//! Demotion holds `used_memory` plus the index floor to the budget, and
+//! the process holds more than that. Two gaps, handled separately:
+//!
+//! - **Live memory the store does not account for** — receive rings,
+//!   connection buffers, allocator overhead, an index holding more than it
+//!   reports. Once a second, while RSS is past half the budget, the
+//!   guard asks the allocator what is live and hands every shard its share
+//!   of the difference, which lowers the demote target by that much.
+//! - **Freed memory the allocator keeps** — a demoted value's blocks go to
+//!   glibc's free lists and stay resident. When the allocator keeps more
+//!   than 1% of the budget resident beyond what is live, the guard asks it
+//!   to hand whole free pages back.
+//!
+//! If live memory stays past budget × 1.05 anyway — demotion has nothing
+//! left to demote — every shard refuses growing writes until it falls back.
+//!
+//! The allocator walk and the trim both lock the heap's arenas while they
+//! run (milliseconds to tens of milliseconds on a fragmented heap), so they
+//! run here rather than on a shard, and only when RSS says they are due.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
+
+use crate::state::{RuntimeState, Totals};
+
+/// The reply to a growing write while the process is over its line.
+pub(crate) const OVER_BUDGET_ERR: &str =
+    "OOM command not allowed when the process holds more memory than the tiering budget allows";
+
+/// How often the guard reads RSS.
+const PERIOD: Duration = Duration::from_millis(100);
+/// Reads between two allocator walks.
+const WALK_EVERY: u32 = 10;
+
+/// What the guard found, for `INFO` and for every shard's tick.
+#[derive(Debug, Default)]
+pub(crate) struct MemGuard {
+    /// Growing writes are refused: live memory stayed past budget × 1.05.
+    pub(crate) refusing: AtomicBool,
+    /// Live bytes the store does not account for, spread over the shards.
+    pub(crate) overhead_bytes: AtomicU64,
+    /// Live bytes at the last walk: the allocator's in-use plus the
+    /// keyspace tables mapped outside it.
+    pub(crate) live_bytes: AtomicU64,
+    /// Allocator walks, and the time they took (µs).
+    pub(crate) walks: AtomicU64,
+    pub(crate) walk_us: AtomicU64,
+    /// Heap trims, the RSS they gave back, and the time they took (µs).
+    pub(crate) trims: AtomicU64,
+    pub(crate) trimmed_bytes: AtomicU64,
+    pub(crate) trim_us: AtomicU64,
+}
+
+/// The RSS line: budget × 1.05.
+#[inline]
+pub(crate) fn rss_line(budget: u64) -> u64 {
+    budget.saturating_add(budget / 20)
+}
+
+/// Start the guard when tiering is on. It holds the state weakly and ends
+/// when the server does.
+pub(crate) fn spawn_if_tiered(state: &Arc<RuntimeState>) {
+    if state.config().tiering.budget.is_none() {
+        return;
+    }
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("kevy-memguard".into())
+        .spawn(move || run(&weak))
+        .expect("spawn the memory guard thread");
+}
+
+/// The guard's memory between looks.
+#[derive(Debug, Default)]
+struct Pace {
+    /// Looks until the next trim may run.
+    trim_wait: u32,
+    /// The overhead the last walk measured: a new reading takes effect only
+    /// as far as two walks in a row agree, so a table caught mid-growth,
+    /// mapped twice for an instant, does not demote a table's worth of rows.
+    measured: Option<u64>,
+    /// Looks since the last walk.
+    since_walk: u32,
+    /// Walks in a row that found live memory past the line.
+    over: u32,
+    /// The shards' summed demote target at the last look.
+    target: u64,
+}
+
+fn run(state: &Weak<RuntimeState>) {
+    let mut pace = Pace { since_walk: WALK_EVERY, ..Pace::default() };
+    loop {
+        std::thread::sleep(PERIOD);
+        let Some(state) = state.upgrade() else { return };
+        step(&state, &mut pace);
+    }
+}
+
+/// One period on a live server: nothing while the budget does not resolve.
+fn step(state: &RuntimeState, pace: &mut Pace) {
+    let Ok(Some(budget)) = crate::resolve_tier_budget(&state.config()) else { return };
+    let (accounted, heap) = from_totals(&state.obs.aggregate(), budget, pace);
+    look(&state.mem, budget, accounted, heap, pace);
+}
+
+/// What a look takes from the shards' totals: what they charge, and what
+/// kevy-alloc's heaps hold live when it is the allocator.
+fn from_totals(t: &Totals, budget: u64, pace: &mut Pace) -> (u64, Option<u64>) {
+    // a target that just dropped (an index, a table about to grow) sends
+    // demotion to free blocks: walk, and trim what it leaves, 300 ms on
+    // rather than whenever the second comes round
+    if t.tier.effective_target.saturating_add(budget / 100) < pace.target {
+        pace.since_walk = pace.since_walk.max(WALK_EVERY - 3);
+    }
+    pace.target = t.tier.effective_target;
+    // under kevy-alloc the shards publish what their heaps hold; glibc's
+    // counters then describe almost nothing
+    let heap = (t.alloc_shards > 0).then(|| {
+        let a = &t.alloc;
+        a.mapped - (a.span_free + a.cache + a.returned + a.virgin + a.hysteresis)
+    });
+    (t.used_memory + t.tier.reserved_bytes, heap)
+}
+
+/// One look. `accounted` is what the shards charge: `used_memory` plus
+/// the index floor. `heap` is what kevy-alloc's heaps hold live, when it
+/// is the allocator — it returns its own pages, so there is nothing for a
+/// glibc trim to do.
+fn look(g: &MemGuard, budget: u64, accounted: u64, heap: Option<u64>, pace: &mut Pace) {
+    let rss = kevy_sys::process_rss_bytes();
+    pace.since_walk += 1;
+    pace.trim_wait = pace.trim_wait.saturating_sub(1);
+    // under half the budget nothing needs the walk; its last answer stands, and
+    // the first look past it walks at once, before the hot set fills the rest
+    if rss <= budget / 2 {
+        pace.over = 0;
+        g.refusing.store(false, Relaxed);
+        return;
+    }
+    // between walks, what the shards charge plus the last overhead stands in
+    // for what is live: RSS pulling away from it is freed memory piling up,
+    // which is worth a walk and a trim before the second is out
+    let kept_guess = rss.saturating_sub(accounted + g.overhead_bytes.load(Relaxed));
+    let piling = heap.is_none() && pace.since_walk >= 3 && trim_due(budget, kept_guess, pace);
+    if pace.since_walk < WALK_EVERY && !piling {
+        return;
+    }
+    pace.since_walk = 0;
+    let t0 = Instant::now();
+    let live = live_bytes(heap);
+    g.walk_us.fetch_add(t0.elapsed().as_micros() as u64, Relaxed);
+    g.walks.fetch_add(1, Relaxed);
+    g.live_bytes.store(live, Relaxed);
+    let measured = live.saturating_sub(accounted);
+    let overhead = pace.measured.map_or(measured, |last| last.min(measured));
+    pace.measured = Some(measured);
+    g.overhead_bytes.store(overhead, Relaxed);
+    if heap.is_none() {
+        trim_if_kept(g, budget, rss.saturating_sub(live), pace);
+    }
+    // one walk past the line can be a table mid-growth or a demotion
+    // batch still catching up; two in a row, a second apart, is not
+    pace.over = if live > rss_line(budget) { pace.over + 1 } else { 0 };
+    g.refusing.store(pace.over >= 2, Relaxed);
+}
+
+/// Hand freed pages back once the allocator keeps more than 1% of the
+/// budget resident beyond what is live: at most once a second, and once
+/// every five after a trim that found next to nothing whole to return.
+/// Freed blocks turn into whole free pages as their neighbours are freed
+/// too, so a trim that returned little is worth repeating later.
+fn trim_if_kept(g: &MemGuard, budget: u64, kept: u64, pace: &mut Pace) {
+    if !trim_due(budget, kept, pace) {
+        return;
+    }
+    let before = kevy_sys::process_rss_bytes();
+    let t0 = Instant::now();
+    kevy_sys::malloc_trim_now();
+    g.trim_us.fetch_add(t0.elapsed().as_micros() as u64, Relaxed);
+    let given_back = before.saturating_sub(kevy_sys::process_rss_bytes());
+    g.trims.fetch_add(1, Relaxed);
+    g.trimmed_bytes.fetch_add(given_back, Relaxed);
+    pace.trim_wait = if given_back < budget / 400 { WALK_EVERY * 5 } else { WALK_EVERY };
+}
+
+/// More than 1% of the budget kept, and the last trim long enough ago.
+#[inline]
+fn trim_due(budget: u64, kept: u64, pace: &Pace) -> bool {
+    kept > budget / 100 && pace.trim_wait == 0
+}
+
+/// What the process holds live: the allocator's in-use and the keyspace
+/// tables mapped outside it. RSS when the allocator publishes nothing.
+fn live_bytes(heap: Option<u64>) -> u64 {
+    let mapped = kevy_madvise::mapped_bytes() as u64;
+    match (heap, kevy_sys::heap_stats()) {
+        (Some(h), _) => h + mapped,
+        (None, Some(h)) => h.in_use + mapped,
+        (None, None) => kevy_sys::process_rss_bytes(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_far_under_its_budget_is_left_alone() {
+        let g = MemGuard::default();
+        let mut pace = Pace::default();
+        for _ in 0..WALK_EVERY * 2 {
+            look(&g, u64::MAX / 2, 0, None, &mut pace);
+        }
+        assert!(!g.refusing.load(Relaxed));
+        assert_eq!(g.trims.load(Relaxed) + g.walks.load(Relaxed), 0, "no trim, no walk");
+    }
+
+    #[test]
+    fn live_memory_past_the_line_twice_in_a_row_is_refused() {
+        // a budget far below what this test process already holds live
+        let g = MemGuard::default();
+        let mut pace = Pace::default();
+        for _ in 0..WALK_EVERY {
+            look(&g, 1, 0, None, &mut pace);
+        }
+        assert_eq!(g.walks.load(Relaxed), 1);
+        assert!(!g.refusing.load(Relaxed), "one walk over the line is not enough");
+        let live = g.live_bytes.load(Relaxed);
+        assert!(live > 0 && g.overhead_bytes.load(Relaxed) == live, "nothing accounted");
+        for _ in 0..WALK_EVERY {
+            look(&g, 1, 0, None, &mut pace);
+        }
+        assert!(g.refusing.load(Relaxed), "two walks over the line refuse");
+    }
+
+    #[test]
+    fn the_overhead_is_what_the_store_does_not_account_for() {
+        let g = MemGuard::default();
+        let mut pace = Pace { since_walk: WALK_EVERY, ..Pace::default() };
+        look(&g, 1, u64::MAX, None, &mut pace);
+        assert_eq!(g.overhead_bytes.load(Relaxed), 0, "everything live is accounted");
+    }
+
+    #[test]
+    fn under_kevy_alloc_live_is_the_heaps_plus_the_mapped_tables_and_nothing_is_trimmed() {
+        let g = MemGuard::default();
+        // past half the budget, so the look walks; an empty heap leaves only
+        // the mapped tables live, far under the line
+        let budget = kevy_sys::process_rss_bytes() / 2 * 3;
+        let mut pace = Pace { since_walk: WALK_EVERY, over: 1, ..Pace::default() };
+        look(&g, budget, 0, Some(0), &mut pace);
+        assert_eq!(g.walks.load(Relaxed), 1);
+        assert_eq!(g.overhead_bytes.load(Relaxed), g.live_bytes.load(Relaxed), "nothing accounted");
+        assert_eq!(g.trims.load(Relaxed), 0, "kevy-alloc returns its own pages");
+        assert_eq!(pace.over, 0, "live under the line resets the count");
+        assert!(!g.refusing.load(Relaxed));
+    }
+
+    #[test]
+    fn a_walk_inside_the_trim_wait_does_not_trim() {
+        let g = MemGuard::default();
+        let mut pace = Pace { since_walk: WALK_EVERY, trim_wait: 5, ..Pace::default() };
+        look(&g, 1, 0, None, &mut pace);
+        assert_eq!((g.walks.load(Relaxed), g.trims.load(Relaxed)), (1, 0));
+        assert_eq!(pace.trim_wait, 4);
+    }
+
+    #[test]
+    fn a_trim_that_returns_little_waits_five_times_longer() {
+        let g = MemGuard::default();
+        let mut pace = Pace::default();
+        trim_if_kept(&g, u64::MAX / 2, u64::MAX, &mut pace);
+        assert_eq!(g.trims.load(Relaxed), 1);
+        assert_eq!(pace.trim_wait, WALK_EVERY * 5, "less than a 400th of the budget came back");
+        let mut pace = Pace::default();
+        trim_if_kept(&g, 1, 1, &mut pace);
+        assert_eq!(g.trims.load(Relaxed), 2);
+        assert_eq!(pace.trim_wait, WALK_EVERY);
+    }
+
+    #[test]
+    fn the_shards_totals_give_what_is_charged_and_what_the_heaps_hold() {
+        let mut t = Totals { used_memory: 300, ..Totals::default() };
+        t.tier.reserved_bytes = 20;
+        t.tier.effective_target = 10_000;
+        let mut pace = Pace::default();
+        assert_eq!(from_totals(&t, 100_000, &mut pace), (320, None), "no heap published");
+        assert_eq!((pace.target, pace.since_walk), (10_000, 0));
+
+        t.alloc_shards = 2;
+        t.alloc.mapped = 1_000;
+        t.alloc.span_free = 100;
+        t.alloc.cache = 50;
+        t.alloc.returned = 25;
+        t.alloc.virgin = 5;
+        t.alloc.hysteresis = 20;
+        assert_eq!(from_totals(&t, 100_000, &mut pace).1, Some(800));
+        assert_eq!(pace.since_walk, 0, "an unchanged target does not hurry the walk");
+
+        t.tier.effective_target = 8_000;
+        from_totals(&t, 100_000, &mut pace);
+        assert_eq!(pace.since_walk, WALK_EVERY - 3, "a dropped target brings the walk forward");
+        assert_eq!(pace.target, 8_000);
+    }
+
+    fn state_with_budget(budget: Option<&str>) -> Arc<RuntimeState> {
+        let mut cfg = kevy_config::Config::default();
+        cfg.tiering.budget = budget.map(|b| kevy_config::TierBudgetSpec::parse(b).unwrap());
+        Arc::new(RuntimeState::new(Arc::new(cfg), "", 1).unwrap())
+    }
+
+    #[test]
+    fn a_step_without_a_budget_does_nothing_and_one_with_it_walks() {
+        let mut pace = Pace { since_walk: WALK_EVERY, ..Pace::default() };
+        let untiered = state_with_budget(None);
+        step(&untiered, &mut pace);
+        assert_eq!(pace.since_walk, WALK_EVERY, "no look was taken");
+        let tiered = state_with_budget(Some("1mb"));
+        step(&tiered, &mut pace);
+        assert_eq!(tiered.mem.walks.load(Relaxed), 1, "a process past half of 1 MiB walks at once");
+        assert_eq!(pace.since_walk, 0);
+    }
+
+    #[test]
+    fn the_guard_walks_while_the_server_lives_and_ends_with_it() {
+        let state = state_with_budget(Some("1mb"));
+        let weak = Arc::downgrade(&state);
+        let guard = std::thread::spawn(move || run(&weak));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while state.mem.walks.load(Relaxed) == 0 {
+            assert!(Instant::now() < deadline, "the guard never walked");
+            std::thread::sleep(PERIOD / 4);
+        }
+        drop(state);
+        guard.join().unwrap();
+    }
+
+    #[test]
+    fn only_a_tiered_server_starts_the_guard() {
+        let untiered = state_with_budget(None);
+        spawn_if_tiered(&untiered);
+        assert_eq!(Arc::weak_count(&untiered), 0, "no guard holds an untiered server");
+        let tiered = state_with_budget(Some("1mb"));
+        spawn_if_tiered(&tiered);
+        assert_eq!(Arc::weak_count(&tiered), 1, "the guard holds the server weakly");
+    }
+}

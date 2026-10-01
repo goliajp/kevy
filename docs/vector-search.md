@@ -34,7 +34,7 @@ bytes of little-endian f32) written by your client library; the
 
 Supporting verbs work like on every kind: `IDX.EXPLAIN embs KNN …`
 (parse + plan without execution), `IDX.VERIFY` / `IDX.LIST` (live
-stats), `IDX.DROP`. `IDX.REBUILD` is specific to ANN — see
+stats), `IDX.DROP`. On an ANN index `IDX.REBUILD` compacts the graph — see
 "Deletes and rebuild".
 
 ## Quick start (embedded)
@@ -48,11 +48,9 @@ use kevy_embedded::{AnnSpec, Config, Store};
 fn main() -> kevy_embedded::KevyResult<()> {
     let store = Store::open(Config::default())?;
 
-    // m / ef of 0 select the defaults (16 / 200);
+    // AnnSpec::new starts at M 16 / EF 200;
     // distance: 0 = cosine, 1 = l2, 2 = ip.
-    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec {
-        dim: 4, distance: 0, m: 0, ef: 0,
-    })?;
+    store.idx_create_ann(b"embs", b"doc:", b"v", AnnSpec::new(4).with_distance(0))?;
 
     let v1: Vec<u8> = [0.1f32, 0.2, 0.3, 0.4]
         .iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -163,8 +161,8 @@ if your data is strongly multi-modal, index the modes separately
 Same envelope as every index kind ([indexes.md](indexes.md)): a
 write and its graph update are atomic within the owning shard;
 cross-shard queries merge per-shard top-k without a global snapshot
-(SCAN-class). The catalog persists in a data-dir sidecar; graph
-CONTENT is derived state, rebuilt after restart.
+(SCAN-class). The catalog is recorded in the log and every snapshot,
+and replicates; graph CONTENT is derived state, rebuilt after restart.
 
 ## Performance
 
@@ -175,7 +173,7 @@ Measured envelope (receipts in the bench tree):
   at EF 400 holding simultaneously (both clamps at once — a fast
   wrong answer doesn't pass), plus the memory formula against real
   RSS growth (0.5-1.5×).
-- [`bench/PERF-LEDGER.md`](../bench/PERF-LEDGER.md) records the
+- [`PERFORMANCE.md`](https://github.com/goliajp/kevy/blob/develop/PERFORMANCE.md) records the
   comparative shootout: recall-aligned at 1.000, KNN answers in
   0.48 ms vs 0.79 ms — **1.64× ahead** of the RediSearch HNSW in
   redis-stack 7.4.7, on the same corpus.

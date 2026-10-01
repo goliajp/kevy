@@ -1,7 +1,7 @@
-//! The three data entry points plus the open report.
+//! The data entry points plus the open report.
 
 use crate::env::*;
-use crate::{db_ptr, empty_buf, take_buf, take_buf_shared};
+use crate::{db_ptr, empty_buf, take_buf};
 use kevy_ffi::{KevyOpenReport, dispatch_packed};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
@@ -46,21 +46,81 @@ pub unsafe extern "system" fn jni_cmd(
     .unwrap_or(null_mut())
 }
 
+/// `KevyNative.mget(long db, byte[] packedKeys)` — MGET without RESP: the
+/// keys packed as `cmd` packs an argv, the reply one slot per key per
+/// [`kevy_ffi::mget_packed`] (a u32-LE length and the bytes, or
+/// [`kevy_ffi::MGET_MISS`]). Null on misuse or a store error.
+///
+/// # Safety
+/// Called by the JVM only, same contract as [`jni_cmd`].
+#[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_mget")]
+pub unsafe extern "system" fn jni_mget(
+    env: JniEnv,
+    _class: JObject,
+    db: JLong,
+    packed: JObject,
+) -> JObject {
+    catch_unwind(AssertUnwindSafe(|| {
+        if db == 0 || packed.is_null() {
+            return null_mut();
+        }
+        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
+        // see the module note.
+        let bytes = unsafe { get_byte_array(env, packed) };
+        let mut out = empty_buf();
+        // SAFETY: `db` is a live handle per this function's contract, and `bytes` and
+        // `out` are locals.
+        if unsafe { kevy_ffi::mget_packed(db_ptr(db), &bytes, &mut out) } != 0 {
+            return null_mut();
+        }
+        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
+        // see the module note.
+        unsafe { take_buf(env, out) }
+    }))
+    .unwrap_or(null_mut())
+}
+
+/// `KevyNative.mset(long db, byte[] packedPairs)` — MSET without RESP:
+/// key, value, key, value… packed as `cmd` packs an argv, per
+/// [`kevy_ffi::mset_packed`]. 0 on success, -1 on misuse, -2 on a store
+/// error.
+///
+/// # Safety
+/// Called by the JVM only, same contract as [`jni_cmd`].
+#[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_mset")]
+pub unsafe extern "system" fn jni_mset(
+    env: JniEnv,
+    _class: JObject,
+    db: JLong,
+    packed: JObject,
+) -> JInt {
+    catch_unwind(AssertUnwindSafe(|| {
+        if db == 0 || packed.is_null() {
+            return -1;
+        }
+        // SAFETY: `env` is the JNI env for this call and every argument is a live local —
+        // see the module note.
+        let bytes = unsafe { get_byte_array(env, packed) };
+        // SAFETY: `db` is a live handle per this function's contract, and `bytes` is a local.
+        unsafe { kevy_ffi::mset_packed(db_ptr(db), &bytes) }
+    }))
+    .unwrap_or(-2)
+}
+
 /// `KevyNative.get(long db, byte[] key)` — scalar fast-path GET: the raw
 /// value bytes, or null on a miss (and on misuse).
 ///
-/// Rides the **zero-copy shared lane** ([`kevy_ffi::kevy_get_shared`]): a bulk
-/// value is an `Arc` refcount bump (no engine-side byte copy) whose bytes are
-/// copied straight into the JVM array, freed via [`take_buf_shared`]. This
-/// saves the malloc+memcpy that the plain [`kevy_ffi::kevy_get`] lane spends
-/// cloning the value into a fresh `Vec` before handing it out.
+/// Allocates nothing of its own for a short key and a hot value: the key is
+/// read onto the stack ([`with_byte_array`]) and the value is lent under the
+/// shard's lock ([`kevy_ffi::get_lent`]) and copied once, straight into the
+/// new JVM array.
 ///
-/// The shared lane collapses a store error (GET on a non-string key — its only
-/// error is `WrongType`) into `-2`, which `null` alone can't distinguish from a
-/// miss (`0`). So on that error this throws a `jp.golia.kevy.ScalarGetSignal`,
-/// telling the Java side to re-run the framed GET, which surfaces the proper
-/// typed WRONGTYPE store exception (matching the remote backend). A miss stays
-/// `null` — no framing cost on the common absent-key path.
+/// A store error (GET on a non-string key — its only error is `WrongType`)
+/// can't be told from a miss by `null` alone, so on that error this throws a
+/// `jp.golia.kevy.ScalarGetSignal`, telling the Java side to re-run the
+/// framed GET, which surfaces the proper typed WRONGTYPE store exception
+/// (matching the remote backend). A miss stays `null` — no framing cost on
+/// the common absent-key path.
 ///
 /// # Safety
 /// Called by the JVM only, same contract as [`jni_cmd`].
@@ -76,21 +136,19 @@ pub unsafe extern "system" fn jni_get(
             return null_mut();
         }
         // SAFETY: `env` is the JNI env for this call and every argument is a live local —
-        // see the module note.
-        let k = unsafe { get_byte_array(env, key) };
-        let mut out = empty_buf();
-        // SAFETY: `env` is this call's, `arr` is the live array reference JNI passed, and
-        // the buffer is a local sized to the length just read from that array.
-        let rc = unsafe { kevy_ffi::kevy_get_shared(db_ptr(db), k.as_ptr(), k.len(), &mut out) };
-        match rc {
-            // SAFETY: `env` is the JNI env for this call and every argument is a live local —
-            // see the module note.
-            1 => unsafe { take_buf_shared(env, out) },
-            0 => null_mut(),
-            // Store error (WrongType): `out` is the empty sentinel on a
-            // non-hit, so there is no buffer to free — just signal the
-            // framed-GET fallback and return.
-            _ => {
+        // see the module note; `db` is a live handle per this function's contract.
+        let got = unsafe {
+            with_byte_array(env, key, |k| {
+                kevy_ffi::get_lent(db_ptr(db), k, |v| match v {
+                    // SAFETY: as above — this call's env, building a local array.
+                    Some(v) => new_byte_array(env, v),
+                    None => null_mut(),
+                })
+            })
+        };
+        match got {
+            Ok(arr) => arr,
+            Err(-2) => {
                 // SAFETY: `env` is the JNI env for this call and every argument is a live local —
                 // see the module note.
                 unsafe {
@@ -102,6 +160,7 @@ pub unsafe extern "system" fn jni_get(
                 }
                 null_mut()
             }
+            Err(_) => null_mut(),
         }
     }))
     .unwrap_or(null_mut())

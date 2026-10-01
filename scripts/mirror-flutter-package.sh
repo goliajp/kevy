@@ -35,13 +35,22 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/bindings/flutter"
-REPO="git@github.com:goliajp/kevy-flutter.git"
+# Overridable so the push path can be exercised against a local bare
+# repository; a release uses the default.
+REPO="${KEVY_FLUTTER_REPO:-git@github.com:goliajp/kevy-flutter.git}"
 
+# --dry-run VERSION does everything --push does and ends in
+# `git push --dry-run`. Re-running --push for a version whose tag already
+# holds this content says so and pushes nothing.
 PUSH_VERSION=""
-if [ "${1:-}" = "--push" ]; then
-    PUSH_VERSION="${2:-}"
-    [ -n "$PUSH_VERSION" ] || { echo "✗ --push needs a version, e.g. --push 5.1.0" >&2; exit 2; }
-fi
+DRY_RUN=0
+case "${1:-}" in
+    --push|--dry-run)
+        [ "$1" = "--dry-run" ] && DRY_RUN=1
+        PUSH_VERSION="${2:-}"
+        [ -n "$PUSH_VERSION" ] || { echo "✗ $1 needs a version, e.g. $1 5.1.0" >&2; exit 2; }
+        ;;
+esac
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/kevy-flutter-mirror.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
@@ -95,6 +104,14 @@ cp -R "$SRC/android/src/main/jniLibs/." "$OUT/android/src/main/jniLibs/"
 # a pubspec that resolves flutter_kevy by relative path — which cannot
 # resolve once this is a standalone repository.
 rm -rf "$OUT/example"
+
+# The workflow that turns the pushed tag into a pub.dev publish lives in
+# bindings/flutter/.github and arrives with the tracked files above; there
+# it is inert, at the mirror's root it is the repository's workflow.
+[ -f "$OUT/.github/workflows/publish.yml" ] || {
+    echo "✗ the mirror has no .github/workflows/publish.yml: the tag it pushes" >&2
+    echo "  would publish nothing, exactly as through 6.3.0" >&2
+    exit 1; }
 
 # The source tree's .gitignore is what makes the engine untracked HERE,
 # and copying it forward carries that decision into the one place where
@@ -187,55 +204,97 @@ if [ -z "$PUSH_VERSION" ]; then
     exit 0
 fi
 
-echo "→ pushing kevy-flutter v$PUSH_VERSION"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "→ rehearsing the push of kevy-flutter v$PUSH_VERSION (nothing is pushed)"
+else
+    echo "→ pushing kevy-flutter v$PUSH_VERSION"
+fi
 WORK="$STAGE/push"
 git clone --quiet "$REPO" "$WORK" 2>/dev/null || git init --quiet "$WORK"
 git -C "$WORK" remote add origin "$REPO" 2>/dev/null || true
-if git -C "$WORK" rev-parse "v$PUSH_VERSION" >/dev/null 2>&1; then
-    # A tag here is only meaningful once pub.dev has published from it;
-    # before that it is a staging pointer nobody has consumed, and the
-    # first publish attempt can fail on something only the server checks.
-    # So ask pub.dev, not the tag: if the version is live, it is fixed
-    # forever and the answer is a new version.
-    live=$(curl -sf "https://pub.dev/api/packages/flutter_kevy" 2>/dev/null \
-        | grep -o "\"version\":\"$PUSH_VERSION\"" || true)
-    if [ -n "$live" ]; then
-        echo "✗ flutter_kevy $PUSH_VERSION is already on pub.dev." >&2
-        echo "  A published version is permanent there. Ship the next one." >&2
-        exit 1
-    fi
-    echo "  v$PUSH_VERSION is tagged but not published — moving the tag"
-    git -C "$WORK" tag -d "v$PUSH_VERSION" >/dev/null
-    git -C "$WORK" push --quiet --delete origin "v$PUSH_VERSION" 2>/dev/null || true
-fi
-rm -rf "$OUT/.dart_tool"
+
+# What would be committed, which is what pub.dev would publish: the
+# generated tree filtered by its own .gitignore. The dry-run's .dart_tool
+# and lockfile fall out here as build state.
 find "$WORK" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 cp -R "$OUT"/. "$WORK"/
 git -C "$WORK" add -A
-if git -C "$WORK" diff --cached --quiet; then
-    echo "  content already current; tagging only"
-else
-    git -C "$WORK" commit --quiet -m "flutter_kevy $PUSH_VERSION
+
+# Asked of pub.dev, not of the tag: a version live there is fixed forever.
+live=$(curl -sf "https://pub.dev/api/packages/flutter_kevy" 2>/dev/null \
+    | grep -o "\"version\":\"$PUSH_VERSION\"" || true)
+
+MOVE_TAG=0
+if git -C "$WORK" rev-parse -q --verify "refs/tags/v$PUSH_VERSION" >/dev/null; then
+    # A re-run. The tag either holds this package or it does not; the
+    # engine is rebuilt every run and its bytes are not reproducible, so
+    # the comparison takes the engine by its path and self-reported
+    # version and everything else byte for byte.
+    mkdir "$STAGE/tagged" "$STAGE/staged"
+    git -C "$WORK" archive "refs/tags/v$PUSH_VERSION" | tar -x -C "$STAGE/tagged"
+    git -C "$WORK" checkout-index -a --prefix="$STAGE/staged/"
+    if python3 "$ROOT/scripts/compare-prebuilt-tree.py" "$STAGE/tagged" "$STAGE/staged" \
+        "$PUSH_VERSION" ios/kevy_ffi.xcframework android/src/main/jniLibs; then
+        echo "  ✓ already pushed v$PUSH_VERSION, content matches — nothing to push"
+        if [ -n "$live" ]; then
+            echo "  ✓ flutter_kevy $PUSH_VERSION is on pub.dev"
+        else
+            echo "  ! flutter_kevy $PUSH_VERSION is not on pub.dev yet (see below)"
+        fi
+        PUSHED=0
+    elif [ -n "$live" ]; then
+        echo "✗ flutter_kevy $PUSH_VERSION is already on pub.dev, and its tag on" >&2
+        echo "  kevy-flutter holds different content. A published version is" >&2
+        echo "  permanent there. Ship the next one." >&2
+        exit 1
+    else
+        # Tagged but never published: a staging pointer nobody consumed,
+        # so it may move.
+        echo "  v$PUSH_VERSION is tagged but not published, and differs — moving the tag"
+        MOVE_TAG=1
+    fi
+elif [ -n "$live" ]; then
+    echo "✗ flutter_kevy $PUSH_VERSION is on pub.dev but kevy-flutter has no" >&2
+    echo "  v$PUSH_VERSION tag, so what was published cannot be compared here." >&2
+    exit 1
+fi
+
+if [ "${PUSHED:-1}" = 1 ]; then
+    if git -C "$WORK" diff --cached --quiet; then
+        echo "  content already current; tagging only"
+    else
+        git -C "$WORK" commit --quiet -m "flutter_kevy $PUSH_VERSION
 
 Generated from goliajp/kevy bindings/flutter by
 scripts/mirror-flutter-package.sh. Do not edit here."
+    fi
+    git -C "$WORK" tag -f "v$PUSH_VERSION" >/dev/null
+    # One atomic ref update: two pushes leave a window in which the commit
+    # exists without its tag, and whatever fetches during it caches that.
+    # Only the tag may be forced, and only when it is being moved.
+    tagref="refs/tags/v$PUSH_VERSION:refs/tags/v$PUSH_VERSION"
+    [ "$MOVE_TAG" = 1 ] && tagref="+$tagref"
+    if [ "$DRY_RUN" = 1 ]; then
+        # --dry-run still talks to the remote, so a key without write
+        # access fails here rather than on release day.
+        git -C "$WORK" push --dry-run --atomic origin HEAD:main "$tagref"
+        echo "  dry run: would push $(git -C "$WORK" rev-parse --short HEAD) to main and tag v$PUSH_VERSION"
+        exit 0
+    fi
+    git -C "$WORK" push --quiet --atomic origin HEAD:main "$tagref"
+    echo "  ✓ pushed and tagged v$PUSH_VERSION"
 fi
-git -C "$WORK" tag "v$PUSH_VERSION"
-# One atomic ref update: two pushes leave a window in which the commit
-# exists without its tag, and whatever fetches during it caches that.
-git -C "$WORK" push --quiet --atomic origin HEAD:main "v$PUSH_VERSION"
-echo "  ✓ pushed and tagged v$PUSH_VERSION"
 
+[ -n "$live" ] && exit 0
 cat <<NOTE
 
-pub.dev needs the FIRST version published by hand — automated publishing
-can only update a package that already exists:
+The tag starts .github/workflows/publish.yml in kevy-flutter, which
+publishes to pub.dev over GitHub's OIDC token. pub.dev accepts that only
+once the package's Admin tab has "Enable publishing from GitHub Actions"
+on for repository \`goliajp/kevy-flutter\` with tag pattern
+\`v{{version}}\`. Until then that run fails at upload, and the version is
+published by hand from the tag:
 
-    git clone $REPO /tmp/kevy-flutter
+    git clone --branch v$PUSH_VERSION $REPO /tmp/kevy-flutter
     cd /tmp/kevy-flutter && flutter pub publish
-
-Then, once flutter_kevy exists on pub.dev, enable the automation so no
-later release needs a person: package Admin tab → "Enable publishing
-from GitHub Actions" → repository \`goliajp/kevy-flutter\`, tag pattern
-\`v{{version}}\`. The tag this script just pushed matches it.
 NOTE

@@ -5,6 +5,7 @@
 //! production traffic takes.
 
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,33 +20,6 @@ use kevy_embedded::{Config, Store};
 /// first `Runtime` is still mid-binding).
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Stand-in for the `tempfile` crate (workspace 0-dep rule).
-mod tempdir {
-    use std::path::PathBuf;
-    pub struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        pub fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("{label}-{nanos}"));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-        pub fn path(&self) -> &std::path::Path {
-            &self.path
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 use kevy_testnet::free_port_block;
 
 struct Server {
@@ -53,11 +27,15 @@ struct Server {
     replication_base: u16,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
-    _dir: tempdir::TempDir,
+    _dir: kevy_tmpdir::TmpDir,
 }
 
 impl Server {
     fn start() -> Server {
+        Self::start_with(None)
+    }
+
+    fn start_with(security: Option<kevy_rt::ReplicationSecurity>) -> Server {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // SAFETY: integration test owns its own process state; setting
         // an env var here is safe since no other thread reads
@@ -69,7 +47,7 @@ impl Server {
         let base = free_port_block(2);
         let port = base;
         let replication_base = base + 1;
-        let dir = tempdir::TempDir::new("kevy-embed-replica-e2e");
+        let dir = kevy_tmpdir::TmpDir::new("embed-replica-e2e");
         let dir_path = dir.path().to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
@@ -79,8 +57,10 @@ impl Server {
                 .shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replication(true, 1024 * 1024)
-                .with_replication_listener(replication_base);
+                .with_replication(true)
+                .with_replication_buffer_size(1024 * 1024)
+                .with_replication_listener(replication_base)
+                .with_replication_security_opt(security);
             let _ = rt.run(stop_t);
         });
         // Wait for both ports.
@@ -111,7 +91,7 @@ impl Server {
     /// Send one RESP command over the compat port and read enough of
     /// the reply to confirm it. We only care that the write applied,
     /// so anything that starts with `+OK` / `$` / `:` is success.
-    fn cmd(&self, parts: &[&[u8]]) {
+    fn cmd(&self, parts: &[&[u8]]) -> Vec<u8> {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut req: Vec<u8> = Vec::new();
@@ -127,10 +107,11 @@ impl Server {
         assert!(n > 0, "no reply to {parts:?}");
         let head = buf[0];
         assert!(
-            head == b'+' || head == b'$' || head == b':',
+            head == b'+' || head == b'$' || head == b':' || head == b'*',
             "unexpected reply head {head:?} for {parts:?}: {:?}",
             String::from_utf8_lossy(&buf[..n]),
         );
+        buf[..n].to_vec()
     }
 }
 
@@ -166,6 +147,89 @@ fn server_primary_streams_to_embed_replica() {
     server.shutdown();
 }
 
+/// The primary's stream and geo writes reach the replica, groups and a
+/// stored geo search included; a replica without them would answer an
+/// empty keyspace here.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn server_stream_and_geo_writes_reach_the_embed_replica() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    server.cmd(&[b"XADD", b"s", b"1-1", b"f", b"v"]);
+    server.cmd(&[b"XADD", b"s", b"2-1", b"f", b"w"]);
+    server.cmd(&[b"XGROUP", b"CREATE", b"s", b"g", b"0"]);
+    server.cmd(&[b"XREADGROUP", b"GROUP", b"g", b"c", b"COUNT", b"1", b"STREAMS", b"s", b">"]);
+    server.cmd(&[b"GEOADD", b"geo", b"13.361389", b"38.115556", b"Palermo"]);
+    server.cmd(&[
+        b"GEOSEARCHSTORE",
+        b"near",
+        b"geo",
+        b"FROMLONLAT",
+        b"13",
+        b"38",
+        b"BYRADIUS",
+        b"100",
+        b"km",
+    ]);
+    let read = |cmd: &[&[u8]]| {
+        let argv: Vec<Vec<u8>> = cmd.iter().map(|p| p.to_vec()).collect();
+        let mut out = Vec::new();
+        replica.dispatch_argv(&argv, &mut out);
+        out
+    };
+    let pending = b"*4\r\n:1\r\n$3\r\n1-1\r\n$3\r\n1-1\r\n*1\r\n*2\r\n$1\r\nc\r\n$1\r\n1\r\n";
+    let arrived = wait_for(Duration::from_secs(5), || {
+        read(&[b"XPENDING", b"s", b"g"]) == pending
+            && read(&[b"XLEN", b"s"]) == b":2\r\n"
+            && read(&[b"ZRANGE", b"near", b"0", b"-1"]) == b"*1\r\n$7\r\nPalermo\r\n"
+    });
+    assert!(
+        arrived,
+        "the replica never caught up: {:?} {:?}",
+        String::from_utf8_lossy(&read(&[b"XPENDING", b"s", b"g"])),
+        String::from_utf8_lossy(&read(&[b"ZRANGE", b"near", b"0", b"-1"])),
+    );
+    drop(replica);
+    server.shutdown();
+}
+
+/// An ID the primary generated reaches the replica as that ID, not as a
+/// `*` the replica fills in from its own clock.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn a_generated_stream_id_reaches_the_replica_unchanged() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    // a replica that filled in `*` from its own clock would agree only
+    // while it applied each frame inside the primary's millisecond; over
+    // two hundred entries some frame lands in the next one
+    const N: usize = 200;
+    let mut want = format!("*{N}\r\n").into_bytes();
+    for i in 0..N {
+        let v = i.to_string();
+        let id = server.cmd(&[b"XADD", b"s", b"*", b"f", v.as_bytes()]);
+        assert!(id.starts_with(b"$"), "{:?}", String::from_utf8_lossy(&id));
+        want.extend_from_slice(b"*2\r\n");
+        want.extend_from_slice(&id);
+        want.extend_from_slice(format!("*2\r\n$1\r\nf\r\n${}\r\n{v}\r\n", v.len()).as_bytes());
+        std::thread::sleep(Duration::from_micros(500));
+    }
+    let read = || {
+        let mut out = Vec::new();
+        let argv = [b"XRANGE".to_vec(), b"s".to_vec(), b"-".to_vec(), b"+".to_vec()];
+        replica.dispatch_argv(&argv, &mut out);
+        out
+    };
+    let head = format!("*{N}\r\n");
+    let arrived = wait_for(Duration::from_secs(5), || read().starts_with(head.as_bytes()));
+    assert!(arrived, "the replica never saw every entry");
+    assert_eq!(String::from_utf8_lossy(&read()), String::from_utf8_lossy(&want));
+    drop(replica);
+    server.shutdown();
+}
+
 #[test]
 fn embed_replica_rejects_local_writes_with_readonly() {
     // No real server needed — `open_replica` configures READONLY based
@@ -178,8 +242,7 @@ fn embed_replica_rejects_local_writes_with_readonly() {
     let replica = Store::open(cfg).unwrap();
 
     let err = replica.set(b"k", b"v").expect_err("write should be refused");
-    let msg = err.to_string();
-    assert!(msg.contains("READONLY"), "expected READONLY error, got: {msg}");
+    assert!(matches!(err, kevy_embedded::KevyError::ReadOnly), "expected ReadOnly, got: {err}");
 
     // Reads still work.
     assert_eq!(replica.get(b"k").unwrap(), None);
@@ -221,6 +284,89 @@ fn embed_replica_streams_multiple_writes_on_same_connection() {
         "embed replica missed second write on the same connection"
     );
 
+    drop(replica);
+    server.shutdown();
+}
+
+/// A replica store opened with several shards reads back every key the
+/// primary wrote: a frame lands in the shard that store's own reads look
+/// in, not one chosen by a different hash.
+#[test]
+fn a_sharded_embed_replica_reads_every_replicated_key() {
+    let server = Server::start();
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let cfg = Config::default()
+        .with_shards(4)
+        .with_replica_upstream(&upstream)
+        .with_replica_reconnect(Duration::from_millis(30), Duration::from_millis(100));
+    let replica = Store::open(cfg).unwrap();
+    for i in 0..50 {
+        server.cmd(&[b"SET", format!("k{i}").as_bytes(), b"v"]);
+    }
+    let all = || (0..50).all(|i| replica.get(format!("k{i}").as_bytes()).unwrap().is_some());
+    assert!(
+        wait_for(Duration::from_secs(5), all),
+        "a sharded replica lost keys to the wrong shard"
+    );
+    drop(replica);
+    server.shutdown();
+}
+
+/// A server primary's catalog commands reach an embedded replica: the
+/// one made before it connected and the one after.
+#[cfg(feature = "index")]
+#[test]
+fn a_server_primarys_catalog_reaches_the_embed_replica() {
+    let server = Server::start();
+    server.cmd(&[b"HSET", b"user:1", b"age", b"30"]);
+    let create = |name: &[u8]| {
+        let fields: [&[u8]; 11] = [
+            b"IDX.CREATE",
+            name,
+            b"ON",
+            b"PREFIX",
+            b"user:",
+            b"FIELD",
+            b"age",
+            b"TYPE",
+            b"i64",
+            b"KIND",
+            b"range",
+        ];
+        server.cmd(&fields);
+    };
+    create(b"before");
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let replica = Store::open_replica(&upstream).unwrap();
+    create(b"after");
+    let names = || {
+        let mut names: Vec<Vec<u8>> = replica.idx_list().into_iter().map(|i| i.0).collect();
+        names.sort();
+        names
+    };
+    let both = || names() == [b"after".to_vec(), b"before".to_vec()];
+    assert!(wait_for(Duration::from_secs(5), both), "the replica holds {:?}", names());
+    drop(replica);
+    server.shutdown();
+}
+
+/// A sharded replica that has to start from a snapshot (the primary's
+/// backlog has rolled past offset 0) puts every key where its reads look.
+#[test]
+fn a_sharded_embed_replica_loads_a_snapshot_into_every_shard() {
+    let server = Server::start();
+    let value = vec![b'x'; 1024];
+    for i in 0..1500 {
+        server.cmd(&[b"SET", format!("s{i}").as_bytes(), &value]);
+    }
+    let upstream = format!("127.0.0.1:{}", server.replication_base);
+    let cfg = Config::default()
+        .with_shards(4)
+        .with_replica_upstream(&upstream)
+        .with_replica_reconnect(Duration::from_millis(30), Duration::from_millis(100));
+    let replica = Store::open(cfg).unwrap();
+    let all = || (0..1500).all(|i| replica.get(format!("s{i}").as_bytes()).unwrap().is_some());
+    assert!(wait_for(Duration::from_secs(10), all), "a snapshot loaded into one shard of four");
     drop(replica);
     server.shutdown();
 }
@@ -357,5 +503,44 @@ fn embed_restart_resumes_via_fresh_handshake() {
         "restarted embed never re-applied the existing backlog via snapshot ship"
     );
     drop(r2);
+    server.shutdown();
+}
+
+fn secure_embed_replica_of_secure_server(trusted: [u8; 32]) -> (Server, Store) {
+    use kevy_embedded::{Keypair, LinkKeys};
+    let primary = Keypair::from_secret([1; 32]);
+    let replica = Keypair::from_secret([2; 32]);
+    let server = Server::start_with(Some(
+        kevy_rt::ReplicationSecurity::new(primary).with_replica_keys(vec![replica.public()]),
+    ));
+    let cfg = Config::default()
+        .without_aof()
+        .with_replica_upstream(format!("127.0.0.1:{}", server.replication_base))
+        .with_replica_reconnect(Duration::from_millis(50), Duration::from_millis(200))
+        .with_replica_security(LinkKeys::new(replica).with_peers(vec![trusted]));
+    (server, Store::open(cfg).unwrap())
+}
+
+#[test]
+fn secure_server_primary_streams_to_secure_embed_replica() {
+    let (server, replica) = secure_embed_replica_of_secure_server(
+        kevy_embedded::Keypair::from_secret([1; 32]).public(),
+    );
+    server.cmd(&[b"SET", b"key-s", b"sealed"]);
+    assert!(wait_for(Duration::from_secs(5), || {
+        replica.get(b"key-s").unwrap().as_deref() == Some(b"sealed".as_slice())
+    }));
+    drop(replica);
+    server.shutdown();
+}
+
+#[test]
+fn secure_embed_replica_expecting_another_key_gets_nothing_from_the_server() {
+    let (server, replica) = secure_embed_replica_of_secure_server(
+        kevy_embedded::Keypair::from_secret([9; 32]).public(),
+    );
+    server.cmd(&[b"SET", b"key-s", b"sealed"]);
+    assert!(!wait_for(Duration::from_millis(1500), || replica.get(b"key-s").unwrap().is_some()));
+    drop(replica);
     server.shutdown();
 }

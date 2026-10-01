@@ -2,6 +2,8 @@
 //! forms funcgate replays from `bench/funcgate-corpus/`. The pinned
 //! clock is the corpus' own: 2025-06-15T12:00:00Z (probe 08 header).
 
+#![allow(clippy::unwrap_used, clippy::panic)]
+
 use kevy_sql::fold_select;
 
 /// 2025-06-15 12:00:00 UTC in epoch microseconds — the corpus clock.

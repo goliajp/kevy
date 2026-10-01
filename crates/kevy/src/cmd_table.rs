@@ -1,8 +1,8 @@
 //! TABLE.* command surface.
 //!
-//! DECLARE/DROP are Local catalog mutations (sidecar-persisted, like
+//! DECLARE/DROP are Local catalog mutations (recorded like
 //! IDX.*/VIEW.*): the parse + compile both live in `kevy_index`
-//! ([`kevy_index::parse_table_declare`] / [`kevy_index::compile_table`])
+//! ([`kevy_index::parse_table_declare`] / [`kevy_index::TableSpec::compile`])
 //! — ONE implementation the embedded dispatch calls too, so the two
 //! wire faces cannot drift (the IDX.CREATE parity lesson).
 //! LIST/VERIFY ride the extension fan-out beside VIEW.*.
@@ -11,50 +11,37 @@
 //! IDX access paths (`<table>.<col>`, `<table>.<orderpath>`); the
 //! engine enforces no schema at query time and chooses no access path.
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
-)]
-
-use std::path::Path;
-
-use kevy_index::{Catalog, TableCatalog, TableSpec, compile_table, parse_table_declare, spec_diff};
+use kevy_index::{
+    Catalog, GlobalPath, TableCatalog, TableSpec, parse_table_declare_partitioned, spec_diff,
+};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_rt::ExtensionReduced;
 use kevy_store::Store;
 
+use crate::cmd_index_install::Sampler;
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK};
-use crate::state::{CatalogState, Ctx, RuntimeState};
-
-const SIDECAR: &str = "table-catalog.meta";
+use crate::state::{CatalogChange, CatalogState, Ctx};
 
 /// Rows the per-shard column spot check samples (bounded — VERIFY must
 /// not become a full-table sweep of the row payloads).
 const SPOTCHECK_ROWS: usize = 64;
 
-/// Boot: load the persisted table catalog (after `cmd_index::boot` —
-/// the compiled indexes live in the index catalog's own sidecar).
-pub(crate) fn boot(state: &RuntimeState) {
-    let Some(dir) = state.sidecar_dir() else { return };
-    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-        && let Some(cat) = TableCatalog::from_sidecar(&text)
-        && !cat.is_empty()
-    {
-        state.install_table_catalog(cat);
-    }
-}
-
-pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
-    let Some(dir) = dir else { return };
-    let tmp = dir.join("table-catalog.meta.tmp");
-    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
+/// `TABLE.DECLARE` / `ENSURE` / `REPLACE` dispatched on the shard that
+/// runs them: a sampled `GLOBAL` path samples this shard's rows (the
+/// router sends such a declaration through the two-phase form, so this is
+/// the path inside a transaction).
+pub(crate) fn cmd_table_local<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    upper: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    let sampler = &mut Sampler::Shard(store);
+    match upper {
+        b"TABLE.DECLARE" => cmd_table_declare(ctx, sampler, args, out),
+        b"TABLE.ENSURE" => cmd_table_ensure(ctx, sampler, args, out),
+        _ => cmd_table_replace(ctx, sampler, args, out),
     }
 }
 
@@ -64,39 +51,82 @@ pub(crate) fn persist_sidecar(dir: Option<&Path>, cat: &TableCatalog) {
 /// first; nothing installs on any error.
 pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     // The tiering floor discipline IDX.CREATE keeps (RFC §4 row 16):
     // compiled indexes are the fixed layer demotion cannot reclaim.
-    if crate::cmd_index::tier_floor_refused(store, out) {
-        return;
+    if sampler.tier_blocked() {
+        return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
     }
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    if let Err(e) = tcat.create(spec.clone()) {
-        return encode_error(out, &e);
+    let n = ctx.state.nshards();
+    match change_tables(ctx, |t, i| declared_onto(t, i, &spec, &globals, sampler, n)) {
+        Ok(_) => out.extend_from_slice(b"+OK\r\n"),
+        Err(e) => encode_error(out, &e),
     }
-    let mut icat: Catalog = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled = match compile_table(&spec) {
-        Ok(c) => c,
-        Err(e) => return encode_error(out, &e),
-    };
-    for ispec in compiled {
-        if let Err(e) = icat.create(ispec) {
-            return encode_error(out, e);
+}
+
+/// Admit `spec` and the indexes it compiles into the table and index
+/// catalogs `tcat` and `icat`.
+fn declared_onto(
+    tcat: &mut TableCatalog,
+    icat: &mut Catalog,
+    spec: &TableSpec,
+    globals: &[GlobalPath],
+    sampler: &mut Sampler<'_>,
+    nshards: usize,
+) -> Result<bool, String> {
+    tcat.create(spec.clone()).map_err(|e| e.to_wire())?;
+    let compiled = spec.compile().map_err(|e| e.to_wire())?;
+    crate::cmd_table_global::admit(icat, compiled, globals, sampler, nshards)?;
+    Ok(true)
+}
+
+/// Drop table `name` and the indexes it compiled from `tcat` and `icat`;
+/// whether it was there.
+fn dropped_from(tcat: &mut TableCatalog, icat: &mut Catalog, name: &[u8]) -> bool {
+    let compiled: Vec<Vec<u8>> = tcat
+        .get(name)
+        .map(|s| {
+            s.compile()
+                .map(|c| c.into_iter().map(|i| i.name().to_vec()).collect())
+                .unwrap_or_default() // catalog entries were admitted validated
+        })
+        .unwrap_or_default();
+    if !tcat.drop_table(name) {
+        return false;
+    }
+    for cname in &compiled {
+        icat.drop_index(cname);
+    }
+    true
+}
+
+/// Compute a table change with `f` from the catalogs as they stand and
+/// install it, again from the new catalogs whenever another change lands
+/// first. `Ok(false)` = `f` found nothing to change; `Err` = refused,
+/// nothing installed.
+fn change_tables(
+    ctx: &Ctx<'_>,
+    mut f: impl FnMut(&mut TableCatalog, &mut Catalog) -> Result<bool, String>,
+) -> Result<bool, String> {
+    loop {
+        let base = ctx.state.catalog_base();
+        let (mut tcat, mut icat) = (base.table_owned(), base.index_owned());
+        if !f(&mut tcat, &mut icat)? {
+            return Ok(false);
+        }
+        let change = CatalogChange { index: Some(icat), table: Some(tcat), view: None };
+        if ctx.state.commit_catalogs(&base, change) {
+            return Ok(true);
         }
     }
-    persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-    crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
-    ctx.state.install_index_catalog(icat);
-    ctx.state.install_table_catalog(tcat);
-    out.extend_from_slice(b"+OK\r\n");
 }
 
 /// `TABLE.ENSURE …` — `TABLE.DECLARE`'s boot form (dogfood F8.2): the
@@ -106,19 +136,32 @@ pub(crate) fn cmd_table_declare<A: ArgvView + ?Sized>(
 /// its own verb ([`cmd_table_replace`]).
 pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
     let existing = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned());
     match existing {
-        None => cmd_table_declare(ctx, store, args, out),
-        Some(cur) if cur.sans_auto() == spec => out.extend_from_slice(b"+UNCHANGED\r\n"),
+        None => cmd_table_declare(ctx, sampler, args, out),
+        Some(cur) if cur.sans_auto() == spec => {
+            let names = spec.compile().map(|c| c.into_iter().map(|i| i.name().to_vec()).collect());
+            let icat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
+            if names.is_ok_and(|n: Vec<Vec<u8>>| {
+                crate::cmd_table_global::same_spread(&icat, &n, &globals)
+            }) {
+                out.extend_from_slice(b"+UNCHANGED\r\n");
+            } else {
+                encode_error(
+                    out,
+                    "ERR table exists with its paths spread differently (GLOBAL); TABLE.REPLACE rebuilds them",
+                );
+            }
+        }
         Some(cur) => encode_error(out, &spec_diff(&cur.sans_auto(), &spec)),
     }
 }
@@ -129,47 +172,31 @@ pub(crate) fn cmd_table_ensure<A: ArgvView + ?Sized>(
 /// so a bad replacement leaves the old one standing.
 pub(crate) fn cmd_table_replace<A: ArgvView + ?Sized>(
     ctx: &Ctx<'_>,
-    store: &kevy_store::Store,
+    sampler: &mut Sampler<'_>,
     args: &A,
     out: &mut Vec<u8>,
 ) {
     let argv: Vec<&[u8]> = (0..args.len()).map(|i| &args[i] as &[u8]).collect();
-    let spec = match parse_table_declare(&argv) {
+    let (spec, globals) = match parse_table_declare_partitioned(&argv) {
         Ok(s) => s,
-        Err(e) => return encode_error(out, &e),
+        Err(e) => return encode_error(out, &e.to_wire()),
     };
-    if let Err(e) = compile_table(&spec) {
-        return encode_error(out, &e);
+    if let Err(e) = spec.compile() {
+        return encode_error(out, &e.to_wire());
     }
-    let exists = ctx.state.catalogs.table().and_then(|c| c.get(&spec.name).cloned()).is_some();
-    if exists {
-        let mut scratch = Vec::new();
-        cmd_table_drop_by_name(ctx, &spec.name, &mut scratch);
+    if sampler.tier_blocked() {
+        return encode_error(out, crate::cmd_index::TIER_FLOOR_REFUSAL);
     }
-    cmd_table_declare(ctx, store, args, out);
-}
-
-/// The drop body, callable with a bare name (REPLACE's first half).
-fn cmd_table_drop_by_name(ctx: &Ctx<'_>, name: &[u8], out: &mut Vec<u8>) {
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled: Vec<Vec<u8>> = tcat
-        .get(name)
-        .map(|s| {
-            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
-        })
-        .unwrap_or_default();
-    if tcat.drop_table(name) {
-        let mut icat: Catalog =
-            ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-        for cname in &compiled {
-            icat.drop_index(cname);
-        }
-        persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-        crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
-        ctx.state.install_index_catalog(icat);
-        ctx.state.install_table_catalog(tcat);
+    // two installs, as the verb promises: the drop takes the old indexes
+    // away, so the declaration builds every one of them from the rows
+    let n = ctx.state.nshards();
+    let dropped = change_tables(ctx, |t, i| Ok(dropped_from(t, i, &spec.name)));
+    let replaced = dropped
+        .and_then(|_| change_tables(ctx, |t, i| declared_onto(t, i, &spec, &globals, sampler, n)));
+    match replaced {
+        Ok(_) => out.extend_from_slice(b"+OK\r\n"),
+        Err(e) => encode_error(out, &e),
     }
-    out.extend_from_slice(b"+OK\r\n");
 }
 
 /// `TABLE.DROP <name>` — drops the table AND its compiled indexes.
@@ -177,26 +204,8 @@ pub(crate) fn cmd_table_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out:
     if args.len() != 2 {
         return encode_error(out, "ERR usage: TABLE.DROP name");
     }
-    let mut tcat = ctx.state.catalogs.table().map(|c| (*c).clone()).unwrap_or_default();
-    let compiled: Vec<Vec<u8>> = tcat
-        .get(&args[1])
-        .map(|s| {
-            compile_table(s).map(|c| c.into_iter().map(|i| i.name).collect()).unwrap_or_default() // catalog entries were admitted validated
-        })
-        .unwrap_or_default();
-    let hit = tcat.drop_table(&args[1]);
-    if hit {
-        let mut icat: Catalog =
-            ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
-        for name in &compiled {
-            icat.drop_index(name);
-        }
-        persist_sidecar(ctx.state.sidecar_dir(), &tcat);
-        crate::cmd_index::persist_sidecar(ctx.state.sidecar_dir(), &icat);
-        ctx.state.install_index_catalog(icat);
-        ctx.state.install_table_catalog(tcat);
-    }
-    encode_integer(out, i64::from(hit));
+    let hit = change_tables(ctx, |t, i| Ok(dropped_from(t, i, &args[1])));
+    encode_integer(out, i64::from(hit == Ok(true)));
 }
 
 // ---------- extension fan-out (LIST / VERIFY) ----------
@@ -225,7 +234,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     else {
         return vec![ST_NOINDEX];
     };
-    let Ok(compiled) = compile_table(&spec) else {
+    let Ok(compiled) = spec.compile() else {
         // Catalog entries were admitted validated; an Err here means
         // the sidecar was hand-edited — refuse rather than panic.
         return vec![ST_NOINDEX];
@@ -233,7 +242,7 @@ fn op_verify(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     chunk.extend_from_slice(&(compiled.len() as u32).to_le_bytes());
     for ispec in &compiled {
-        match crate::cmd_table_verify::index_verify_counts(ctx, store, &ispec.name) {
+        match crate::cmd_table_verify::index_verify_counts(ctx, store, ispec.name()) {
             Ok(counts) => {
                 for v in counts {
                     chunk.extend_from_slice(&v.to_le_bytes());
@@ -345,7 +354,7 @@ fn reduce_verify(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) 
         );
         return out;
     };
-    let n = compile_table(&spec).map(|c| c.len()).unwrap_or_default();
+    let n = spec.compile().map(|c| c.len()).unwrap_or_default();
     for c in chunks {
         match c.first().copied() {
             Some(x) if x == ST_OK => {}
@@ -417,10 +426,10 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: 
         b"missing",
     ];
     encode_array_len(out, (sums.len() + 1) as i64);
-    for (ispec, s) in compile_table(spec).unwrap_or_default().iter().zip(sums) {
+    for (ispec, s) in spec.compile().unwrap_or_default().iter().zip(sums) {
         encode_array_len(out, 22);
         encode_bulk(out, b"index");
-        encode_bulk(out, &ispec.name);
+        encode_bulk(out, ispec.name());
         for (label, v) in LABELS.iter().zip(s.iter()) {
             encode_bulk(out, label);
             encode_bulk(out, v.to_string().as_bytes());
@@ -432,3 +441,6 @@ fn render_verify(out: &mut Vec<u8>, spec: &TableSpec, sums: &[[u64; 10]], spot: 
     encode_bulk(out, b"spotcheck_type_mismatches");
     encode_bulk(out, spot[1].to_string().as_bytes());
 }
+
+#[cfg(test)]
+mod tests;

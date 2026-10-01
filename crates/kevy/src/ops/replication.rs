@@ -144,6 +144,9 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
                 };
                 return emit_replica_addr(ctx, &host, port, out);
             }
+            // a role this build cannot name falls through to the
+            // replication state and static config below
+            _ => {}
         }
     }
     // Live replication state wins over the static config — dynamic
@@ -156,6 +159,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     match cfg.replication.role {
         ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(ctx, out),
         ReplicationRole::Replica => emit_replica(ctx, cfg.replication.upstream.as_deref(), out),
+        other => unimplemented!("no ROLE reply for role {other:?}"),
     }
 }
 
@@ -313,7 +317,7 @@ mod tests {
                     Ipv4Addr::new(10, 0, 0, (i + 1) as u8),
                     50_000 + i as u16,
                     offset,
-                    Some(kevy_rt::ReplicaAck { acked_offset: offset, ack_age_ms: 0 }),
+                    Some(kevy_rt::ReplicaAck::new(offset, 0)),
                 )
             })
             .collect();
@@ -329,7 +333,7 @@ mod tests {
     #[test]
     fn aggregate_folds_one_process_across_shards() {
         let ip = Ipv4Addr::new(10, 0, 0, 9);
-        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+        let ack = |off| Some(kevy_rt::ReplicaAck::new(off, 0));
         let row = |shard: usize, acked| {
             (format!("kevy-replica-7391#{shard}"), ip, 40_000 + shard as u16, 10u64, acked)
         };
@@ -348,7 +352,7 @@ mod tests {
     #[test]
     fn aggregate_reports_syncing_when_any_stream_lacks_an_ack() {
         let ip = Ipv4Addr::new(10, 0, 0, 9);
-        let ack = Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: 0 });
+        let ack = Some(kevy_rt::ReplicaAck::new(5, 0));
         let views = vec![
             crate::state::ReplShardView {
                 offset: 10,

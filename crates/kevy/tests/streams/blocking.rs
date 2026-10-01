@@ -1,0 +1,420 @@
+//! `BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK` —
+//! end-to-end tests against a real reactor + socket. Verifies the
+//! v2-7d BLOCK reactor's three core paths per command:
+//!
+//! 1. **Hit immediately** — non-empty list / fresh stream entry already
+//!    available → the command returns at once without parking the conn.
+//! 2. **Timeout** — empty, `BLOCK ms` elapses → the reactor's tick fires
+//!    a nil reply (`*-1` for every one of them) and unblocks the conn.
+//! 3. **Wake** — empty + a sibling conn pushes / XADDs the watched key
+//!    → the oldest waiter is popped, its command replays, and the
+//!    reply lands on the parked conn.
+
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+static START_GATE: Mutex<()> = Mutex::new(());
+
+use kevy_testnet::free_port;
+
+fn req(parts: &[&[u8]]) -> Vec<u8> {
+    let mut v = format!("*{}\r\n", parts.len()).into_bytes();
+    for p in parts {
+        v.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
+        v.extend_from_slice(p);
+        v.extend_from_slice(b"\r\n");
+    }
+    v
+}
+
+fn read_n(s: &mut std::net::TcpStream, n: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; n];
+    s.read_exact(&mut buf).unwrap();
+    buf
+}
+
+fn read_line(s: &mut std::net::TcpStream, out: &mut Vec<u8>) {
+    loop {
+        let b = read_n(s, 1);
+        out.extend_from_slice(&b);
+        if out.ends_with(b"\r\n") {
+            break;
+        }
+    }
+}
+
+fn read_len(s: &mut std::net::TcpStream, out: &mut Vec<u8>) -> i64 {
+    let start = out.len();
+    read_line(s, out);
+    let line = &out[start..out.len() - 2];
+    std::str::from_utf8(line).unwrap().parse().unwrap()
+}
+
+fn read_reply(s: &mut std::net::TcpStream) -> Vec<u8> {
+    let head = read_n(s, 1);
+    let mut out = head.clone();
+    match head[0] {
+        b'+' | b'-' | b':' => read_line(s, &mut out),
+        b'$' => {
+            let len = read_len(s, &mut out);
+            if len < 0 {
+                return out;
+            }
+            out.extend_from_slice(&read_n(s, len as usize + 2));
+        }
+        b'*' => {
+            let n = read_len(s, &mut out);
+            if n < 0 {
+                return out;
+            }
+            for _ in 0..n {
+                out.extend_from_slice(&read_reply(s));
+            }
+        }
+        other => panic!("unknown reply prefix {other:?}"),
+    }
+    out
+}
+
+/// Block until at least `n` clients are parked in a blocking command.
+///
+/// These tests used to sleep a flat 50 ms and assume the client had
+/// parked by then. That is a race, not a wait: under a full-workspace
+/// run — dozens of test binaries at once — it failed once here, and a
+/// test that fails for a reason unrelated to what it tests is worse than
+/// no test. `blocked_clients` in `INFO clients` is the condition itself,
+/// so this waits for the thing instead of for a duration.
+///
+/// The gauge is published on the shard tick, so observing it costs up to
+/// one tick. The deadline is generous because the failure it guards
+/// against is a hang, and a slow machine is not a bug.
+fn wait_for_blocked(srv: &Server, n: u64) {
+    let mut c = srv.connect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        c.write_all(&req(&[b"INFO", b"clients"])).unwrap();
+        let body = read_reply(&mut c);
+        let text = String::from_utf8_lossy(&body);
+        let got: u64 = text
+            .lines()
+            .find_map(|l| l.trim_end().strip_prefix("blocked_clients:"))
+            .expect("INFO clients has no blocked_clients line")
+            .parse()
+            .expect("blocked_clients is a number");
+        if got >= n {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "only {got} of {n} client(s) parked within 10s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+struct Server {
+    port: u16,
+    dir: std::path::PathBuf,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Server {
+    fn start(nshards: usize) -> Self {
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let port = free_port();
+        let dir = kevy_tmpdir::unique_dir("blocking");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+        let dir_thread = dir.clone();
+        let handle = std::thread::spawn(move || {
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards))
+                .bind([127, 0, 0, 1], port)
+                .shards(nshards)
+                .with_data_dir(dir_thread);
+            rt.run(stop_thread).unwrap();
+        });
+        kevy_testnet::assert_listening(port, "the server under test");
+        Self { port, dir, stop, handle: Some(handle) }
+    }
+
+    fn connect(&self) -> std::net::TcpStream {
+        let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        s
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+// ───────────── BLPOP ─────────────
+
+#[test]
+fn blpop_returns_immediately_when_list_has_value() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"RPUSH", b"k", b"v"])).unwrap();
+    let _ = read_reply(&mut c); // :1
+    c.write_all(&req(&[b"BLPOP", b"k", b"5"])).unwrap();
+    // Expect: *2\r\n$1\r\nk\r\n$1\r\nv\r\n
+    let reply = read_reply(&mut c);
+    assert_eq!(reply, b"*2\r\n$1\r\nk\r\n$1\r\nv\r\n");
+}
+
+#[test]
+fn blpop_times_out_with_nil_array_when_list_empty() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    // 100ms = 0.1s — short enough that the test stays fast.
+    c.write_all(&req(&[b"BLPOP", b"empty", b"0.1"])).unwrap();
+    let t0 = std::time::Instant::now();
+    let reply = read_reply(&mut c);
+    let elapsed = t0.elapsed();
+    assert_eq!(reply, b"*-1\r\n", "BLPOP timeout must return nil array");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(80),
+        "BLPOP should block at least the requested timeout (~100ms), got {elapsed:?}",
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "BLPOP timeout fired far too late ({elapsed:?})",
+    );
+}
+
+#[test]
+fn blpop_woken_by_concurrent_push() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    // Park the consumer with a generous timeout — wake must come first.
+    consumer.write_all(&req(&[b"BLPOP", b"wakeable", b"5"])).unwrap();
+    wait_for_blocked(&srv, 1);
+    producer.write_all(&req(&[b"LPUSH", b"wakeable", b"hello"])).unwrap();
+    let _push_reply = read_reply(&mut producer); // :1
+    let reply = read_reply(&mut consumer);
+    assert_eq!(reply, b"*2\r\n$8\r\nwakeable\r\n$5\r\nhello\r\n");
+}
+
+// ───────────── BRPOP ─────────────
+
+#[test]
+fn brpop_returns_immediately_when_list_has_value() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"RPUSH", b"k", b"v"])).unwrap();
+    let _ = read_reply(&mut c);
+    c.write_all(&req(&[b"BRPOP", b"k", b"5"])).unwrap();
+    let reply = read_reply(&mut c);
+    assert_eq!(reply, b"*2\r\n$1\r\nk\r\n$1\r\nv\r\n");
+}
+
+#[test]
+fn brpop_woken_by_concurrent_rpush() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    consumer.write_all(&req(&[b"BRPOP", b"q", b"5"])).unwrap();
+    wait_for_blocked(&srv, 1);
+    producer.write_all(&req(&[b"RPUSH", b"q", b"x"])).unwrap();
+    let _ = read_reply(&mut producer);
+    let reply = read_reply(&mut consumer);
+    assert_eq!(reply, b"*2\r\n$1\r\nq\r\n$1\r\nx\r\n");
+}
+
+// ───────────── XREAD BLOCK ─────────────
+
+#[test]
+fn xread_block_returns_immediately_when_stream_has_entry() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut c); // $3 1-0
+    c.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"s", b"0"])).unwrap();
+    // Expect *1 [*2 s [*1 [*2 1-0 [*2 f v]]]]
+    let reply = read_reply(&mut c);
+    // Quick sanity: starts with *1 and contains the entry payload.
+    assert!(reply.starts_with(b"*1\r\n"), "expected one stream in reply, got {reply:?}");
+    assert!(reply.windows(3).any(|w| w == b"1-0"), "expected entry id 1-0 in reply");
+    assert!(reply.windows(1).any(|w| w == b"v"), "expected value v in reply");
+}
+
+#[test]
+fn xread_block_times_out_with_a_nil_array_when_no_entries() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    // Create the stream so `$` resolves; otherwise xread_dollar_last_id
+    // errors out before BLOCK can engage.
+    c.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut c);
+    c.write_all(&req(&[b"XREAD", b"BLOCK", b"100", b"STREAMS", b"s", b"$"])).unwrap();
+    let t0 = std::time::Instant::now();
+    let reply = read_reply(&mut c);
+    let elapsed = t0.elapsed();
+    assert_eq!(reply, b"*-1\r\n", "XREAD BLOCK timeout is a nil array");
+    assert!(elapsed >= std::time::Duration::from_millis(80));
+}
+
+#[test]
+fn xread_block_woken_by_concurrent_xadd() {
+    // Wake path with an explicit cursor (no `$`). Companion to
+    // `xread_block_dollar_id_wakes` below, which exercises the same
+    // path with the `$` cursor that needs park-time rewriting.
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    producer.write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut producer);
+    consumer
+        .write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"1-0"]))
+        .unwrap();
+    wait_for_blocked(&srv, 1);
+    producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
+    let _ = read_reply(&mut producer);
+    let reply = read_reply(&mut consumer);
+    assert!(reply.starts_with(b"*1\r\n"));
+    assert!(reply.windows(3).any(|w| w == b"2-0"));
+    assert!(reply.windows(2).any(|w| w == b"v2"));
+}
+
+#[test]
+fn xread_block_dollar_id_wakes() {
+    // `$` cursor: park-time rewrite (Commands::resolve_block_argv on
+    // BlockKind::XReadBlock) must snapshot the stream's last_id when
+    // the conn is registered, so the wake retry sees the original
+    // cursor — not the post-XADD last_id, which would mean "0 entries
+    // > last_id" and a timeout. Regression test for v2-7e.
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    // Pre-populate so `$` resolves to a real ID (xread_dollar_last_id
+    // errors on a missing key, which would prevent registration).
+    producer.write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut producer);
+    consumer.write_all(&req(&[b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"$"])).unwrap();
+    wait_for_blocked(&srv, 1);
+    producer.write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"])).unwrap();
+    let _ = read_reply(&mut producer);
+    let reply = read_reply(&mut consumer);
+    assert!(
+        reply.starts_with(b"*1\r\n"),
+        "expected one stream in reply, got {:?}",
+        std::str::from_utf8(&reply).unwrap_or("<non-utf8>")
+    );
+    assert!(reply.windows(3).any(|w| w == b"2-0"));
+    assert!(reply.windows(2).any(|w| w == b"v2"));
+}
+
+// ───────────── XREADGROUP BLOCK ─────────────
+
+#[test]
+fn xreadgroup_block_times_out_when_no_new_entries() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    // Set up: create stream + group.
+    c.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut c);
+    c.write_all(&req(&[b"XGROUP", b"CREATE", b"s", b"g", b"$"])).unwrap();
+    let _ = read_reply(&mut c); // +OK
+    c.write_all(&req(&[
+        b"XREADGROUP",
+        b"GROUP",
+        b"g",
+        b"alice",
+        b"BLOCK",
+        b"100",
+        b"STREAMS",
+        b"s",
+        b">",
+    ]))
+    .unwrap();
+    let t0 = std::time::Instant::now();
+    let reply = read_reply(&mut c);
+    let elapsed = t0.elapsed();
+    assert_eq!(reply, b"*-1\r\n", "XREADGROUP BLOCK timeout is a nil array");
+    assert!(elapsed >= std::time::Duration::from_millis(80));
+}
+
+#[test]
+fn xreadgroup_block_woken_by_concurrent_xadd() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    producer.write_all(&req(&[b"XADD", b"stream2", b"1-0", b"f", b"v"])).unwrap();
+    let _ = read_reply(&mut producer);
+    producer.write_all(&req(&[b"XGROUP", b"CREATE", b"stream2", b"g", b"$"])).unwrap();
+    let _ = read_reply(&mut producer);
+    consumer
+        .write_all(&req(&[
+            b"XREADGROUP",
+            b"GROUP",
+            b"g",
+            b"bob",
+            b"BLOCK",
+            b"5000",
+            b"STREAMS",
+            b"stream2",
+            b">",
+        ]))
+        .unwrap();
+    wait_for_blocked(&srv, 1);
+    producer.write_all(&req(&[b"XADD", b"stream2", b"2-0", b"f", b"v2"])).unwrap();
+    let _ = read_reply(&mut producer);
+    let reply = read_reply(&mut consumer);
+    assert!(reply.starts_with(b"*1\r\n"));
+    assert!(reply.windows(3).any(|w| w == b"2-0"));
+    assert!(reply.windows(2).any(|w| w == b"v2"));
+}
+
+// ───────────── Multi-key (v2-7e) ─────────────
+//
+// Multi-key BLPOP runs through the cross-shard arbiter even on one shard
+// (every key is a self-target), so these cover the arbiter's park / wake /
+// timeout paths without needing a multi-shard harness — the dedicated
+// cross-shard layout lives in `blocking_cross_shard.rs`.
+
+#[test]
+fn blpop_multi_key_times_out_when_all_empty() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"BLPOP", b"a", b"b", b"0.1"])).unwrap();
+    let t0 = std::time::Instant::now();
+    let reply = read_reply(&mut c);
+    assert_eq!(reply, b"*-1\r\n", "multi-key BLPOP timeout returns nil array");
+    assert!(t0.elapsed() >= std::time::Duration::from_millis(80));
+}
+
+#[test]
+fn blpop_multi_key_woken_on_second_key() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    consumer.write_all(&req(&[b"BLPOP", b"k1", b"k2", b"5"])).unwrap();
+    wait_for_blocked(&srv, 1);
+    // Push to the *second* watched key — the arbiter must serve k2.
+    producer.write_all(&req(&[b"LPUSH", b"k2", b"v2"])).unwrap();
+    let _ = read_reply(&mut producer); // :1
+    let reply = read_reply(&mut consumer);
+    assert_eq!(reply, b"*2\r\n$2\r\nk2\r\n$2\r\nv2\r\n");
+}
+
+#[test]
+fn blpop_multi_key_immediate_hit_first_available() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"RPUSH", b"ready", b"x"])).unwrap();
+    let _ = read_reply(&mut c); // :1
+    // `missing` is empty, `ready` has data → resolves at once via the arm
+    // readiness peek (no parking).
+    c.write_all(&req(&[b"BLPOP", b"missing", b"ready", b"5"])).unwrap();
+    let reply = read_reply(&mut c);
+    assert_eq!(reply, b"*2\r\n$5\r\nready\r\n$1\r\nx\r\n");
+}

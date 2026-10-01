@@ -12,6 +12,19 @@
 //! `maxmemory-samples = 5`). Random samples avoid the O(`map.len()`) cost of
 //! a "true" global LRU/LFU pick at the price of mild approximation — the
 //! exact same trade-off Redis ships with.
+//!
+//! ```
+//! use kevy_store::{EvictionPolicy, SetCondition, Store};
+//! let mut s = Store::new();
+//! s.set_max_memory(1_000_000, EvictionPolicy::AllKeysLru);
+//! for i in 0..100u32 {
+//!     s.set(&i.to_be_bytes(), vec![b'x'; 100], None, SetCondition::Always);
+//! }
+//! assert_eq!(s.try_evict_after_write(), 0); // under budget: nothing to do
+//! s.set_max_memory(s.used_memory() / 2, EvictionPolicy::AllKeysLru);
+//! assert!(s.try_evict_after_write() > 0);
+//! assert!(s.used_memory() <= s.maxmemory());
+//! ```
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -165,11 +178,27 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
     if cap == 0 || store.map.is_empty() {
         return None;
     }
-    let now = now_ns();
-    let clock = store.clock_counter as u32;
     // Random start derived from the access ordinal — every call shifts so we
     // don't sample the same bucket window twice in a row.
-    let start = (splitmix32(clock) as usize) % cap;
+    let start = (splitmix32(store.clock_counter as u32) as usize) % cap;
+    sample_pick_at(store, policy, eligible, visit_bound, start).0
+}
+
+/// [`sample_pick_with`] from bucket `start`: the pick, and how many
+/// entries the walk visited.
+pub(crate) fn sample_pick_at<F: Fn(&Entry) -> bool>(
+    store: &Store,
+    policy: EvictionPolicy,
+    eligible: F,
+    visit_bound: usize,
+    start: usize,
+) -> (Option<Vec<u8>>, usize) {
+    let cap = store.map.capacity();
+    if cap == 0 || store.map.is_empty() {
+        return (None, 0);
+    }
+    let now = now_ns();
+    let clock = store.clock_counter as u32;
 
     let mut best: Option<(Vec<u8>, i64)> = None;
     let mut taken = 0;
@@ -182,9 +211,11 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
     // at microseconds; a shifted start each call still finds scattered
     // hot candidates across successive ticks.
     let visit_cap = cap.saturating_mul(2).min(visit_bound);
-    let primary = store.map.iter_from_bucket(start);
+    let primary = store.map.iter_from_bucket(start % cap);
     let wrap = store.map.iter_from_bucket(0);
+    let mut visited = 0;
     for (k, e) in primary.chain(wrap).take(visit_cap) {
+        visited += 1;
         if matches!(e.value, crate::value::Value::Cold(_)) || !eligible(e) {
             continue;
         }
@@ -197,7 +228,7 @@ pub(crate) fn sample_pick_with<F: Fn(&Entry) -> bool>(
             break;
         }
     }
-    best.map(|(k, _)| k)
+    (best.map(|(k, _)| k), visited)
 }
 
 /// Per-policy "badness" score. Lower = more evictable. Returned as `i64` so

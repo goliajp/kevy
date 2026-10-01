@@ -92,7 +92,7 @@ VIEW.CREATE assignable
 
 - 只要有任何一个被引用的索引还在 backfill，查询就回答 `-INDEXBUILDING`（一个不完整的索引会悄悄谎报成员关系）——重试纪律与索引查询相同。
 - `VIEW.REBUILD` 保持答案不变（e2e 套件里有断言）；`VIEW.VERIFY` 让漂移可被证伪（成员数 / 字节数 / 排序排除数）。
-- 视图目录持久化在数据目录的 sidecar 文件里；materialized 的**内容**是派生状态——重启后重建，从不进快照。
+- 视图目录记录在日志和每份快照里，并随复制下发；materialized 的**内容**是派生状态——重启后重建，从不进快照。
 
 ## Embedded
 
@@ -100,8 +100,8 @@ VIEW.CREATE assignable
 
 ```rust
 use kevy_embedded::{
-    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
-    ViewMode, ViewTree,
+    Config, IndexKind, IndexValType, IndexValue, SortOrder, Store,
+    ViewLeaf, ViewMode, ViewTree,
 };
 
 fn main() -> kevy_embedded::KevyResult<()> {
@@ -112,18 +112,18 @@ fn main() -> kevy_embedded::KevyResult<()> {
                      IndexKind::Range)?;
 
     let tree = ViewTree::And(
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_pri".to_vec(),
-            min: IndexValue::I64(0),
-            max: IndexValue::I64(100),
-        })),
-        Box::new(ViewTree::Leaf(ViewLeaf {
-            index: b"j_state".to_vec(),
-            min: IndexValue::Str(b"ready".to_vec()),
-            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
-        })),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_pri",
+            IndexValue::I64(0),
+            IndexValue::I64(100),
+        ))),
+        Box::new(ViewTree::Leaf(ViewLeaf::new(
+            "j_state",
+            IndexValue::Str(b"ready".to_vec()),
+            IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        ))),
     );
-    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+    store.view_create(b"ready_jobs", tree, b"j_pri", SortOrder::Desc,
                       ViewMode::Materialized { top_k: 100 })?;
 
     store.hset(b"job:1", &[
@@ -140,7 +140,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 }
 ```
 
-- `view_create(name, tree, order_by, desc, mode)` 同步构建；每一个被引用的索引（叶子 + ORDER BY）都必须已经声明过（否则是 `KevyError::InvalidInput`）。
+- `view_create(name, tree, order_by, order, mode)` 同步构建；每一个被引用的索引（叶子 + ORDER BY）都必须已经声明过（否则是 `KevyError::InvalidInput`）。
 - `view_query(name, after, limit)` 分页给出 `(key, order_value)` 行；返回的游标以排他方式续读（DESC 视图从大的那一端开始翻）。`view_count` / `view_list` / `view_drop` 补齐整个接口面。
 - 没有 `VIA` / `FIELDS`——进程内的调用方自己解引用，用 `hget` 直接读字段。
 

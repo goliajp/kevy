@@ -17,7 +17,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::Corrupt;
+use crate::DecodeError;
 
 /// Longest code we emit or accept. 12 bits keeps the decode table at
 /// 4096 entries (8 KiB) — L1-resident.
@@ -166,8 +166,8 @@ fn reverse(code: u16, len: u32) -> u16 {
 
 /// Decode `n` literal bytes from `[header][bitstream]`. Returns the
 /// literals and the total bytes consumed from `buf`.
-pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> {
-    let header = buf.get(..HEADER_LEN).ok_or(Corrupt)?;
+pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), DecodeError> {
+    let header = buf.get(..HEADER_LEN).ok_or(DecodeError)?;
     let mut lens = [0u8; 256];
     for (i, &b) in header.iter().enumerate() {
         lens[i * 2] = b & 0x0f;
@@ -180,7 +180,7 @@ pub(crate) fn decode(buf: &[u8], n: usize) -> Result<(Vec<u8>, usize), Corrupt> 
 
 /// Kraft validation: an over-full code space lets two codes alias;
 /// reject instead of guessing.
-pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
+pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), DecodeError> {
     // A length past MAX_LEN is not a code this format can express — the
     // encoder length-limits to it — and it must be rejected BEFORE the
     // Kraft sum, which subtracts the length from MAX_LEN. A header nibble
@@ -191,19 +191,19 @@ pub(crate) fn validate_lens(lens: &[u8; 256], n: usize) -> Result<(), Corrupt> {
     // (`decode_arbitrary` crash-80b8440d, second run of a target that had
     // been in the tree unrun.)
     if lens.iter().any(|&l| u32::from(l) > MAX_LEN) {
-        return Err(Corrupt);
+        return Err(DecodeError);
     }
     let kraft: u64 =
         lens.iter().filter(|&&l| l > 0).map(|&l| 1u64 << (MAX_LEN - u32::from(l))).sum();
     if kraft > (1u64 << MAX_LEN) || (n > 0 && kraft == 0) {
-        return Err(Corrupt);
+        return Err(DecodeError);
     }
     Ok(())
 }
 
 /// Upper bound on the initial reservation for a symbol count read out of
 /// the frame — not a limit on the decode, which runs out of bits and
-/// returns `Corrupt` on its own.
+/// returns `DecodeError` on its own.
 ///
 /// A Huffman code is at least one bit, so n symbols need at least n bits
 /// and a stream of `len` bytes cannot honour a claim past `8 * len`.
@@ -247,7 +247,7 @@ pub(crate) fn read_bits(
     stream: &[u8],
     lens: &[u8; 256],
     n: usize,
-) -> Result<(Vec<u8>, u64), Corrupt> {
+) -> Result<(Vec<u8>, u64), DecodeError> {
     read_bits_with(stream, &DecodeTable::new(lens), n)
 }
 
@@ -274,7 +274,7 @@ pub(crate) fn read_bits_with(
     stream: &[u8],
     table: &DecodeTable,
     n: usize,
-) -> Result<(Vec<u8>, u64), Corrupt> {
+) -> Result<(Vec<u8>, u64), DecodeError> {
     let table = &table.0;
     // `n` is a count read out of the frame. A Huffman code is at least one
     // bit, so n symbols need at least n bits and the stream cannot honour a
@@ -294,7 +294,7 @@ pub(crate) fn read_bits_with(
         }
         let (sym, l) = table[(acc & ((1 << MAX_LEN) - 1)) as usize];
         if l == 0 || u32::from(l) > nbits {
-            return Err(Corrupt);
+            return Err(DecodeError);
         }
         out.push(sym);
         acc >>= l;

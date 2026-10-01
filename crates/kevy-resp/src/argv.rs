@@ -12,7 +12,19 @@
 /// Index/`get`/`first`/`iter` return `&[u8]` argument slices. It compares equal
 /// to a `Vec<Vec<u8>>` of the same arguments, so call sites and tests read
 /// naturally.
-#[derive(Clone, Default, Debug, Eq)]
+///
+/// ```
+/// use kevy_resp::Argv;
+///
+/// let mut argv = Argv::with_capacity(3, 16);
+/// argv.push(b"SET");
+/// argv.push(b"k");
+/// argv.push(b"v");
+/// assert_eq!(argv.len(), 3);
+/// assert_eq!(&argv[1], b"k");
+/// assert_eq!(argv, vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
+/// ```
+#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub struct Argv {
     buf: Vec<u8>,
     ends: Vec<u32>,
@@ -99,12 +111,6 @@ impl PartialEq<Vec<Vec<u8>>> for Argv {
     }
 }
 
-impl PartialEq for Argv {
-    fn eq(&self, other: &Argv) -> bool {
-        self.buf == other.buf && self.ends == other.ends
-    }
-}
-
 /// Build from a vec-of-vecs (test/embedding convenience; the wire path uses
 /// [`parse_command`](crate::parse_command), which builds an [`Argv`] directly
 /// without the intermediate allocations).
@@ -118,7 +124,44 @@ impl From<Vec<Vec<u8>>> for Argv {
     }
 }
 
+/// Collect argument slices into an argv, in order.
+///
+/// ```
+/// let a: kevy_resp::Argv = [b"GET".as_slice(), b"k"].into_iter().collect();
+/// assert_eq!(a, vec![b"GET".to_vec(), b"k".to_vec()]);
+/// ```
+impl<'a> FromIterator<&'a [u8]> for Argv {
+    fn from_iter<I: IntoIterator<Item = &'a [u8]>>(iter: I) -> Self {
+        let mut a = Argv::default();
+        a.extend(iter);
+        a
+    }
+}
+
+/// Append argument slices, in order.
+///
+/// ```
+/// let mut a = kevy_resp::Argv::from(vec![b"DEL".to_vec()]);
+/// a.extend([b"k1".as_slice(), b"k2"]);
+/// assert_eq!(a.len(), 3);
+/// ```
+impl<'a> Extend<&'a [u8]> for Argv {
+    fn extend<I: IntoIterator<Item = &'a [u8]>>(&mut self, iter: I) {
+        for arg in iter {
+            self.push(arg);
+        }
+    }
+}
+
 /// A parsed command: `argv`, where `argv[0]` is the command name.
+///
+/// ```
+/// use kevy_resp::{Command, parse_command};
+///
+/// let (cmd, _): (Command, usize) = parse_command(b"PING\r\n")?.expect("complete frame");
+/// assert_eq!(cmd.first(), Some(b"PING".as_slice()));
+/// # Ok::<(), kevy_resp::ProtocolError>(())
+/// ```
 pub type Command = Argv;
 
 #[cfg(test)]
@@ -235,6 +278,16 @@ mod tests {
         assert_eq!(a, v);
         // From<Vec<Vec<u8>>> reserves exactly the right total size.
         assert_eq!(a.buf.len(), 3 + 6);
+    }
+
+    #[test]
+    fn collecting_and_extending_append_slices_in_order() {
+        let mut a: Argv = [b"DEL".as_slice(), b"k1"].into_iter().collect();
+        assert_eq!(a, vec![b"DEL".to_vec(), b"k1".to_vec()]);
+        a.extend([b"k2".as_slice(), b"".as_slice()]);
+        assert_eq!(a, vec![b"DEL".to_vec(), b"k1".to_vec(), b"k2".to_vec(), Vec::new()]);
+        let empty: Argv = core::iter::empty::<&[u8]>().collect();
+        assert!(empty.is_empty());
     }
 
     #[test]

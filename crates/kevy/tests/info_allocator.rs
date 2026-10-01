@@ -1,21 +1,27 @@
 //! `INFO allocator` — the accounting identity on a live server.
 //!
-//! `bench/V5-ACCOUNTING-CONTRACT.md` specifies INFO as the transport for
+//! The accounting contract specifies INFO as the transport for
 //! kevy-alloc's nine terms. The contract was written first and the
 //! section did not exist, so the one workload where this allocator loses
 //! to glibc could be measured and not attributed.
 //!
 //! Both halves are checked, and each runs somewhere:
 //!
-//! * feature ON (`cargo test -p kevy --features kevy-alloc`, wired into
-//!   allocgate): the section is there and `mapped == accounted`. That
-//!   sum is read off a heap nothing in this file filled, so it is a
-//!   witness and not an echo of a value the test set.
-//! * feature OFF (the default, so `cargo test --workspace` runs it): the
-//!   section is ABSENT. An all-zero `# Allocator` under the system
-//!   allocator would be a section that says something false, and INFO's
-//!   bytes stay what they were before this existed — the same
-//!   requirement `# Tiering` carries.
+//! * feature ON (the default, so `cargo test --workspace` runs it): the
+//!   section is there and `mapped == accounted`. That sum is read off a
+//!   heap nothing in this file filled, so it is a witness and not an
+//!   echo of a value the test set.
+//! * feature OFF (`cargo test -p kevy --no-default-features --test
+//!   info_allocator`, a step of CI's test job): the section is ABSENT.
+//!   An all-zero `# Allocator` under the system allocator would be a
+//!   section that says something false, and INFO's bytes stay what they
+//!   were before this existed — the same requirement `# Tiering`
+//!   carries.
+//!
+//! Each half also reads `INFO modules`, whose `alloc` line names the
+//! allocator the process runs on.
+
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::{Read, Write};
 
@@ -40,11 +46,7 @@ struct Server {
 impl Server {
     fn start(nshards: usize) -> Server {
         let port = free_port();
-        let dir = std::env::temp_dir().join(format!(
-            "kevy-info-alloc-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = kevy_tmpdir::unique_dir("info-alloc");
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (stop_thread, dir_thread) = (stop.clone(), dir.clone());
         let handle = std::thread::spawn(move || {
@@ -135,7 +137,11 @@ fn field(body: &str, name: &str) -> u64 {
 #[cfg(feature = "kevy-alloc")]
 #[test]
 fn allocator_section_terms_sum_to_mapped() {
+    // what the server binary does beside its `#[global_allocator]`
+    kevy::kevy_alloc_is_global();
     let srv = Server::start(2);
+    let modules = info_after_traffic(&srv, "modules");
+    assert!(modules.contains("module:name=alloc,impl=kevy-alloc"), "{modules}");
     let body = info_after_traffic(&srv, "allocator");
 
     // The floor: a section that reported nothing must not read as
@@ -184,4 +190,6 @@ fn allocator_section_is_absent_on_the_system_allocator() {
     // The check has a floor of its own: an INFO that returned nothing
     // would pass both assertions above without meaning anything.
     assert!(body.contains("# Memory"), "INFO default came back without its sections:\n{body}");
+    let modules = info_after_traffic(&srv, "modules");
+    assert!(modules.contains("module:name=alloc,impl=system"), "{modules}");
 }

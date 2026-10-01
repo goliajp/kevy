@@ -5,11 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub(crate) fn tmp_dir(name: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    let uniq =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    p.push(format!("kevy-embedded-{name}-{uniq}"));
-    p
+    kevy_tmpdir::unique_dir(&format!("embedded-{name}"))
 }
 
 #[test]
@@ -52,17 +48,24 @@ fn persistence_round_trip_via_aof() {
 
 #[test]
 fn eviction_works_under_pressure() {
+    // the keyspace tables fifty keys fill, charged whole: the values are
+    // held to 800 bytes above them
+    let sized = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    for i in 0..50 {
+        sized.set(format!("k{i:02}").as_bytes(), b"x").unwrap();
+    }
+    let limit = sized.used_memory() + 800;
     let s = Store::open(
         Config::default()
             .with_ttl_reaper_manual()
-            .with_max_memory(800)
+            .with_max_memory(limit)
             .with_eviction(EvictionPolicy::AllKeysLru),
     )
     .unwrap();
     for i in 0..50 {
-        s.set(format!("k{i:02}").as_bytes(), b"xxxxxxxxxxxxxxxxxxxx").unwrap();
+        s.set(format!("k{i:02}").as_bytes(), &[b'x'; 40]).unwrap();
     }
-    assert!(s.used_memory() <= 800, "got {}", s.used_memory());
+    assert!(s.used_memory() <= limit, "got {}", s.used_memory());
     assert!(s.evictions_total() > 0);
 }
 
@@ -292,6 +295,77 @@ fn save_snapshot_resets_aof_no_double_replay() {
         "snapshot + replayed AOF must not double-apply pre-snapshot RPUSHes"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `save_snapshot` then `rewrite_aof`: the rewritten log is a complete
+/// image, so a reopen must not load the snapshot under it. Before the fix
+/// every write from before the rewrite was applied twice.
+#[test]
+fn a_rewrite_after_a_snapshot_reopens_each_write_once() {
+    let dir = tmp_dir("save-then-rewrite");
+    let config = || Config::default().with_persist(&dir).with_ttl_reaper_manual().with_shards(2);
+    let keys: Vec<Vec<u8>> = (0..8).map(|i| format!("k{i}").into_bytes()).collect();
+    let write = |s: &Store, tag: &str| {
+        for k in &keys {
+            s.rpush(k, &[tag.as_bytes()]).unwrap();
+            s.append(&[b"s:", k.as_slice()].concat(), tag.as_bytes()).unwrap();
+            s.hincrby(&[b"h:", k.as_slice()].concat(), b"f", 5).unwrap();
+        }
+    };
+    // per key: the list, the appended string, the incremented field
+    type Read = (Vec<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+    let read = |s: &Store| -> Vec<Read> {
+        keys.iter()
+            .map(|k| {
+                let list = s.lrange(k, 0, -1).unwrap();
+                let text = s.get(&[b"s:", k.as_slice()].concat()).unwrap();
+                let count = s.hget(&[b"h:", k.as_slice()].concat(), b"f").unwrap();
+                (list, text, count)
+            })
+            .collect()
+    };
+    let before = {
+        let s = Store::open(config()).unwrap();
+        write(&s, "a");
+        assert!(s.save_snapshot().unwrap());
+        write(&s, "b");
+        assert!(s.rewrite_aof().unwrap().is_some());
+        write(&s, "c");
+        read(&s)
+    };
+    assert_eq!(before[0].0, [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    let s2 = Store::open(config()).unwrap();
+    assert_eq!(read(&s2), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A snapshot that does not load fails the open, naming the file, rather
+/// than opening a store that holds part of it.
+#[test]
+fn a_snapshot_that_does_not_load_fails_the_open() {
+    // without an AOF the loader finds the cut; with one, the log names a
+    // snapshot the cut file no longer carries the id of
+    for (aof, says) in [(false, "dump-0.rdb does not load"), (true, "carries no snapshot id")] {
+        let dir = tmp_dir("snapshot-truncated");
+        let config = || {
+            let c = Config::default().with_persist(&dir).with_ttl_reaper_manual();
+            if aof { c } else { c.without_aof() }
+        };
+        {
+            let s = Store::open(config()).unwrap();
+            for i in 0..200 {
+                s.rpush(format!("l{i}").as_bytes(), &[b"a", b"b"]).unwrap();
+            }
+            assert!(s.save_snapshot().unwrap());
+        }
+        let dump = dir.join("dump-0.rdb");
+        let bytes = std::fs::read(&dump).unwrap();
+        std::fs::write(&dump, &bytes[..bytes.len() / 2]).unwrap();
+        let Err(err) = Store::open(config()) else { panic!("the open succeeded") };
+        let err = err.to_string();
+        assert!(err.contains(says), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // open_report(): the machine-readable twin of the boot WARN line. A clean

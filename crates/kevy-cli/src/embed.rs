@@ -37,7 +37,7 @@ pub fn run_embed_cli(dir: &str, command: &[Vec<u8>]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let nshards = kevy_persist::read_shards_meta(&scratch.join("shards.meta"))
+    let nshards = kevy_persist::ShardsMeta::read(&scratch.join("shards.meta"))
         .map(|m| m.n)
         .unwrap_or_else(|| count_shard_files(&scratch).max(1));
     let store = match Store::open(

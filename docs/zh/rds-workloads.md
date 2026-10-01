@@ -23,7 +23,7 @@ RDS 让你先写数据、以后再定访问路径——查询计划器在查询�
 
 **这组数字替换掉了一组并不在比同一件事的旧数字。** 5.4 之前，kevy 那侧的读形状根本没有要求返回任何列，而与之对时的 SQL 选了两到三列；而且 kevy 的表只声明了行实际携带的七列中的六列。两处都已修，两处都改变了答案：二级索引点查此前发布为 212 µs 对 PostgreSQL 的 126 µs，现在是 4% 以内的**打平**。
 
-这几行指向不同方向，要分开读。接受"最多丢 1 秒"，kevy 吸收写入**快 41×**——这正是当初逼着大家在 RDS 前面加缓存的那股压力。而在**每次写都落盘**的对等档位上，**PostgreSQL 快 2.0×**：它把 WAL 组提交，kevy 是逐命令 fsync。索引点查两边**打平**；列表分页 **PostgreSQL 快 1.2×**——planner 配 B-tree 在它的本行上确实强。而 kevy 装同样的数据要花 **6.6 倍内存**：行放在进程内就要花 RAM。数据装不下时——11.5 GB CSV、PostgreSQL 限到 2 GB 内存、kevy 用 1 GB 分层预算——**只有随机访问那一种形状易手**：按随机主键点查是 **PG 184 µs 对分层 kevy 78 µs**，而 kevy 的行就在磁盘上，仍比 PG 的缓存未命中更快。上面那两种索引形状仍是 PG 赢，而且换成真正散布全表的高基数谓词重测之后，差距是**拉大**而不是缩小——索引点查 **176 µs 对 385 µs**。这不是 I/O 造成的：kevy 把全部数据放在内存里也照样输，代价在查询路径本身，不在取数。分层把同样 12 GB 数据的 **RSS 从 17.95 GB 压到 2.95 GB**，并且那条索引查询根本不碰落在磁盘上的那 98% 行。
+这几行指向不同方向，要分开读。接受"丢约 1 秒"，kevy 吸收写入**快 41×**——这正是当初逼着大家在 RDS 前面加缓存的那股压力。而在**每次写都落盘**的对等档位上，**PostgreSQL 快 2.0×**：它把 WAL 组提交，kevy 是逐命令 fsync。索引点查两边**打平**；列表分页 **PostgreSQL 快 1.2×**——planner 配 B-tree 在它的本行上确实强。而 kevy 装同样的数据要花 **6.6 倍内存**：行放在进程内就要花 RAM。数据装不下时——11.5 GB CSV、PostgreSQL 限到 2 GB 内存、kevy 用 1 GB 分层预算——**只有随机访问那一种形状易手**：按随机主键点查是 **PG 184 µs 对分层 kevy 78 µs**，而 kevy 的行就在磁盘上，仍比 PG 的缓存未命中更快。上面那两种索引形状仍是 PG 赢，而且换成真正散布全表的高基数谓词重测之后，差距是**拉大**而不是缩小——索引点查 **176 µs 对 385 µs**。这不是 I/O 造成的：kevy 把全部数据放在内存里也照样输，代价在查询路径本身，不在取数。分层把同样 12 GB 数据的 **RSS 从 17.95 GB 压到 2.95 GB**，并且那条索引查询根本不碰落在磁盘上的那 98% 行。
 
 这条边界是章程，不是待办：没有查询语言、没有计划器、没有 join、没有服务端校验 DSL、没有触发器（"Law 3"，[designing-on-kevy](designing-on-kevy.md)）。下文的一切，都是把 SQL 构造映射到这个固定接口面上。
 
@@ -104,7 +104,7 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 
 ## Scalar functions
 
-迁移过来的查询里，SQL 表达式依赖一套标量函数词汇，kevy 在 **SQL 面而非引擎里**覆盖它：`kevy-cli sql eval`（以及 `sql` 工具箱的常量折叠）在客户端按 PostgreSQL 规范语义求值表达式，服务引擎从不接触表达式——与本页其它地方一样的分工。
+迁移过来的查询里，SQL 表达式依赖一套标量函数词汇，kevy 在 **SQL 面而非引擎里**覆盖它：`kevy-cli --kevy sql eval`（以及 `sql` 工具箱的常量折叠）在客户端按 PostgreSQL 规范语义求值表达式，服务引擎从不接触表达式——与本页其它地方一样的分工。
 
 当前覆盖（函数名大小写不敏感，同 PG 的折叠规则）：
 
@@ -190,7 +190,7 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 
 隔离性，如实说：kevy 没有 MVCC，也没有隔离级别的旋钮。在单个 shard 内，每条命令（以及每个 `EVAL`、每个 `MULTI` 批、每个嵌入式 atomic 块）都串行执行——凡是装得进一个 shard/一个脚本的东西，拿到的就是*可串行化*行为。跨 shard 没有全局快照：多键读（`MGET`、`IDX.QUERY` 归并）按 shard 原子，整体是 SCAN 级。任何读都看不到单条命令的撕裂状态，也不存在对未提交 `MULTI` 批的脏读；但两条独立命令之间**没有**可重复读——在乎这一点的地方，用 `WATCH`（CAS）或 Lua（单一单元）。
 
-“提交”的耐久性：见 [persistence](persistence.md)——`appendfsync always` 下，凡是确认过的写，回复发出前就已落盘；默认的 `everysec` 有最多 1 s 的窗口（Redis 的取舍）。`Store::fsync_aof()`（嵌入式）是按事务粒度的 `synchronous_commit` 逃生舱。
+“提交”的耐久性：见 [persistence](persistence.md)——`appendfsync always` 下，凡是确认过的写，回复发出前就已落盘；默认的 `everysec` 有约 1 s 加一次 fsync 的窗口（Redis 的取舍）。`Store::fsync_aof()`（嵌入式）是按事务粒度的 `synchronous_commit` 逃生舱。
 
 ## 约束与触发器
 
@@ -200,7 +200,7 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 | `CHECK (expr)` | 在原子单元内检验不变量：Lua 脚本（服务端）或 `atomic` 块（嵌入式）完成读、判、写——引擎保证判定与提交是一个单元（cookbook 配方 5）|
 | `UNIQUE` | 围栏 + 计数的重复项，或一道硬性 `SET … NX` 闸门（见上）|
 | `FOREIGN KEY`（存在性）| 不强制；需要这个不变量时，在一个原子单元里先写父、后写子 |
-| `ON DELETE CASCADE` | 应用侧模式：atomic 块（小规模）、`kevy-cli delete-prefix`（批量），或用一个 CDC 消费者响应父行删除（异步——cookbook 配方 10）|
+| `ON DELETE CASCADE` | 应用侧模式：atomic 块（小规模）、`kevy-cli --kevy delete-prefix`（批量），或用一个 CDC 消费者响应父行删除（异步——cookbook 配方 10）|
 | 触发器 | **CDC 消费者**：`FEED.READ` 把每次已提交的写当作变更帧投递——发生在提交之后、彼此解耦、可重放，而且它不可能腐蚀写路径（cookbook 配方 10–12）|
 
 服务端约束和触发器 DSL 是有意不提供的：Lua 脚本是仅有的服务端逻辑，而且它*作为写入本身*运行，不是挂在写入上。
@@ -230,13 +230,13 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 
 | RDS | kevy |
 |---|---|
-| `mysqldump` / `pg_dump` | `kevy-cli export`（逻辑 RESP 流，兼容 `redis-cli --pipe`）|
+| `mysqldump` / `pg_dump` | `kevy-cli --kevy export`（逻辑 RESP 流，兼容 `redis-cli --pipe`）|
 | 二进制备份 | 快照文件（`SAVE`/`BGSAVE` → `dump-<id>.rdb`）|
 | WAL / binlog | AOF（追加式命令日志，按 shard）|
 | `synchronous_commit` | `appendfsync always`（或 `everysec` + `fsync_aof` 栅栏）|
 | PITR（基线 + WAL 重放）| **恢复点契约**：快照 + 从快照记录的游标起的 CDC 帧 = 之后任意游标处的精确状态（[persistence](persistence.md)）|
 
-PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`，上限 1 GiB/shard）——要依赖精确时点恢复，快照频率至少得跟上窗口的翻转。校验是一等公民：`PREFIX.DIGEST` / `kevy-cli diff` 能证明两个键空间相等，而且对顺序和拓扑都不敏感。
+PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`，上限 1 GiB/shard）——要依赖精确时点恢复，快照频率至少得跟上窗口的翻转。校验是一等公民：`PREFIX.DIGEST` / `kevy-cli --kevy diff` 能证明两个键空间相等，而且对顺序和拓扑都不敏感。
 
 ## 复制与读扩展
 
@@ -309,7 +309,7 @@ feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那�
 > + Σ 各索引公式 + 视图成员数 × 条目大小——然后在加载过的样本上
 > 用 `MEMORY USAGE` / `IDX.LIST` 的 bytes 验证。
 
-各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (value_width + avg_key_len + 48)`；文本与 ANN 公式见 [text-search](text-search.md) / [vector-search](vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
+各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (avg_key_len + string_value_len + 82…93)`；文本与 ANN 公式见 [text-search](text-search.md) / [vector-search](vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
 
 **服务余量。**竞技场于 2026-07-19 在 v4.0.0 上重测（kevy vs valkey 9.1，公平对打协议，5 次取中位，吞吐读的是各服务端自己的命令计数器——`bench/ARENA-2026-07-19.txt`）：GET 2.46×、SET 4.00×、INCR 2.86×、SADD 2.95×、HSET 2.17×、ZADD 1.78×、LPUSH 1.76×——完整的复制/心跳 pipeline 落地后 7/7 全胜。其中一些比值低于它们替换掉的 v3.18.0 数字，原因是那次读的是 `redis-benchmark` 自报速率，而它在 `--threads` 下会被量化偏低；改成服务端计数后每个引擎的数字都升高了，竞品升得更多。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
 

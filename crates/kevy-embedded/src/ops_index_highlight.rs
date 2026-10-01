@@ -5,45 +5,10 @@
 use kevy_index::IndexSpec;
 
 use super::claused::{ValueFilter, unknown_field, value_test};
+pub(crate) use super::opts::MatchOpts;
 use super::{FieldSpans, HighlightedHit, sync_segs};
 use crate::store::{Store, lock_write};
 use crate::{KevyError, KevyResult};
-
-/// Everything a text MATCH carries beyond its index, query text and
-/// result limit — the embedded twin of the wire's optional clauses.
-///
-/// Grouping them keeps one entry point instead of one per clause, and
-/// [`MatchOpts::default`] is the plain query, so a caller opts into
-/// exactly the clauses it names.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MatchOpts<'a> {
-    /// `HIGHLIGHT`: `None` = not requested, `Some(&[])` = every indexed
-    /// field, `Some(names)` = only those.
-    pub highlight: Option<&'a [Vec<u8>]>,
-    /// `TYPO n`: edit budget for each bare term; 0 = exact.
-    pub typo: u32,
-    /// `OFFSET n`: hits to skip before `limit` takes effect.
-    pub offset: usize,
-    /// `IN <field…>`: the declared field names to score within; empty =
-    /// the whole document.
-    pub scope: &'a [Vec<u8>],
-    /// `FILTER …`: non-scoring predicates over stored values, ANDed.
-    /// They decide which documents are eligible, not what a term is
-    /// worth, so the corpus statistics stay whole-corpus.
-    pub filters: &'a [ValueFilter<'a>],
-    /// `SORT <field> ASC|DESC`: select by a stored value instead of by
-    /// score. Selecting, not re-ordering — a document that wins on the
-    /// key is chosen even when its score would never have reached the
-    /// page.
-    pub sort: Option<(&'a [u8], bool)>,
-    /// `DISTINCT <field>`: at most one hit per value of a stored field,
-    /// applied during selection so the page holds `limit` distinct
-    /// documents rather than `limit` that then collapse.
-    pub distinct: Option<&'a [u8]>,
-    /// `FACET <field…>`: count each field's values over the whole match
-    /// set. Reported alongside the page rather than shaping it.
-    pub facets: &'a [Vec<u8>],
-}
 
 impl Store {
     /// [`Self::idx_match`] with every optional clause: highlight spans,
@@ -79,32 +44,27 @@ impl Store {
         let (scope, tests) = self.resolve_clauses(name, opts.scope, opts.filters)?;
         let sorted = self.sort_field(name, opts.sort)?;
         let fkeys = self.facet_keys(name, opts.facets)?;
-        let fac: Vec<kevy_text::Facet> = fkeys
-            .iter()
-            .map(|(field, k)| kevy_text::Facet { field: *field, key: k.as_ref() })
-            .collect();
+        let fac: Vec<kevy_text::Facet> =
+            fkeys.iter().map(|(field, k)| kevy_text::Facet::new(*field, k.as_ref())).collect();
         let grouped = self.value_field("DISTINCT", name, opts.distinct)?;
         let dkey = grouped.map(|(_, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
         let distinct =
-            grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct { field, key: k });
+            grouped.zip(dkey.as_ref()).map(|((field, _), k)| kevy_text::Distinct::new(field, k));
         let key = sorted.map(|(_, _, ty)| move |raw: &[u8]| kevy_index::order_key(ty, raw));
-        let sort = sorted.zip(key.as_ref()).map(|((field, desc, _), k)| kevy_text::Sort {
-            field,
-            desc,
-            key: k,
-        });
+        let sort = sorted
+            .zip(key.as_ref())
+            .map(|((field, order, _), k)| kevy_text::Sort::new(field, k).with_order(order));
         let boxed = box_tests(tests);
         let filter: Vec<kevy_text::Filter> =
-            boxed.iter().map(|(f, t)| kevy_text::Filter { field: *f, test: t.as_ref() }).collect();
+            boxed.iter().map(|(f, t)| kevy_text::Filter::new(*f, t.as_ref())).collect();
         let stats = self.text_corpus_stats_in(name, query, opts.typo, &scope)?;
-        let q = kevy_text::QueryOpts {
-            stats: Some(&stats),
-            typo: opts.typo,
-            fields: &scope,
-            filter: &filter,
-            sort,
-            distinct,
-        };
+        let mut q = kevy_text::QueryOpts::default()
+            .with_stats(&stats)
+            .with_typo(opts.typo)
+            .with_fields(&scope)
+            .with_filter(&filter);
+        q.sort = sort;
+        q.distinct = distinct;
         let (mut all, facets, cold_vals) =
             self.gather_hits(name, query, fetch, q, &stats, opts.highlight, &fac);
         self.order_page(name, &mut all, sorted, &cold_vals);
@@ -139,9 +99,9 @@ impl Store {
         };
         let mut positions = Vec::with_capacity(scope.len());
         for want in scope {
-            let names = || spec.fields.iter().map(|f| f.name.as_slice()).collect::<Vec<_>>();
+            let names = || spec.fields().iter().map(|f| f.name.as_slice()).collect::<Vec<_>>();
             let i = spec
-                .fields
+                .fields()
                 .iter()
                 .position(|f| f.name == *want)
                 .ok_or_else(|| unknown_field("IN", want, "index", &names()))?;
@@ -193,7 +153,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+            if let Some((spec, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name) {
                 // `matches_query_with` parses quoted phrases out of the
                 // raw query text; with none it is the ordinary term query.
                 let r = ts.matches_query_faceted(query, fetch, q, facets);
@@ -229,10 +189,10 @@ impl Store {
         &self,
         name: &[u8],
         all: &mut Vec<HighlightedHit>,
-        sorted: Option<(usize, bool, kevy_index::ValType)>,
+        sorted: Option<(usize, kevy_index::SortOrder, kevy_index::ValType)>,
         cold_vals: &super::text_cold::ColdVals,
     ) {
-        let Some((field, desc, ty)) = sorted else {
+        let Some((field, order, ty)) = sorted else {
             all.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             return;
         };
@@ -241,7 +201,7 @@ impl Store {
             .map(|h| (self.stored_order_key(name, &h.0, field, ty, cold_vals), h))
             .collect();
         keyed.sort_by(|a, b| {
-            kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), desc)
+            kevy_text::sorted_order((a.0.as_deref(), &a.1.0), (b.0.as_deref(), &b.1.0), order)
         });
         *all = keyed.into_iter().map(|(_, h)| h).collect();
     }
@@ -273,13 +233,13 @@ impl Store {
     fn sort_field(
         &self,
         name: &[u8],
-        sort: Option<(&[u8], bool)>,
-    ) -> KevyResult<Option<(usize, bool, kevy_index::ValType)>> {
-        let Some((field, desc)) = sort else { return Ok(None) };
+        sort: Option<(&[u8], kevy_index::SortOrder)>,
+    ) -> KevyResult<Option<(usize, kevy_index::SortOrder, kevy_index::ValType)>> {
+        let Some((field, order)) = sort else { return Ok(None) };
         let Some((pos, ty)) = self.value_field("SORT", name, Some(field))? else {
             return Ok(None);
         };
-        Ok(Some((pos, desc, ty)))
+        Ok(Some((pos, order, ty)))
     }
 
     /// Each `FACET` field's position paired with the order-preserving
@@ -325,13 +285,13 @@ impl Store {
         let Some((spec, _)) = guard.1.get(name) else {
             return Err(KevyError::NotFound("no such text index".into()));
         };
-        let stored: Vec<&[u8]> = spec.values.iter().map(|v| v.name.as_slice()).collect();
+        let stored: Vec<&[u8]> = spec.values().iter().map(|v| v.name.as_slice()).collect();
         let pos = spec
-            .values
+            .values()
             .iter()
             .position(|v| v.name == field)
             .ok_or_else(|| unknown_field(clause, field, "store", &stored))?;
-        Ok(Some((pos, spec.values[pos].ty)))
+        Ok(Some((pos, spec.values()[pos].ty)))
     }
 
     /// One row's sort key: its stored value, in the order-preserving
@@ -348,7 +308,7 @@ impl Store {
     ) -> Option<Vec<u8>> {
         for shard in self.shards.iter() {
             let g = lock_write(shard);
-            if let Some((_, ts)) = g.idx_segs.text.iter().find(|(s, _)| s.name == name)
+            if let Some((_, ts)) = g.idx_segs.text.iter().find(|(s, _)| s.name() == name)
                 && let Some(raw) = ts.stored_value(key, field)
             {
                 return kevy_index::order_key(ty, raw);
@@ -381,20 +341,13 @@ fn gather_cold(
     let Some(dir) = inner.idx_segs.cold_text_of(name).filter(|d| d.has_cold()) else {
         return;
     };
-    let (mut bare, phrases, _prefixes) = kevy_text::parse_clauses(query);
-    bare.sort();
-    bare.dedup();
-    let page = dir.cold_page(&kevy_window::ColdPageQuery {
-        bare,
-        phrases,
-        stats,
-        filter: q.filter,
-        sort: q.sort.as_ref(),
-        distinct: q.distinct.as_ref(),
-        facets,
-        fetch,
-    });
-    let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name == name).map(|(s, _)| s.clone());
+    let mut cq = kevy_window::ColdPageQuery::parse(query, stats, fetch)
+        .with_filter(q.filter)
+        .with_facets(facets);
+    cq.sort = q.sort.as_ref();
+    cq.distinct = q.distinct.as_ref();
+    let page = dir.cold_page(&cq);
+    let spec = inner.idx_segs.text.iter().find(|(s, _)| s.name() == name).map(|(s, _)| s.clone());
     for h in page.hits {
         let hl = highlight.map_or_else(Vec::new, |w| {
             spec.as_ref().map_or_else(Vec::new, |sp| {
@@ -426,6 +379,20 @@ type FacetKey = (usize, Box<dyn Fn(&[u8]) -> Option<Vec<u8>>>);
 
 /// One facet field's reported buckets: `(value, count)`, most frequent
 /// first.
+///
+/// ```
+/// use kevy_embedded::*;
+/// let s = Store::open(Config::default())?;
+/// s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[(b"lang", IndexValType::Str)])?;
+/// for (k, lang) in [(&b"d:1"[..], &b"en"[..]), (b"d:2", b"en"), (b"d:3", b"ja")] {
+///     s.hset(k, &[(b"body", b"rust"), (b"lang", lang)])?;
+/// }
+/// let fields = [b"lang".to_vec()];
+/// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default().with_facets(&fields))?;
+/// let langs: &FacetCounts = &page.facets[0];
+/// assert_eq!(langs, &[(b"en".to_vec(), 2), (b"ja".to_vec(), 1)]);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type FacetCounts = Vec<(Vec<u8>, u64)>;
 
 /// One facet bucket in flight, before the grouping identity is dropped.
@@ -433,11 +400,46 @@ type RawBucket = (Vec<u8>, Vec<u8>, u64);
 
 /// A faceted query's answer: the page, and per requested `FACET` field
 /// its `(value, count)` buckets over the whole match set.
-#[derive(Debug)]
+///
+/// ```
+/// use kevy_embedded::{Config, MatchOpts, Store, TokenPositions};
+///
+/// let s = Store::open(Config::default())?;
+/// s.idx_create_text(b"ft", b"doc:", &[(b"body", 1.0)], TokenPositions::Omit, &[])?;
+/// s.hset(b"doc:1", &[(b"body", b"rust engine")])?;
+/// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default())?;
+/// assert_eq!(page.hits.len(), 1);
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MatchPage {
     /// The ranked page — exactly what [`Store::idx_match_with`] returns.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[])?;
+    /// s.hset(b"d:1", &[(b"body", b"rust engine")])?;
+    /// s.hset(b"d:2", &[(b"body", b"go server")])?;
+    /// let page = s.idx_match_faceted(b"ft", b"rust", 10, MatchOpts::default())?;
+    /// assert_eq!(page.hits.iter().map(|h| &h.0[..]).collect::<Vec<_>>(), [&b"d:1"[..]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub hits: Vec<HighlightedHit>,
     /// One entry per requested facet field, most frequent first.
+    ///
+    /// ```
+    /// # use kevy_embedded::*;
+    /// # let s = Store::open(Config::default())?;
+    /// # s.idx_create_text(b"ft", b"d:", &[(b"body", 1.0)], TokenPositions::Omit, &[(b"lang", IndexValType::Str)])?;
+    /// s.hset(b"d:1", &[(b"body", b"rust"), (b"lang", b"en")])?;
+    /// let (none, lang) = (MatchOpts::default(), [b"lang".to_vec()]);
+    /// assert!(s.idx_match_faceted(b"ft", b"rust", 10, none)?.facets.is_empty());
+    /// let page = s.idx_match_faceted(b"ft", b"rust", 10, none.with_facets(&lang))?;
+    /// assert_eq!(page.facets, [vec![(b"en".to_vec(), 1)]]);
+    /// # Ok::<(), kevy_embedded::KevyError>(())
+    /// ```
     pub facets: Vec<FacetCounts>,
 }
 
@@ -487,7 +489,7 @@ fn hit_highlight(
     ts.highlight_spans(key, query)
         .into_iter()
         .filter_map(|(fi, spans)| {
-            let name = spec.fields.get(fi)?.name.clone();
+            let name = spec.fields().get(fi)?.name.clone();
             if !want.is_empty() && !want.contains(&name) {
                 return None;
             }

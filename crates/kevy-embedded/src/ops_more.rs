@@ -34,11 +34,7 @@ impl Store {
         let mut g = self.wshard(key);
         let popped = g.store.spop(key, count).map_err(store_err)?;
         if !popped.is_empty() {
-            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + popped.len());
-            argv.push(b"SREM");
-            argv.push(key);
-            argv.extend(popped.iter().map(Vec::as_slice));
-            commit_write(&mut g, &argv)?;
+            commit_write(&mut g, &kevy_verbs::aof::spop_effect(key, &popped))?;
         }
         Ok(popped)
     }
@@ -62,11 +58,7 @@ impl Store {
     pub fn zcount(&self, key: &[u8], min: f64, max: f64) -> KevyResult<usize> {
         self.wshard(key)
             .store
-            .zcount(
-                key,
-                ScoreBound { value: min, exclusive: false },
-                ScoreBound { value: max, exclusive: false },
-            )
+            .zcount(key, ScoreBound::inclusive(min), ScoreBound::inclusive(max))
             .map_err(store_err)
     }
 
@@ -105,11 +97,7 @@ impl Store {
         let mut g = self.wshard(key);
         let removed = g
             .store
-            .zrem_range_by_score(
-                key,
-                ScoreBound { value: min, exclusive: false },
-                ScoreBound { value: max, exclusive: false },
-            )
+            .zrem_range_by_score(key, ScoreBound::inclusive(min), ScoreBound::inclusive(max))
             .map_err(store_err)?;
         if removed > 0 {
             let s = format!("{min}");
@@ -129,11 +117,7 @@ impl Store {
     ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         self.wshard(key)
             .store
-            .zrev_range_by_score(
-                key,
-                ScoreBound { value: min, exclusive: false },
-                ScoreBound { value: max, exclusive: false },
-            )
+            .zrev_range_by_score(key, ScoreBound::inclusive(min), ScoreBound::inclusive(max))
             .map_err(store_err)
     }
 
@@ -173,7 +157,7 @@ impl Store {
         // Cross-shard rename is non-trivial; the single-shard
         // embedded default lands src+dst on the same lock.
         let mut g = self.wshard(src);
-        let outcome = g.store.rename(src, dst, false);
+        let outcome = g.store.rename(src, dst);
         match outcome {
             kevy_store::RenameOutcome::Renamed => {
                 commit_write(&mut g, &[b"RENAME", src, dst])?;
@@ -191,7 +175,7 @@ impl Store {
     pub fn renamenx(&self, src: &[u8], dst: &[u8]) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(src);
-        let outcome = g.store.rename(src, dst, true);
+        let outcome = g.store.rename_nx(src, dst);
         match outcome {
             kevy_store::RenameOutcome::Renamed => {
                 commit_write(&mut g, &[b"RENAMENX", src, dst])?;

@@ -4,9 +4,10 @@
 //! `StreamId` types + entry-side ops) so each file stays under the
 //! project's ≤500-LOC rule.
 
-use super::group::{AutoclaimResult, ReadGroupId};
+use super::group::ReadGroupId;
 use super::{
-    GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
+    AckMode, ClaimMode, GroupCreateMode, MissingStream, PendingExtended, PendingSummary,
+    StreamData, StreamId, XAddIdSpec, XClaimOpts,
 };
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -17,10 +18,49 @@ use alloc::sync::Arc;
 /// Cloned-out view of stream entries, the cross-module wire form. Keeps
 /// the same shape Redis sends and lets the callers stay decoupled from
 /// the `SmallBytes` interning the store uses internally.
+///
+/// ```
+/// # use kevy_store::*;
+/// # let mut s = Store::new();
+/// # for t in [1, 2] {
+/// #     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+/// #     s.xadd(b"s", XAddIdSpec::AutoAll, f, MissingStream::Create, t)?;
+/// # }
+/// # s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// # s.xreadgroup(b"s", b"g", b"alice", ReadGroupId::New, None, AckMode::Pending, 100)?;
+/// let batch: EntryBatch = s.xrange(b"s", StreamId::MIN, StreamId::MAX, None)?;
+/// assert_eq!(batch.len(), 2);
+/// let (id, fields) = &batch[0];
+/// assert_eq!((*id, fields.as_slice()), (StreamId::new(1, 0), [(b"f".to_vec(), b"v".to_vec())].as_slice()));
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
 pub type EntryBatch = Vec<(StreamId, Vec<(Vec<u8>, Vec<u8>)>)>;
 
+/// What a group read hands back: each entry with its fields, or with none
+/// when a read of a consumer's history names an entry the stream no
+/// longer holds.
+///
+/// ```
+/// use kevy_store::{AckMode, GroupCreateMode, MissingStream, ReadGroupId, Store, StreamId, XAddIdSpec};
+/// let mut s = Store::new();
+/// for ms in 1..=2 {
+///     let f = vec![(b"f".to_vec(), b"v".to_vec())];
+///     s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(ms, 0)), f, MissingStream::Create, 0)?;
+/// }
+/// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), MissingStream::Refuse)?;
+/// s.xreadgroup(b"s", b"g", b"c", ReadGroupId::New, None, AckMode::Pending, 10)?;
+/// s.xdel(b"s", &[StreamId::new(1, 0)])?;
+/// let history = ReadGroupId::ReplayAfter(StreamId::MIN);
+/// let got: GroupBatch = s.xreadgroup(b"s", b"g", b"c", history, None, AckMode::Pending, 20)?;
+/// assert_eq!(got[0], (StreamId::new(1, 0), None), "deleted, still pending");
+/// assert!(got[1].1.is_some());
+/// # use kevy_store::GroupBatch;
+/// # Ok::<(), kevy_store::StoreError>(())
+/// ```
+pub type GroupBatch = Vec<(StreamId, Option<Vec<(Vec<u8>, Vec<u8>)>>)>;
+
 impl Store {
-    fn stream_mut(
+    pub(super) fn stream_mut(
         &mut self,
         key: &[u8],
         create: bool,
@@ -50,6 +90,27 @@ impl Store {
         }
     }
 
+    /// A stream's consumer group as stored, read with no side effects:
+    /// unlike [`Self::stream_view`] it expires nothing and promotes
+    /// nothing, so a caller recording a write can read what the write
+    /// left without changing it. `None` when the key holds no resident
+    /// stream or the group is missing.
+    ///
+    /// ```
+    /// use kevy_store::{GroupCreateMode, StreamId, XAddIdSpec};
+    /// let mut s = kevy_store::Store::new();
+    /// s.xadd(b"s", XAddIdSpec::Explicit(StreamId::new(1, 1)), vec![(b"f".to_vec(), b"v".to_vec())], kevy_store::MissingStream::Create, 0).unwrap();
+    /// s.xgroup_create(b"s", b"g", GroupCreateMode::AtId(StreamId::MIN), kevy_store::MissingStream::Refuse).unwrap();
+    /// assert_eq!(s.stream_group_peek(b"s", b"g").unwrap().pending_count(), 0);
+    /// assert!(s.stream_group_peek(b"s", b"nope").is_none());
+    /// ```
+    pub fn stream_group_peek(&self, key: &[u8], group: &[u8]) -> Option<&super::ConsumerGroup> {
+        match &self.map.get(key)?.value {
+            Value::Stream(s) => s.group(group),
+            _ => None,
+        }
+    }
+
     /// Read-only access to a stream's `StreamData`, used by `XINFO`
     /// to inspect entries / groups / consumers without going through
     /// the wrapper layer. Returns `Ok(None)` for a missing key,
@@ -59,18 +120,18 @@ impl Store {
     }
 
     /// `XADD key <spec> field value [field value ...]`. Returns the
-    /// assigned ID. `nomkstream` matches Redis's `NOMKSTREAM` flag —
-    /// suppress key creation, returning `Ok(None)`. `now_ms` is the
-    /// wall-clock used for `XAddIdSpec::AutoAll`.
+    /// assigned ID; with [`MissingStream::Refuse`] (`NOMKSTREAM`) a
+    /// missing key stays missing and the answer is `Ok(None)`. `now_ms`
+    /// is the wall-clock used for `XAddIdSpec::AutoAll`.
     pub fn xadd(
         &mut self,
         key: &[u8],
         spec: XAddIdSpec,
         fields: Vec<(Vec<u8>, Vec<u8>)>,
-        nomkstream: bool,
+        missing: MissingStream,
         now_ms: u64,
     ) -> Result<Option<StreamId>, StoreError> {
-        if nomkstream && self.live_entry(key).is_none() {
+        if missing == MissingStream::Refuse && self.live_entry(key).is_none() {
             return Ok(None);
         }
         let id;
@@ -157,40 +218,17 @@ impl Store {
 
     /// `XTRIM key MAXLEN n`. Returns number removed.
     pub fn xtrim_maxlen(&mut self, key: &[u8], maxlen: u64) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_maxlen(maxlen as usize);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MaxLen(maxlen), super::TrimMode::Exact)
     }
 
     /// `XTRIM key MINID id`. Returns number removed.
     pub fn xtrim_minid(&mut self, key: &[u8], minid: StreamId) -> Result<u64, StoreError> {
-        let n;
-        {
-            let Some(s) = self.stream_mut(key, false)? else {
-                return Ok(0);
-            };
-            n = s.trim_minid(minid);
-        }
-        if n > 0 {
-            self.bump_if_watched(key);
-            self.reweigh_entry(key);
-        }
-        Ok(n as u64)
+        self.xtrim(key, super::TrimTo::MinId(minid), super::TrimMode::Exact)
     }
 
     /// `XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]`. Returns
-    /// `NoSuchKey` for a missing key (dispatch maps it to Redis's
-    /// "requires the key to exist" wording), `OutOfRange` when `last_id`
-    /// is below the stream's top entry.
+    /// `NoSuchKey` for a missing key (answered as `ERR no such key`),
+    /// `OutOfRange` when `last_id` is below the stream's top entry.
     pub fn xsetid(
         &mut self,
         key: &[u8],
@@ -212,17 +250,18 @@ impl Store {
 
     /// `XGROUP CREATE key group <id|$> [MKSTREAM]`. Returns `Ok(true)`
     /// when a fresh group was added; `Ok(false)` if the group already
-    /// existed (caller emits `-BUSYGROUP`). `mkstream` matches Redis:
-    /// auto-create the stream key when missing.
+    /// existed (caller emits `-BUSYGROUP`). A missing key is created
+    /// with [`MissingStream::Create`] (`MKSTREAM`) and refused with
+    /// `NoSuchKey` otherwise.
     pub fn xgroup_create(
         &mut self,
         key: &[u8],
         group: &[u8],
         mode: GroupCreateMode,
-        mkstream: bool,
+        missing: MissingStream,
     ) -> Result<bool, StoreError> {
         let exists = self.live_entry(key).is_some();
-        if !exists && !mkstream {
+        if !exists && missing == MissingStream::Refuse {
             return Err(StoreError::NoSuchKey);
         }
         let s = self.stream_mut(key, true)?.expect("created");
@@ -282,6 +321,26 @@ impl Store {
         Ok(s.group_create_consumer(group, consumer, now_ms))
     }
 
+    /// `XGROUP CREATECONSUMER key group consumer TIME seen`: see
+    /// [`StreamData::group_consumer_seen`]. `false` on a missing key too.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// assert!(!s.xgroup_consumer_seen(b"missing", b"g", b"c", 1).unwrap());
+    /// ```
+    pub fn xgroup_consumer_seen(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+        seen_ms: u64,
+    ) -> Result<bool, StoreError> {
+        let Some(s) = self.stream_mut(key, false)? else {
+            return Ok(false);
+        };
+        Ok(s.group_consumer_seen(group, consumer, seen_ms))
+    }
+
     /// `XGROUP DELCONSUMER key group consumer`. Returns dropped PEL count.
     pub fn xgroup_del_consumer(
         &mut self,
@@ -304,15 +363,15 @@ impl Store {
         consumer: &[u8],
         last_seen: ReadGroupId,
         count: Option<usize>,
-        noack: bool,
+        ack: AckMode,
         now_ms: u64,
-    ) -> Result<EntryBatch, StoreError> {
+    ) -> Result<super::GroupBatch, StoreError> {
         let result;
         {
             let Some(s) = self.stream_mut(key, false)? else {
                 return Err(StoreError::NoSuchKey);
             };
-            result = s.readgroup(group, consumer, last_seen, count, noack, now_ms)?;
+            result = s.readgroup(group, consumer, last_seen, count, ack, now_ms)?;
         }
         if !result.is_empty() {
             self.bump_if_watched(key);
@@ -413,7 +472,7 @@ impl Store {
         min_idle_ms: u64,
         start: StreamId,
         count: usize,
-        justid: bool,
+        mode: ClaimMode,
         now_ms: u64,
     ) -> Result<(StreamId, EntryBatch, Vec<StreamId>), StoreError> {
         let payloads;
@@ -423,11 +482,10 @@ impl Store {
             let Some(s) = self.stream_mut(key, false)? else {
                 return Err(StoreError::NoSuchKey);
             };
-            let AutoclaimResult { next_cursor: nc, claimed_ids, deleted_ids: di } =
-                s.autoclaim(group, new_owner, min_idle_ms, start, count, justid, now_ms)?;
-            payloads = s.payloads_for(&claimed_ids);
-            next_cursor = nc;
-            deleted_ids = di;
+            let r = s.autoclaim(group, new_owner, min_idle_ms, start, count, mode, now_ms)?;
+            payloads = s.payloads_for(&r.claimed_ids);
+            next_cursor = r.next_cursor;
+            deleted_ids = r.deleted_ids;
         }
         if !payloads.is_empty() {
             self.bump_if_watched(key);

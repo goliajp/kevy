@@ -38,7 +38,7 @@ mod tests {
     }
 
     fn id(ms: u64, seq: u64) -> XAddIdSpec {
-        XAddIdSpec::Explicit(StreamId { ms, seq })
+        XAddIdSpec::Explicit(StreamId::new(ms, seq))
     }
 
     /// Source stream: three entries (one later deleted), a consumer
@@ -46,14 +46,37 @@ mod tests {
     /// second consumer known to the group but with an empty PEL.
     fn seed_stream(store: &mut Store, key: &[u8]) {
         for (ms, f, v) in [(1u64, "f1", "v1"), (2, "f2", "v2"), (3, "f3", "v3")] {
-            store.xadd(key, id(ms, 0), vec![(f.into(), v.into())], false, 0).unwrap();
+            store
+                .xadd(
+                    key,
+                    id(ms, 0),
+                    vec![(f.into(), v.into())],
+                    kevy_store::MissingStream::Create,
+                    0,
+                )
+                .unwrap();
         }
         store
-            .xgroup_create(key, b"g1", GroupCreateMode::AtId(StreamId { ms: 1, seq: 0 }), false)
+            .xgroup_create(
+                key,
+                b"g1",
+                GroupCreateMode::AtId(StreamId::new(1, 0)),
+                kevy_store::MissingStream::Refuse,
+            )
             .unwrap();
-        store.xreadgroup(key, b"g1", b"alice", ReadGroupId::New, Some(1), false, 777).unwrap();
+        store
+            .xreadgroup(
+                key,
+                b"g1",
+                b"alice",
+                ReadGroupId::New,
+                Some(1),
+                kevy_store::AckMode::Pending,
+                777,
+            )
+            .unwrap();
         store.xgroup_create_consumer(key, b"g1", b"bob", 778).unwrap();
-        store.xdel(key, &[StreamId { ms: 3, seq: 0 }]).unwrap();
+        store.xdel(key, &[StreamId::new(3, 0)]).unwrap();
     }
 
     fn ingest_into(dst: &mut Store, prefix: &[u8], bulk: &[u8]) {
@@ -76,13 +99,13 @@ mod tests {
 
         let sv = src.stream_view(b"app:x").unwrap().unwrap();
         let (s_entries, s_last, s_added, s_mxd) = (
-            sv.iter_entries().map(|(i, fv)| (i, fv.to_vec())).collect::<Vec<_>>(),
+            sv.entries().map(|(i, fv)| (i, fv.to_vec())).collect::<Vec<_>>(),
             sv.last_id(),
             sv.entries_added(),
             sv.max_deleted_id(),
         );
         let dv = dst.stream_view(b"app:x").unwrap().unwrap();
-        let d_entries = dv.iter_entries().map(|(i, fv)| (i, fv.to_vec())).collect::<Vec<_>>();
+        let d_entries = dv.entries().map(|(i, fv)| (i, fv.to_vec())).collect::<Vec<_>>();
         assert_eq!(d_entries, s_entries, "entries survive the move");
         assert_eq!(dv.last_id(), s_last, "last_id survives");
         assert_eq!(dv.entries_added(), s_added, "entries_added survives");
@@ -112,13 +135,20 @@ mod tests {
     #[test]
     fn empty_stream_with_advanced_clock_roundtrips() {
         let mut src = Store::new();
-        src.xadd(b"app:e", id(9, 1), vec![(b"f".to_vec(), b"v".to_vec())], false, 0).unwrap();
-        src.xdel(b"app:e", &[StreamId { ms: 9, seq: 1 }]).unwrap();
+        src.xadd(
+            b"app:e",
+            id(9, 1),
+            vec![(b"f".to_vec(), b"v".to_vec())],
+            kevy_store::MissingStream::Create,
+            0,
+        )
+        .unwrap();
+        src.xdel(b"app:e", &[StreamId::new(9, 1)]).unwrap();
         let (bulk, _) = serialize_prefix(&mut src, b"app:");
         let mut dst = Store::new();
         ingest_into(&mut dst, b"app:", &bulk);
         let dv = dst.stream_view(b"app:e").unwrap().unwrap();
         assert_eq!(dv.length(), 0);
-        assert_eq!(dv.last_id(), StreamId { ms: 9, seq: 1 }, "ID clock survives");
+        assert_eq!(dv.last_id(), StreamId::new(9, 1), "ID clock survives");
     }
 }

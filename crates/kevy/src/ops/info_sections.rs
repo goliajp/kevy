@@ -60,7 +60,12 @@ pub(super) fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut S
 /// `# Tiering`: the unified-budget
 /// gauges summed across shards. Emitted only when tiering is enabled —
 /// see the call site's byte-stability note.
-pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
+pub(super) fn info_tiering(
+    totals: &crate::state::Totals,
+    g: &crate::mem_guard::MemGuard,
+    b: &mut String,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
     let t = &totals.tier;
     b.push_str("# Tiering\r\n");
     b.push_str("tiering_enabled:1\r\n");
@@ -78,6 +83,19 @@ pub(super) fn info_tiering(totals: &crate::state::Totals, b: &mut String) {
     b.push_str(&format!("promotions_total:{}\r\n", t.promotions_total));
     b.push_str(&format!("peek_preads_total:{}\r\n", t.peek_preads_total));
     b.push_str(&format!("batch_submissions_total:{}\r\n", t.batch_submissions_total));
+    b.push_str(&format!("vlog_raw_bytes:{}\r\n", t.vlog_raw_bytes));
+    b.push_str(&format!("vlog_payload_bytes:{}\r\n", t.vlog_payload_bytes));
+    b.push_str(&format!("vlog_frame_header_bytes:{}\r\n", t.vlog_frame_header_bytes));
+    b.push_str(&format!("vlog_dict_bytes:{}\r\n", t.vlog_dict_bytes));
+    b.push_str(&format!("tier_rss_line_bytes:{}\r\n", crate::mem_guard::rss_line(t.budget)));
+    b.push_str(&format!("tier_refusing_writes:{}\r\n", u8::from(g.refusing.load(Relaxed))));
+    b.push_str(&format!("tier_live_bytes:{}\r\n", g.live_bytes.load(Relaxed)));
+    b.push_str(&format!("tier_overhead_bytes:{}\r\n", g.overhead_bytes.load(Relaxed)));
+    b.push_str(&format!("heap_walks_total:{}\r\n", g.walks.load(Relaxed)));
+    b.push_str(&format!("heap_walk_us_total:{}\r\n", g.walk_us.load(Relaxed)));
+    b.push_str(&format!("heap_trims_total:{}\r\n", g.trims.load(Relaxed)));
+    b.push_str(&format!("heap_trimmed_bytes:{}\r\n", g.trimmed_bytes.load(Relaxed)));
+    b.push_str(&format!("heap_trim_us_total:{}\r\n", g.trim_us.load(Relaxed)));
     b.push_str("\r\n");
 }
 
@@ -212,7 +230,17 @@ pub(super) fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
         Some((host, port)) => info_repl_replica(ctx, b, host, port),
         None => info_repl_master(ctx, b),
     }
+    info_repl_listener(&ctx.state.config(), b);
     b.push_str("\r\n");
+}
+
+/// Where this node accepts replicas, so a peer that promotes it can
+/// follow it without assuming the default base.
+fn info_repl_listener(cfg: &Config, b: &mut String) {
+    if cfg.replication.role != kevy_config::ReplicationRole::Standalone {
+        let base = crate::replication::replication_port_base(cfg);
+        b.push_str(&format!("repl_port_base:{base}\r\n"));
+    }
 }
 
 /// The replica-side (`role:slave`) half of `INFO replication`.
@@ -270,11 +298,12 @@ pub(super) fn info_cluster(cfg: &Config, b: &mut String) {
 /// one line per module in Redis's `module:name=…` shape so existing
 /// tools parse it. kevy's modules are built in, not loaded — the section
 /// answers "what can this server do", not "what was dlopen'd": `alloc`
-/// reports the compiled-in allocator, `tiering` its runtime state, and
+/// reports the allocator the process runs on (linking kevy-alloc does not
+/// make it that), `tiering` its runtime state, and
 /// the command surfaces report present-by-construction.
 pub(super) fn info_modules(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Modules\r\n");
-    b.push_str(if cfg!(feature = "kevy-alloc") {
+    b.push_str(if crate::defrag_tick::active() {
         "module:name=alloc,impl=kevy-alloc\r\n"
     } else {
         "module:name=alloc,impl=system\r\n"

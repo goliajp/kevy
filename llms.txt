@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (206 total)
+## Verbs (209 total)
 
 ### scan
 
@@ -408,48 +408,48 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
   - complexity: O(A log P)
   - compat: full
-- `XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+- `XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
   - complexity: O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
-  - compat: differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
 - `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
-  - complexity: O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full
-  - compat: differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip
-- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]` [write] — Claim specific idle pending entries for a consumer.
+  - complexity: O(log P + COUNT log N): at most COUNT x 10 pending entries are looked at per call
+  - compat: full
+- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID] [LASTID lastid]` [write] — Claim specific idle pending entries for a consumer.
   - complexity: O(A * (log P + log N))
-  - compat: differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP
+  - compat: full
 - `XDEL key id [id ...]` [write] — Delete entries from a stream by ID.
   - complexity: O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream
   - compat: full
-- `XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
+- `XGROUP CREATE key group id|$ [MKSTREAM] [ENTRIESREAD entries-read] | DESTROY key group | SETID key group id|$ [ENTRIESREAD entries-read] | CREATECONSUMER key group consumer | DELCONSUMER key group consumer | HELP` [write] — Manage stream consumer groups.
   - complexity: CREATE / DESTROY: O(1) plus an O(N*F) reweigh. SETID / CREATECONSUMER: O(1). DELCONSUMER: O(P)
-  - compat: differs: CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM are supported, but on a missing key the non-CREATE subcommands return 0 or NOGROUP instead of Redis's error, and XGROUP HELP is absent
-- `XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
-  - complexity: STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)
-  - compat: differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'
+  - compat: full
+- `XINFO STREAM key [FULL [COUNT count]] | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
+  - complexity: STREAM: O(log N). GROUPS: O(G log N + G log G) — 'lag' reads the stream's head once per group, and the groups are sorted by name. CONSUMERS: O(C log C), sorted by name. STREAM FULL: O(K + G * (P log C + C log C)) for K entries shown and P pending entries per group
+  - compat: differs: answers field for field as valkey 9.1 does; against Redis 8.10, XINFO STREAM lacks the six idmp-* / pids-* / iids-* fields of an XADD option kevy does not have, radix-tree-keys and radix-tree-nodes are the nodes and tree nodes valkey's layout would hold for the same history (kevy keeps no radix tree), and where the two disagree on 'lag' and 'entries-read' — an ENTRIESREAD above entries-added, a group before the first entry with a deletion behind it — kevy answers as valkey does
 - `XLEN key` [readonly] — Return the number of entries in a stream.
   - complexity: O(1)
   - compat: full
 - `XPENDING key group [[IDLE min-idle-time] start end count [consumer]]` [readonly] — Inspect pending entries of a consumer group (summary or extended form).
-  - complexity: summary: O(P*C) — the per-consumer tally is a linear find per PEL row. extended: O(log P + K)
-  - compat: full
+  - complexity: summary: O(P*C + C log C) — the per-consumer tally is a linear find per PEL row, then sorted by name. extended: O(log P + K)
+  - compat: differs: answers as valkey 9.1 does, except that a delivery count stops at 9223372036854775807 where valkey's wraps round to a negative number
 - `XRANGE key start end [COUNT count]` [readonly] — Return stream entries within an ID range.
   - complexity: O(log N + M) — a B-tree range descent, COUNT applied lazily
   - compat: full
 - `XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id [id ...]` [readonly,blocking] — Read new entries from one or more streams, optionally blocking.
   - complexity: O(S * (log N + M)) over S streams; '$' is O(1); the park is O(1)
-  - compat: differs: the '+' last-id form is not parsed — only explicit IDs and '$' are accepted
+  - compat: differs: answers as valkey 9.1 does; Redis 8.10's unbalanced-streams error also names '+' as an accepted ID
 - `XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]` [write,blocking] — Read stream entries as a consumer-group member, optionally blocking.
-  - complexity: '>' form: O(log N + U + M) — COUNT does NOT bound the scan, the entire undelivered tail is materialised first. Replay form: O(log P + K)
-  - compat: differs: COUNT is parsed but does not bound the '>' scan
+  - complexity: '>' form: O(log N + M log P) for M entries handed out. History form: O(log P + K log N) for K entries handed back again
+  - compat: full
 - `XREVRANGE key end start [COUNT count]` [readonly] — Return stream entries within an ID range, in reverse order.
   - complexity: O(log N + M)
   - compat: full
 - `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
   - complexity: O(log N)
   - compat: full
-- `XTRIM key MAXLEN|MINID [=|~] threshold` [write] — Trim a stream by length or minimum ID.
+- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]` [write] — Trim a stream by length or minimum ID.
   - complexity: O(R log N + N*F) for R evicted entries
-  - compat: differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
 
 ### geo
 
@@ -627,9 +627,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
   - complexity: O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range
   - compat: kevy-only: nearest is FT.SEARCH with LIMIT 0 0
-- `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
+- `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field] [PARTITION local|global] [SPLIT value]…` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
   - complexity: O(1) at the call; the build is asynchronous — each shard snapshots its matching keys (O(keys on that shard)) then backfills 2048 rows per tick. Per-row build cost: range/unique O(log N), text O(tokens), vector O(ef_construction * M * dim)
   - compat: kevy-only: nearest is RediSearch FT.CREATE — comparable declarative index-on-prefix, but RediSearch is a module (`redisearch.so`, auto-loaded in Redis 8 and running in the server's own process, not a separate index server) whose index is maintained asynchronously; kevy's catalog is part of the engine and the index is maintained in the write hook
+- `IDX.DESCRIBE name` [readonly,extension] — Read an index declaration back: prefix, kind, type, fields, stored values, options, the table that compiled it, and the IDX.CREATE that recreates it.
+  - complexity: O(declaration size), plus O(tables) compiles to name the owning table; at the origin — the catalog is process-global
+  - compat: kevy-only
 - `IDX.DROP name` [write,extension] — Drop a declared index (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size)
   - compat: kevy-only: nearest is FT.DROPINDEX
@@ -642,8 +645,8 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `IDX.QUERY name RANGE min max|EQ value [LIMIT n] [CURSOR c] [FILTER field RANGE min max|EQ value ...] [SORT field ASC|DESC] [DISTINCT field] [FACET field ...] [OFFSET n] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
   - complexity: Depends on the index kind. range: O(log N + limit). unique: O(log N + hits). full-text: O(sum of the posting lists), MaxScore-pruned. vector ANN: O(dim * (M log N + ef * M)) distance evaluations (HNSW). agg GROUPS: a bounded top-K with 1 to 3 fan-out rounds. HYBRID: both sub-queries at 4x depth, fused by RRF at the origin. COMPOSE: NOT limit-bounded — both leaves are materialised in full, because the result is key-ordered while a segment is value-ordered
   - compat: kevy-only: nearest is RediSearch FT.SEARCH, and for the HYBRID shape FT.HYBRID (Redis 8.4+, which fuses by RRF with the same default constant of 60) — genuinely comparable on two axes (our text index is BM25 over inverted segments, our vector index is HNSW, and RediSearch offers both). Differences: nothing to load, RediSearch being `redisearch.so` and auto-loaded since Redis 8; our BM25 statistics are per-shard, not global; and our query surface is a fixed grammar, not a DSL — no field boosting, no phrase or proximity search, no stemming, no aggregation pipeline
-- `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
-  - complexity: Vector indexes only (tombstone compaction). O(V_live * ef_construction * M * dim) distance evaluations, on every shard, synchronously — the most expensive verb in the extension surface
+- `IDX.REBUILD name` [write,extension] — Rebuild an index: a range or unique index packs its leaves, an ANN index compacts its tombstones, a global index samples its split points again. A text or agg index is refused.
+  - complexity: Depends on the index kind, on every shard, synchronously. range / unique: O(N) to pack the leaves. global: one sample of every shard's values, then the moved entries. ann: O(V_live * ef_construction * M * dim) distance evaluations — the most expensive verb in the extension surface
   - compat: kevy-only: no Redis analogue — RediSearch handles HNSW deletes internally and exposes no rebuild verb
 - `IDX.VERIFY name` [readonly,extension] — Verify an index. Scalar kinds re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked/missing (both audit directions); agg/text/ann answer their own sizing vocabulary (rows|docs|vectors, bytes, ...) and carry no row-keyed audit.
   - complexity: O(N) per shard — every held entry is re-read against its row and re-coerced, which is the point: it makes index drift falsifiable rather than merely asserted
@@ -651,7 +654,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### table
 
-- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ...] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
+- `TABLE.DECLARE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX col range|unique [VALUES col ...] [GLOBAL [SPLIT AT v ...]]] [ORDERPATH name ON col [DESC] [THEN col [DESC]] ... [GLOBAL [SPLIT AT 0xhex ...]]] [WINDOW col SPAN n BUCKET n] [AUTODECLARE n]` [write,extension] — Declare a relational table that compiles at declare time into named indexes (catalog mutation, sidecar-persisted).
   - complexity: O(declaration size) at the call; each compiled index then backfills like IDX.CREATE (2048 rows per tick per shard). The engine gains no query planner: queries name the compiled paths (`<table>.<col>`, `<table>.<orderpath>`) explicitly
   - compat: kevy-only: nearest is CREATE TABLE in an RDBMS — but this is a declaration compiler, not a schema enforcer: a row with a missing column is a row with an absent field (NULL semantics), never an error, and no SQL executes at query time
 - `TABLE.ENSURE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — TABLE.DECLARE's boot form: identical existing declaration answers +UNCHANGED, a different one is a named refusal saying which part differs — never a silent rebuild.
@@ -660,6 +663,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `TABLE.REPLACE name PREFIX prefix PK col COLUMN name i64|f64|str [COLUMN ...] [INDEX ...] [ORDERPATH ...] [WINDOW ...] [AUTODECLARE n]` [write,extension] — Drop and redeclare in one verb, rebuilding every compiled index from the rows. Named for its cost: a full backfill, asked for explicitly. A bad spec refuses BEFORE the old table drops.
   - complexity: the migration verb: spec changed, rebuild wanted
   - compat: kevy-only: nearest is DROP TABLE + CREATE TABLE, atomic against a bad new spec
+- `TABLE.DESCRIBE name` [readonly,extension] — Read a table declaration back: columns with types, indexes, order paths, window, and the TABLE.DECLARE that recreates it (auto-declared paths are listed but left out of it).
+  - complexity: O(declaration size) at the origin — the catalog is process-global
+  - compat: kevy-only: nearest is DESCRIBE / SHOW CREATE TABLE
 - `TABLE.DROP name` [write,extension] — Drop a declared table and its compiled indexes (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size + compiled indexes)
   - compat: kevy-only
@@ -675,6 +681,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')` [write,extension] — Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).
   - complexity: O(tree size) at the call. A materialized view builds lazily on the next tick (a full eval_tree plus an O(M log M) sort); a virtual view builds nothing, ever
   - compat: kevy-only: no Redis analogue. A view is neither a stored query nor a join — it is a named composition tree over declared indexes that stores membership and order only, never field values
+- `VIEW.DESCRIBE name` [readonly,extension] — Read a view declaration back: the composition tree, order, mode, hydration template, and the VIEW.CREATE that recreates it.
+  - complexity: O(declaration size) at the origin — the catalog is process-global
+  - compat: kevy-only: nearest is SHOW CREATE VIEW
 - `VIEW.DROP name` [write,extension] — Drop a declared view (catalog mutation, sidecar-persisted).
   - complexity: O(catalog size)
   - compat: kevy-only

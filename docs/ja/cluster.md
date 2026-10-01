@@ -42,7 +42,7 @@ kevyのクラスタ機能には独立した2つのレイヤがあります。**�
                   └─────────────────────────────────────────┘
 ```
 
-シャード`i`は常に`port_base + 1 + i`にbindします（`port_base`はTOMLで上書きできます）。メインポートは、クラスタを話さないクライアント向けにプロキシとしての挙動を保ちます。シャード別ポートは、間違った所有者にキーが届くと`-MOVED <slot> <host:port>`を返します。
+シャード`i`は`port_base + i`にbindし、`port_base`の既定値は`port + 1`です（TOMLで上書きできます）。メインポートは、クラスタを話さないクライアント向けにプロキシとしての挙動を保ちます。シャード別ポートは、間違った所有者にキーが届くと`-MOVED <slot> <host:port>`を返します。プロキシやNATの後ろに置く場合は、`announce_ip`と`announce_port_base`で、これらの応答にクライアントが実際に到達できるアドレスを書かせます。[deploy-behind-a-proxy.md](deploy-behind-a-proxy.md)を参照してください。
 
 キー空間全体を対象とするコマンド（`KEYS`、`SCAN`、`DBSIZE`、`FLUSHALL`）は、どのポートで実行してもキー空間全体を対象とし続けます。kevyが内部でファンアウトするので、クライアントが面倒を見る必要はありません。
 
@@ -55,7 +55,7 @@ port = 6004
 
 [cluster]
 enabled   = true
-# port_base = 6004   # 既定は `port`。シャードは port_base + 1 + i に存在。
+# port_base = 6005   # 最初のシャードのポート。既定は `port + 1`、シャード i は port_base + i
 ```
 
 CLI/環境変数での同等指定：
@@ -244,8 +244,10 @@ writer.set(b"app:billing:invoice:42", b"...")?;
 | ノブ | 意味 | デフォルト |
 |------|---------|---------|
 | `node_id` | このノードの安定識別子（32BまでのASCII。スコープ所有者と選挙が参照する） | 必須 |
-| `peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>`リスト | 必須 |
+| `peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]`リスト | 必須 |
 | `elect_port_base` | 選挙コントロールプレーンがbindするTCPポート（ノードごとに1リスナー） | `0` = クライアントポート + 200 |
+| `secure` | 選挙リンクを暗号化・認証する（[`docs/encrypted-links.md`](encrypted-links.md)） | `false` |
+| `peer_keys` | 各ノードの公開鍵、`["id=<鍵>", …]` | 空 |
 
 ### 手動でのrejoinリカバリ
 
@@ -307,9 +309,11 @@ TOMLのみです。レプリケーションのCLIフラグや環境変数はあ�
 | TOML | 意味 |
 |------|---------|
 | `[cluster] node_id` | このノードの安定識別子（32BまでのASCII）。 |
-| `[cluster] peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>`リスト（レガシーの2フィールド形式では両ポートが等しいとみなす）。 |
+| `[cluster] peers` | 全クラスタメンバーの`<node_id>@<host>:<elect_port>:<client_port>[:<repl_port_base>]`リスト（レガシーの2フィールド形式では両ポートが等しいとみなす）。 |
 | `[cluster] scopes` | `prefix=writer[\|fallback]`エントリ、カンマ区切り。 |
 | `[cluster] elect_port_base` | 選挙コントロールプレーンがbindするTCPポート。`0`（デフォルト）= `port` + 200。 |
+| `[cluster] secure` | 選挙リンクを暗号化・認証する。`false`（既定）は平文。 |
+| `[cluster] peer_keys` | 他の全ノードの `["id=<公開鍵>", …]`。`kevy keygen` が出力する。 |
 
 選挙のタイミング（ハートビート200ms、5秒の沈黙でDOWN、選挙タイムアウト3秒）は固定定数であり、configキーではありません。
 

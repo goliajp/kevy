@@ -7,23 +7,12 @@
 //! synchronous builds, typed API (`Tree` passed directly — no text
 //! grammar in-process).
 
-// The sidecar IS the catalog's persistence — `boot` reads it and a
-// directory without one "boots empty". So a rename that fails loses
-// the index definitions at the next start, after the command that
-// created them has already replied OK. That is a gap, not a
-// non-event, and it is written up as an open question rather than
-// silently accepted here: .claude/OPEN-QUESTIONS-6.4.md §3.
-#![expect(
-    clippy::let_underscore_must_use,
-    reason = "the catalog has no other home; see .claude/OPEN-QUESTIONS-6.4.md"
-)]
-
 use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
 use kevy_index::{
-    IndexValue, MaterializedSet, Tree, ViewCatalog, ViewMode, ViewSpec, eval_tree, key_in_tree,
+    IndexValue, MaterializedSet, Membership, SortOrder, Tree, ViewCatalog, ViewMode, ViewSpec,
 };
 
 use crate::ops_index::ShardSegs;
@@ -39,6 +28,9 @@ pub(crate) struct ViewReg {
 #[derive(Debug, Default)]
 pub(crate) struct ShardViews {
     pub(crate) version: u64,
+    /// The (view catalog, index list) versions the key directories were
+    /// last set for.
+    pub(crate) dirs_at: (u64, u64),
     pub(crate) views: Vec<ViewState>,
     /// `reserved_bytes` generation cache — see
     /// `ShardSegs::stats_dirty`; same contract, view half. Tier-only,
@@ -88,10 +80,23 @@ impl ShardViews {
 }
 
 /// One page of view members plus the resume cursor.
+///
+/// ```
+/// use kevy_embedded::*;
+/// let s = Store::open(Config::default())?;
+/// s.idx_create(b"by_pri", b"t:", b"pri", IndexValType::I64, IndexKind::Range)?;
+/// for (k, pri) in [(&b"t:1"[..], &b"5"[..]), (b"t:2", b"9")] {
+///     s.hset(k, &[(b"pri", pri)])?;
+/// }
+/// let all = ViewTree::Leaf(ViewLeaf::new(b"by_pri".to_vec(), IndexValue::I64(0), IndexValue::I64(99)));
+/// s.view_create(b"urgent", all, b"by_pri", SortOrder::Desc, ViewMode::Virtual)?;
+/// let (members, after): ViewPage = s.view_query(b"urgent", None, 1)?;
+/// assert_eq!(members, [(b"t:2".to_vec(), IndexValue::I64(9))]);
+/// let (rest, _) = s.view_query(b"urgent", after.as_ref(), 10)?; // resume past it
+/// assert_eq!(rest[0].0, b"t:1");
+/// # Ok::<(), kevy_embedded::KevyError>(())
+/// ```
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
-
-#[cfg(feature = "persist")]
-const SIDECAR: &str = "view-catalog.meta";
 
 impl Store {
     /// Declare a view (typed tree; `via` is not supported embedded —
@@ -101,18 +106,22 @@ impl Store {
         name: &[u8],
         tree: Tree,
         order_by: &[u8],
-        desc: bool,
+        order: SortOrder,
+        mode: ViewMode,
+    ) -> KevyResult<()> {
+        self.catalog_change(|| self.create_view(name, tree, order_by, order, mode))
+    }
+
+    fn create_view(
+        &self,
+        name: &[u8],
+        tree: Tree,
+        order_by: &[u8],
+        order: SortOrder,
         mode: ViewMode,
     ) -> KevyResult<()> {
         self.check_view_refs(&tree, order_by)?;
-        let spec = ViewSpec {
-            name: name.to_vec(),
-            tree,
-            order_by: order_by.to_vec(),
-            desc,
-            mode,
-            via: None,
-        };
+        let spec = ViewSpec::new(name, tree, order_by).with_order(order).with_mode(mode);
         {
             let mut g =
                 self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -120,12 +129,11 @@ impl Store {
             cat.create(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             *ver += 1;
         }
-        self.persist_view_sidecar();
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
+            sync_views(&self.views, &mut inner.view_segs, &mut inner.idx_segs);
         }
         Ok(())
     }
@@ -144,9 +152,10 @@ impl Store {
         Ok(())
     }
 
-    /// Drop a view; `false` if absent.
-    pub fn view_drop(&self, name: &[u8]) -> bool {
-        let hit = {
+    /// Drop a view; `false` if absent. Refused on a replica and after
+    /// [`Store::shutdown`], like every write.
+    pub fn view_drop(&self, name: &[u8]) -> KevyResult<bool> {
+        self.catalog_change(|| {
             let mut g =
                 self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (ver, cat) = &mut *g;
@@ -154,12 +163,8 @@ impl Store {
             if hit {
                 *ver += 1;
             }
-            hit
-        };
-        if hit {
-            self.persist_view_sidecar();
-        }
-        hit
+            Ok(hit)
+        })
     }
 
     /// Ordered page across shards (`after` resumes exclusively; DESC
@@ -178,7 +183,7 @@ impl Store {
             let mut g = lock_write(shard);
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
-            sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
+            sync_views(&self.views, &mut inner.view_segs, &mut inner.idx_segs);
             let Some(i) = inner.view_segs.views.iter().position(|v| v.spec.name == name) else {
                 continue;
             };
@@ -188,9 +193,9 @@ impl Store {
                 rebuild(&mut inner.view_segs.views[i], &inner.idx_segs);
             }
             let vs = &inner.view_segs.views[i];
-            desc = vs.spec.desc;
+            desc = vs.spec.order == SortOrder::Desc;
             match &vs.mat {
-                Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
+                Some(m) => all.extend(m.page(after, limit)),
                 None => stream_virtual(&vs.spec, &inner.idx_segs, after, limit, &mut all),
             }
         }
@@ -212,54 +217,28 @@ impl Store {
         g.1.iter().map(|s| (s.name.clone(), s.mode, s.tree.leaves())).collect()
     }
 
+    /// The declaration of the view named `name`, as the catalog holds it.
+    pub fn view_spec(&self, name: &[u8]) -> Option<kevy_index::ViewSpec> {
+        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.1.get(name).cloned()
+    }
+
     /// Summed member count across shards.
     pub fn view_count(&self, name: &[u8]) -> KevyResult<u64> {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)
     }
-
-    #[cfg(feature = "persist")]
-    fn persist_view_sidecar(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        let g = self.views.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tmp = dir.join("view-catalog.meta.tmp");
-        if std::fs::write(&tmp, g.1.to_sidecar()).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-        }
-    }
-
-    /// Without `persist` there is no data dir — no sidecar to write
-    /// or load; both halves are no-ops.
-    #[cfg(not(feature = "persist"))]
-    fn persist_view_sidecar(&self) {}
-
-    #[cfg(not(feature = "persist"))]
-    pub(crate) fn view_boot(&self) {}
-
-    /// Boot half — load the persisted view catalog.
-    #[cfg(feature = "persist")]
-    pub(crate) fn view_boot(&self) {
-        let Some(dir) = &self.config.data_dir else { return };
-        if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
-            && let Some(cat) = ViewCatalog::from_sidecar(&text)
-            && !cat.is_empty()
-        {
-            let mut g =
-                self.views.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-            *g = (g.0 + 1, cat);
-        }
-    }
 }
 
 fn resolver<'a>(segs: &'a ShardSegs) -> impl Fn(&[u8]) -> Option<&'a kevy_index::Segment> {
-    move |name: &[u8]| segs.segs.iter().find(|(s, _)| s.name == name).map(|(_, seg)| seg)
+    move |name: &[u8]| segs.segs.iter().find(|(s, _)| s.name() == name).map(|(_, seg)| seg)
 }
 
 fn eval_shard(spec: &ViewSpec, segs: &ShardSegs) -> Vec<(IndexValue, Vec<u8>)> {
     let r = resolver(segs);
-    let members = eval_tree(&spec.tree, &&r);
+    let members = spec.tree.eval(&&r);
     members
         .into_iter()
-        .filter_map(|k| r(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k)))
+        .filter_map(|k| r(&spec.order_by).and_then(|s| s.key_dir()?.get(&k)).map(|v| (v, k)))
         .collect()
 }
 
@@ -275,10 +254,11 @@ fn stream_virtual(
 ) {
     let r = resolver(segs);
     if let Some(order_seg) = r(&spec.order_by) {
-        let cursor = after.map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
+        let cursor = after.map(|(v, k)| kevy_index::Cursor::new(v.clone(), k.clone()));
         let mut got = 0usize;
-        for (v, k) in order_seg.scan(cursor.as_ref(), spec.desc) {
-            if key_in_tree(&spec.tree, k, &&r) {
+        let mut scan = order_seg.scan(cursor.as_ref(), spec.order);
+        while let Some((v, k)) = scan.next_entry() {
+            if spec.tree.contains(k, &&r) {
                 all.push((v.clone(), k.to_vec()));
                 got += 1;
                 if got == limit {
@@ -301,21 +281,34 @@ fn rebuild(vs: &mut ViewState, segs: &ShardSegs) {
     if let ViewMode::Materialized { top_k } = spec.mode
         && top_k > 0
     {
-        if spec.desc {
+        if spec.order == SortOrder::Desc {
             rows.reverse();
         }
         rows.truncate((top_k + top_k / 4) as usize);
     }
     for (v, k) in rows {
-        mat.apply(&k, true, Some(v));
+        mat.apply(&k, Membership::Member(Some(v)));
     }
     vs.needs_rebuild = false;
 }
 
 /// Reconcile with the catalog (under the shard lock).
-pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
+pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &mut ShardSegs) {
     let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ver, cat) = &*g;
+    // a view reads its indexes by key: exactly those keep a key directory
+    if sv.dirs_at != (*ver, segs.version) {
+        let mut read: Vec<Vec<u8>> = Vec::new();
+        for v in cat.iter() {
+            read.push(v.order_by.clone());
+            v.tree.each_leaf(&mut |l| read.push(l.index.clone()));
+        }
+        for (spec, seg) in &mut segs.segs {
+            seg.set_key_dir(read.iter().any(|n| n.as_slice() == spec.name()));
+        }
+        sv.dirs_at = (*ver, segs.version);
+    }
+    let segs = &*segs;
     if sv.version == *ver {
         return;
     }
@@ -325,11 +318,12 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
         match sv.views.iter().position(|v| v.spec == *spec) {
             Some(i) => next.push(sv.views.swap_remove(i)),
             None => {
+                // only a materialized view keeps a set; every other mode reads at query time
                 let mat = match spec.mode {
-                    ViewMode::Virtual => None,
                     ViewMode::Materialized { top_k } => {
-                        Some(MaterializedSet::new(top_k, spec.desc))
+                        Some(MaterializedSet::new(top_k, spec.order))
                     }
+                    _ => None,
                 };
                 let mut vs = ViewState { spec: spec.clone(), needs_rebuild: mat.is_some(), mat };
                 if vs.needs_rebuild {
@@ -344,7 +338,7 @@ pub(crate) fn sync_views(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs) {
 }
 
 /// Write hook — call AFTER `ops_index::on_commit` (same shard lock).
-pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, parts: &[&[u8]]) {
+pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &mut ShardSegs, parts: &[&[u8]]) {
     {
         let g = reg.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.1.is_empty() {
@@ -352,6 +346,7 @@ pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, pa
         }
     }
     sync_views(reg, sv, segs);
+    let segs = &*segs;
     let verb = parts.first().copied().unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
         for vs in &mut sv.views {
@@ -370,9 +365,12 @@ pub(crate) fn on_commit(reg: &ViewReg, sv: &mut ShardViews, segs: &ShardSegs, pa
             let Some(mat) = &mut vs.mat else { continue };
             touched = true;
             let r = resolver(segs);
-            let member = key_in_tree(&vs.spec.tree, key, &&r);
-            let order = r(&vs.spec.order_by).and_then(|s| s.verify_entry(key)).cloned();
-            if mat.apply(key, member, order) {
+            let membership = if vs.spec.tree.contains(key, &&r) {
+                Membership::Member(r(&vs.spec.order_by).and_then(|s| s.key_dir()?.get(key)))
+            } else {
+                Membership::NonMember
+            };
+            if mat.apply(key, membership) {
                 vs.needs_rebuild = true;
             }
         }

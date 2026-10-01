@@ -4,9 +4,10 @@ use super::*;
 use crate::catalog::{IndexKind, ValType};
 use crate::table_wire::{TABLE_DECLARE_USAGE, parse_table_declare};
 
+/// The declaration, or its refusal as the wire words it.
 fn declare(parts: &[&str]) -> Result<TableSpec, String> {
     let argv: Vec<&[u8]> = parts.iter().map(|s| s.as_bytes()).collect();
-    parse_table_declare(&argv)
+    parse_table_declare(&argv).map_err(|e| e.to_wire())
 }
 
 const USER: &[&str] = &[
@@ -52,7 +53,7 @@ fn full_declare_parses_and_compiles() {
     assert_eq!(spec.columns.len(), 4);
     assert_eq!(spec.indexes.len(), 2);
     assert_eq!(spec.orderpaths.len(), 1);
-    let compiled = compile_table(&spec).expect("valid spec compiles");
+    let compiled = spec.compile().expect("valid spec compiles");
     assert_eq!(compiled.len(), 3);
     assert_eq!(compiled[0].name, b"user.age".to_vec());
     assert_eq!(compiled[0].ty, ValType::I64);
@@ -68,12 +69,12 @@ fn full_declare_parses_and_compiles() {
     let cols = op.composite.as_ref().expect("composite");
     assert_eq!(cols.len(), 2);
     assert_eq!(
-        (cols[0].name.as_slice(), cols[0].ty, cols[0].desc),
-        (b"dept".as_slice(), ValType::Str, false)
+        (cols[0].name.as_slice(), cols[0].ty, cols[0].order),
+        (b"dept".as_slice(), ValType::Str, kevy_text::SortOrder::Asc)
     );
     assert_eq!(
-        (cols[1].name.as_slice(), cols[1].ty, cols[1].desc),
-        (b"age".as_slice(), ValType::I64, true)
+        (cols[1].name.as_slice(), cols[1].ty, cols[1].order),
+        (b"age".as_slice(), ValType::I64, kevy_text::SortOrder::Desc)
     );
     // Every compiled spec is admissible as-is.
     let mut cat = crate::Catalog::new();
@@ -295,7 +296,7 @@ fn catalog_lifecycle_and_caps() {
     let spec = declare(USER).expect("parses");
     let mut c = TableCatalog::new();
     c.create(spec.clone()).expect("creates");
-    assert_eq!(c.create(spec.clone()).unwrap_err(), "ERR table already exists");
+    assert_eq!(c.create(spec.clone()).unwrap_err().to_wire(), "ERR table already exists");
     assert!(c.get(b"user").is_some());
     assert_eq!(c.len(), 1);
     assert!(c.drop_table(b"user"));
@@ -308,7 +309,7 @@ fn catalog_lifecycle_and_caps() {
     }
     let mut over = spec.clone();
     over.name = b"over".to_vec();
-    assert_eq!(c.create(over).unwrap_err(), "ERR table limit reached (64)");
+    assert_eq!(c.create(over).unwrap_err().to_wire(), "ERR table limit reached (64)");
 }
 
 #[test]
@@ -336,7 +337,7 @@ mod window {
         let base = "TABLE.DECLARE ev PREFIX ev: PK id COLUMN id str COLUMN at i64 COLUMN note str";
         let full = format!("{base} {extra}");
         let argv: Vec<&[u8]> = full.split(' ').map(str::as_bytes).collect();
-        parse_table_declare(&argv)
+        parse_table_declare(&argv).map_err(|e| e.to_wire())
     }
 
     #[test]
