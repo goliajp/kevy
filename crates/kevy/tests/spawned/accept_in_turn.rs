@@ -1,7 +1,6 @@
 //! Connections to the shared port go to the shard holding the fewest, not
 //! where the kernel's hash of each connection's ports sends them: 48
-//! connections on four shards are 12 on each, give or take the readiness
-//! probe's own connection while it is still being closed.
+//! connections on four shards are 12 on each.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -40,13 +39,21 @@ fn shared_port_connections_are_spread_evenly_over_the_shards() {
         .spawn()
         .expect("spawn kevy");
     kevy_testnet::assert_listening(port, "kevy");
-    let mut conns: Vec<TcpStream> = (0..48)
-        .map(|_| {
-            let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            s
-        })
-        .collect();
+    let open = || {
+        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s
+    };
+    // the readiness probe's connection counts on its shard until the server
+    // has seen it close; wait for that, or its shard takes one fewer
+    let mut first = open();
+    for _ in 0..500 {
+        if call(&mut first, &["CLIENT", "LIST"]).matches("id=").count() == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut conns: Vec<TcpStream> = std::iter::once(first).chain((1..48).map(|_| open())).collect();
     // every connection serves, wherever it was passed to
     for (i, s) in conns.iter_mut().enumerate() {
         assert_eq!(call(s, &["SET", &format!("k{i}"), "v"]), "+OK\r\n");
@@ -59,6 +66,5 @@ fn shared_port_connections_are_spread_evenly_over_the_shards() {
     }
     let _ = server.kill();
     let _ = server.wait();
-    let (lo, hi) = (per_shard.iter().min().unwrap(), per_shard.iter().max().unwrap());
-    assert!(hi - lo <= 1 && per_shard.iter().sum::<usize>() == 48, "{per_shard:?} {list}");
+    assert_eq!(per_shard, [12; SHARDS], "{list}");
 }
