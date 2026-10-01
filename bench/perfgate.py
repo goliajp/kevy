@@ -104,6 +104,7 @@ def stop_all(procs):
 
 def observe(angle, binary, env, topo, rundir, windows, secs):
     """One side of one angle: fresh server, warm, load, windows."""
+    topo = ang.topology(angle, topo)
     srv = Server(binary, env, topo, ang.cluster(angle), rundir)
     gens = []
     try:
@@ -185,9 +186,18 @@ def resolve(specs, build_missing):
     return out
 
 
+# Batch jobs on the bench boxes step aside once a benchmark holds the lock:
+# a watcher sees it within 15 s and stops them. The box gets this long to
+# go quiet before the run is refused.
+QUIET_WAIT_SECS = 60
+
+
 def preflight(topo):
-    idle = pm.idle_fraction()
     need = float(os.environ.get("PERFGATE_IDLE_MIN", CONFIG["idle_min"]))
+    deadline = time.time() + QUIET_WAIT_SECS
+    idle = pm.idle_fraction()
+    while idle < need and time.time() < deadline:
+        idle = pm.idle_fraction()
     print(f"# box {topo['box']}: idle {idle:.1%} before start, load average "
           f"{os.getloadavg()[0]:.2f}", flush=True)
     if idle < need:

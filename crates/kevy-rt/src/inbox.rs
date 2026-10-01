@@ -361,6 +361,7 @@ impl<C: Commands> Shard<C> {
                     // Fire-and-forget batched pub/sub delivery; appended
                     // subscriber output is flushed via `flush_dirty` (epoll)
                     // or the arm/write loop (io_uring).
+                    Inbound::Adopt { sock, unix } => self.balance.adopt(sock, unix),
                     Inbound::DeliverPublish(batch) => {
                         for m in &batch {
                             self.deliver_publish(&m.0, &m.1);

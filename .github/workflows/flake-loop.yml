@@ -1,0 +1,76 @@
+# How often does one test fail, on one runner? Built once, run N times,
+# every failing iteration's output kept. Manual, because it answers a
+# question about one test rather than gating a commit.
+name: flake loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "cargo package"
+        required: true
+      test:
+        description: "integration test target (--test)"
+        required: true
+      filter:
+        description: "test name filter"
+        required: false
+        default: ""
+      runner:
+        description: "runner label"
+        required: false
+        default: "ubuntu-latest"
+      runs:
+        description: "iterations"
+        required: false
+        default: "200"
+
+jobs:
+  loop:
+    name: ${{ inputs.package }}/${{ inputs.test }} ${{ inputs.filter }} on ${{ inputs.runner }}, ${{ inputs.runs }} times
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: flake-loop-${{ inputs.package }}-${{ inputs.test }}
+      # Rebuilding between iterations would measure the compiler too.
+      - name: Build once
+        env:
+          PKG: ${{ inputs.package }}
+          TEST: ${{ inputs.test }}
+        run: cargo test -p "$PKG" --test "$TEST" --no-run
+      - name: Run it
+        env:
+          PKG: ${{ inputs.package }}
+          TEST: ${{ inputs.test }}
+          FILTER: ${{ inputs.filter }}
+          N: ${{ inputs.runs }}
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/loop
+          f=0
+          for i in $(seq 1 "$N"); do
+            if ! cargo test -q -p "$PKG" --test "$TEST" -- $FILTER >"/tmp/loop/$i.log" 2>&1; then
+              f=$((f + 1))
+              echo "iteration $i FAILED"
+              tail -40 "/tmp/loop/$i.log"
+            else
+              rm "/tmp/loop/$i.log"
+            fi
+          done
+          echo "### $PKG/$TEST $FILTER: $f failed of $N" >> "$GITHUB_STEP_SUMMARY"
+          echo "failed=$f of $N"
+          [ "$f" -eq 0 ]
+      - name: Keep the failing iterations
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-loop-logs
+          path: /tmp/loop/
+          if-no-files-found: ignore
