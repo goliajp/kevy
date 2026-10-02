@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 kevy-bytes = { path = "../kevy-bytes", version = "7.0.0" }
+kevy-num = { path = "../kevy-num", version = "7.0.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench", version = "7.0.0" }
