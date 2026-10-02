@@ -191,3 +191,20 @@ fn the_field_expiry_reads_agree_with_the_general_hash() {
     assert_eq!(packed, g.hexpire_time(b"row:1", &fields).unwrap());
     assert_eq!(packed, [at as i64, -2, -1, -2]);
 }
+
+// a deadline judged against a given instant: one after it sets, one at it
+// deletes, on a packed row as on a general hash
+#[test]
+fn field_ttl_judged_as_of_an_instant() {
+    let (mut p, mut g, _) = both();
+    let now = kevy_store::now_unix_ms() - 5;
+    let cond = kevy_store::HExpireCond::Always;
+    let set = |s: &mut kevy_store::Store| s.hexpire_as_of(b"row:1", &[b"id"], now + 1, now, cond);
+    assert_eq!(set(&mut p).unwrap(), [1]);
+    assert_eq!(set(&mut g).unwrap(), [1]);
+    let gone = |s: &mut kevy_store::Store| s.hexpire_as_of(b"row:1", &[b"dept"], now, now, cond);
+    assert_eq!(gone(&mut p).unwrap(), [2]);
+    assert_eq!(gone(&mut g).unwrap(), [2]);
+    assert_eq!(p.hget(b"row:1", b"dept").unwrap(), None);
+    assert_eq!(g.hget(b"row:1", b"dept").unwrap(), None);
+}
