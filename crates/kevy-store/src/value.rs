@@ -282,7 +282,9 @@ pub(crate) const BTREE_SLOT_BYTES: u64 = 40;
 /// header + Box allocation, ~1 node per 10 keys) and the internal nodes'
 /// child-pointer arrays add ≈8 B more. 64 errs slightly high (allocator
 /// size-class rounding), keeping `used_memory` a conservative upper bound —
-/// same policy as [`ENTRY_OVERHEAD`].
+/// same policy as [`ENTRY_OVERHEAD`]. A big zset's score index bounds the
+/// same way: a leaf of 13 slots is 440 B with its `Arc` counts, ≈ 49 B per
+/// member at the ~69% fill random inserts leave, its inner nodes ≈ 4 B more.
 pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
 /// A keyspace slot's amortised cost: the inline 24-byte `SmallBytes` key
 /// cell, the `Entry` and a control byte, over the table's load. The tiered
