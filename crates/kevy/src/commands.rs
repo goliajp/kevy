@@ -456,6 +456,17 @@ impl Commands for KevyCommands {
         cmd_block_serve::block_restore_argv(store, kind, key)
     }
 
+    fn block_restore_for<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        kind: BlockKind,
+        serve_argv: &A,
+        key: &[u8],
+    ) -> Option<Argv> {
+        crate::cmd_block_mpop::restore(store, kind, serve_argv, key)
+            .or_else(|| cmd_block_serve::block_restore_argv(store, kind, key))
+    }
+
     fn block_ready<A: ArgvView + ?Sized>(
         &self,
         store: &mut Store,

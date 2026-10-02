@@ -79,6 +79,31 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
     proto_v3: bool,
     out: &mut Vec<u8>,
 ) {
+    if proto_v3 {
+        return dispatch_verb_v3(ctx, store, args, verb, out);
+    }
+    if verb == VERB_GET {
+        tier1_get(store, args, out);
+    } else if verb == VERB_SET {
+        if !scope_redirect(ctx, args, out) {
+            tier1_set(store, args, out);
+        }
+    } else {
+        dispatch_with_proto(ctx, store, args, out, false);
+    }
+}
+
+/// [`dispatch_verb_into`] for a RESP3 conn, kept out of line so the RESP2
+/// path carries none of its work.
+#[cold]
+#[inline(never)]
+fn dispatch_verb_v3<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    args: &A,
+    verb: VerbId,
+    out: &mut Vec<u8>,
+) {
     let start = out.len();
     if verb == VERB_GET {
         tier1_get(store, args, out);
@@ -87,11 +112,9 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
             tier1_set(store, args, out);
         }
     } else {
-        dispatch_with_proto(ctx, store, args, out, proto_v3);
+        dispatch_with_proto(ctx, store, args, out, true);
     }
-    if proto_v3 {
-        resp3_tail(out, start);
-    }
+    resp3_tail(out, start);
 }
 
 /// Shared body: parse verb, OOM-precheck, try the (V3-or-V2) override

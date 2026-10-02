@@ -111,7 +111,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             }
             Effect::Write
         }
-        b"RPOPLPUSH" | b"BRPOPLPUSH" | b"LMOVE" | b"LPOS" => {
+        b"RPOPLPUSH" | b"BRPOPLPUSH" | b"LMOVE" | b"BLMOVE" | b"LPOS" => {
             return list_move::exec(cmd, store, args, out);
         }
         _ => return None,
@@ -181,8 +181,8 @@ fn blocking_pop<A: ArgvView + ?Sized>(
         wrong_args(out, if tail { "brpop" } else { "blpop" });
         return Effect::Unchanged;
     }
-    if !list_move::valid_timeout(&args[args.len() - 1]) {
-        encode_error(out, "ERR timeout is not a float or out of range");
+    if let Some(e) = list_move::timeout_refusal(&args[args.len() - 1]) {
+        encode_error(out, e);
         return Effect::Unchanged;
     }
     if args.len() > 3 {

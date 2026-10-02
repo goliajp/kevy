@@ -181,7 +181,10 @@ check ZMSCORE zp a nope e
 check ZMSCORE nokey a b
 check ZMSCORE zp
 checku ZRANDMEMBER zp 10
-checku ZRANDMEMBER zp 10 WITHSCORES
+# few enough lines that valkey-cli does not pad the indexes, which the
+# unordered compare strips
+check ZADD zp3 1 a 2 b 3 c
+checku ZRANDMEMBER zp3 5 WITHSCORES
 check ZRANDMEMBER nokey
 check ZRANDMEMBER nokey 3 WITHSCORES
 check ZRANDMEMBER zp 0
@@ -205,6 +208,60 @@ check ZPOPMAX zstr
 check ZREVRANK zstr a
 check ZMSCORE zstr a
 check ZRANDMEMBER zstr
+# multi-key pops (the blocking forms only where data is there or the
+# timeout is short; ZMPOP's keys span shards on a sharded kevy)
+check ZADD zm1 1 a 2 b 3 c
+check ZADD zm2 5 x
+check RPUSH lm1 a b c d
+check ZMPOP 2 nokey zm1 MIN
+check ZMPOP 2 nokey zm1 MAX COUNT 2
+check ZMPOP 1 zm1 MIN COUNT 10
+check ZMPOP 2 nokey nokey2 MIN
+check ZMPOP 0 zm1 MIN
+check ZMPOP x zm1 MIN
+check ZMPOP 3 zm1 MIN
+check ZMPOP 1 zm2 BAD
+check ZMPOP 1 zm2 MIN COUNT 0
+check ZMPOP 1 zm2 MIN COUNT
+check ZMPOP 1 zm2 MIN COUNT 1 COUNT 1
+check ZMPOP 2 nokey lm1 MIN
+check LMPOP 2 nokey lm1 LEFT
+check LMPOP 1 lm1 RIGHT COUNT 2
+check LMPOP 1 lm1 LEFT COUNT 5
+check LMPOP 1 lm1 LEFT
+check LMPOP 1 nokey MIDDLE
+check LMPOP 1 nokey LEFT COUNT 0
+check ZADD zb 1 a 2 b
+check BZPOPMAX zb 0
+check BZPOPMAX nokey zb 0
+check BZPOPMAX nokey 0.05
+check BZPOPMAX nokey x
+check BZPOPMAX nokey -1
+check ZADD zb2 5 x 6 y 7 z
+check BZMPOP 0 1 zb2 MAX COUNT 2
+check BZMPOP 0 2 nokey zb2 MIN
+check BZMPOP 0.05 1 nokey MIN
+check BZMPOP -1 1 zb2 MIN
+check BZMPOP 0 0 zb2 MIN
+check BZMPOP 0 2 zb2 MIN
+check RPUSH lb 1 2 3
+check BLMPOP 0 1 lb RIGHT COUNT 2
+check BLMPOP 0 2 nokey lb LEFT
+check BLMPOP 0.05 1 lb LEFT
+check BLMPOP 0 1 lb UP
+check SET bstr v
+check BLMPOP 0 1 bstr LEFT
+check BZMPOP 0 1 bstr MIN
+check RPUSH bsrc a b
+check BLMOVE bsrc bdst LEFT RIGHT 0
+check BLMOVE bsrc bdst RIGHT LEFT 0
+check BLMOVE bsrc bdst LEFT RIGHT 0.05
+check BLMOVE bsrc bdst UP RIGHT 0
+check BLMOVE bsrc bdst LEFT RIGHT -1
+check BLMOVE bstr bdst LEFT RIGHT 0
+check LRANGE bdst 0 -1
+check BRPOPLPUSH nokey bdst 0.05
+check BLPOP nokey -1
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

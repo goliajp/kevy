@@ -9,7 +9,7 @@ use crate::reply::{
     ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, Scores, emit_zrange, fmt_score, scan_page, store_err,
     wrong_args,
 };
-use crate::{Effect, changed, list_move};
+use crate::{Effect, changed};
 
 const ERR_MIN_MAX: &str = "ERR min or max is not a float";
 
@@ -39,7 +39,6 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             Effect::Read
         }
         b"ZPOPMIN.BELOW" => zpopmin_below(store, args, out),
-        b"BZPOPMIN" => bzpopmin(store, args, out),
         b"ZSCAN" => {
             zscan(store, args, out);
             Effect::Read
@@ -249,36 +248,6 @@ fn zpopmin_below<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Ve
         return Effect::Unchanged;
     };
     popped(store.zpopmin_below(&args[1], below, count), out)
-}
-
-/// `BZPOPMIN key [key …] timeout`. One key with members pops one and
-/// answers `[key, member, score]`; otherwise nothing is written and a
-/// caller that can block parks the connection, as with `BLPOP`.
-fn bzpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
-    if args.len() < 3 {
-        wrong_args(out, "bzpopmin");
-        return Effect::Unchanged;
-    }
-    if !list_move::valid_timeout(&args[args.len() - 1]) {
-        encode_error(out, "ERR timeout is not a float or out of range");
-        return Effect::Unchanged;
-    }
-    if args.len() > 3 {
-        return Effect::Unchanged;
-    }
-    match store.zpopmin(&args[1], 1) {
-        Err(e) => store_err(out, e),
-        Ok(items) => {
-            if let Some((member, score)) = items.into_iter().next() {
-                encode_array_len(out, 3);
-                encode_bulk(out, &args[1]);
-                encode_bulk(out, &member);
-                encode_bulk(out, &fmt_score(score));
-                return Effect::Write;
-            }
-        }
-    }
-    Effect::Unchanged
 }
 
 /// `ZSCAN key cursor [MATCH pattern] [COUNT n]` — every member in one

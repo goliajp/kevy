@@ -31,14 +31,15 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "brpoplpush");
                 return Some(Effect::Unchanged);
             }
-            if !valid_timeout(&args[3]) {
-                encode_error(out, "ERR timeout is not a float or out of range");
+            if let Some(e) = timeout_refusal(&args[3]) {
+                encode_error(out, e);
                 return Some(Effect::Unchanged);
             }
             // an empty source writes nothing, so a caller that can block parks
             moved(store.rpoplpush(&args[1], &args[2]), false, out)
         }
         b"LMOVE" => lmove(store, args, out),
+        b"BLMOVE" => blmove(store, args, out),
         b"LPOS" => {
             lpos(store, args, out);
             Effect::Read
@@ -47,12 +48,14 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
     })
 }
 
-/// A blocking timeout: a finite, non-negative number of seconds.
-pub(crate) fn valid_timeout(b: &[u8]) -> bool {
-    std::str::from_utf8(b)
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .is_some_and(|f| f.is_finite() && f >= 0.0)
+/// Why a blocking timeout is refused; `None` for a finite, non-negative
+/// number of seconds.
+pub(crate) fn timeout_refusal(b: &[u8]) -> Option<&'static str> {
+    match std::str::from_utf8(b).ok().and_then(|s| s.parse::<f64>().ok()) {
+        Some(f) if f.is_finite() && f >= 0.0 => None,
+        Some(f) if f < 0.0 => Some("ERR timeout is negative"),
+        _ => Some("ERR timeout is not a float or out of range"),
+    }
 }
 
 /// The reply to a pop-and-push: the moved element, or nothing to move
@@ -101,6 +104,25 @@ fn lmove<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -
         return Effect::Unchanged;
     };
     moved(store.lmove(&args[1], &args[2], from, to), true, out)
+}
+
+/// `BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout`: `LMOVE`,
+/// except that an empty source writes nothing, so a caller that can block
+/// parks.
+fn blmove<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
+    if args.len() != 6 {
+        wrong_args(out, "blmove");
+        return Effect::Unchanged;
+    }
+    let (Some(from), Some(to)) = (side(&args[3]), side(&args[4])) else {
+        encode_error(out, ERR_SYNTAX);
+        return Effect::Unchanged;
+    };
+    if let Some(e) = timeout_refusal(&args[5]) {
+        encode_error(out, e);
+        return Effect::Unchanged;
+    }
+    moved(store.lmove(&args[1], &args[2], from, to), false, out)
 }
 
 /// `LPOS key element [RANK n] [COUNT n] [MAXLEN n]`.

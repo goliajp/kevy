@@ -32,29 +32,14 @@ pub(crate) fn unix_now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Emit the RESP nil reply that a timed-out blocking command returns.
-/// Shape depends on both proto and kind:
-/// - RESP3: `_\r\n` (the null type) for all kinds.
-/// - RESP2 `BLPOP` / `BRPOP` / `XREAD` / `XREADGROUP`: the null array
-///   `*-1\r\n`, as a Redis server answers.
-pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: RespVersion) {
-    match (proto, kind) {
-        (RespVersion::V3, _) => out.extend_from_slice(b"_\r\n"),
-        (
-            RespVersion::V2,
-            BlockKind::Blpop
-            | BlockKind::Brpop
-            | BlockKind::Bzpopmin
-            | BlockKind::XReadBlock
-            | BlockKind::XReadGroupBlock,
-        ) => {
-            out.extend_from_slice(b"*-1\r\n");
-        }
-        // BRPOPLPUSH on timeout returns nil bulk (the would-be moved
-        // element).
-        (RespVersion::V2, BlockKind::Brpoplpush) => {
-            out.extend_from_slice(b"$-1\r\n");
-        }
+/// Emit the RESP nil reply that a timed-out blocking command returns:
+/// RESP3's null `_`, and under RESP2 the null array `*-1` for every kind —
+/// the moves (`BRPOPLPUSH`, `BLMOVE`) included, whose served reply is a
+/// bulk: Redis answers every blocking timeout the same way.
+pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, proto: RespVersion) {
+    match proto {
+        RespVersion::V3 => out.extend_from_slice(b"_\r\n"),
+        _ => out.extend_from_slice(b"*-1\r\n"),
     }
 }
 
@@ -143,6 +128,48 @@ pub enum BlockKind {
     /// assert!(!is_group_read(BlockKind::XReadBlock));
     /// ```
     XReadGroupBlock,
+    /// `BZPOPMAX key [key ...] timeout` — `BZPOPMIN` from the top.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// let hint = BlockHint::Block { kind: BlockKind::Bzpopmax, keys: vec![b"top".to_vec()], timeout_ms: 0 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::Bzpopmax, .. }));
+    /// ```
+    Bzpopmax,
+    /// `BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT n]` — wait
+    /// for one of the sorted sets, then pop up to `n` from one end. The
+    /// keys start at argument 3.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// let keys = vec![b"a".to_vec(), b"b".to_vec()];
+    /// let hint = BlockHint::Block { kind: BlockKind::Bzmpop, keys, timeout_ms: 250 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::Bzmpop, .. }));
+    /// ```
+    Bzmpop,
+    /// `BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]` — the
+    /// list form of `BZMPOP`.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// let hint = BlockHint::Block { kind: BlockKind::Blmpop, keys: vec![b"q".to_vec()], timeout_ms: 0 };
+    /// assert!(matches!(hint, BlockHint::Block { kind: BlockKind::Blmpop, .. }));
+    /// ```
+    Blmpop,
+    /// `BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout` — the
+    /// general `BRPOPLPUSH`: parks on `source`, then moves one element
+    /// between the named ends.
+    ///
+    /// ```
+    /// use kevy_rt::{BlockHint, BlockKind};
+    ///
+    /// let hint = BlockHint::Block { kind: BlockKind::Blmove, keys: vec![b"src".to_vec()], timeout_ms: 0 };
+    /// assert!(matches!(hint, BlockHint::Block { ref keys, .. } if keys == &[b"src".to_vec()]));
+    /// ```
+    Blmove,
 }
 
 /// How a command wants to block, if at all. Returned by
@@ -378,7 +405,7 @@ impl<C: Commands> Shard<C> {
                 continue;
             };
             conn.blocked = false;
-            encode_block_timeout(&mut conn.output, w.kind, w.proto);
+            encode_block_timeout(&mut conn.output, w.proto);
             // The parked command's seq was never retired: `try_inline_local`
             // returns early on the park-on-miss branch WITHOUT bumping
             // `next_emit`, precisely because the reply is deferred to here.

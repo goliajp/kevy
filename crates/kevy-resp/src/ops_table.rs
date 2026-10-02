@@ -291,6 +291,9 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("LINSERT",      WR, GROW, Some(N::List),            None,    SERVER | ESTORE | REPLAY),
     op("LLEN",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
+    op("BLMOVE",       WR, GROW, None,            None,    SERVER | REPLAY),
+    op("LMPOP",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    op("BLMPOP",       WR, NG,   None,            None,    SERVER | REPLAY),
     op("LPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LPOS",         RD, NG,   None,            None,    SERVER),
     op("LPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
@@ -318,6 +321,10 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
     op("BZPOPMIN",     WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BZPOPMAX",     WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BZMPOP",       WR, NG,   None,            None,    SERVER | REPLAY),
+    // the multi-key pops record what they took (ZREM / LPOP / RPOP)
+    op("ZMPOP",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),

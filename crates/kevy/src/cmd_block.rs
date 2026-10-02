@@ -33,6 +33,10 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) 
         // (`key [key ...] timeout`), so the same parser applies — only the
         // BlockKind discriminator (and downstream serve / reply shape) differ.
         b"BZPOPMIN" => blpop_hint(BlockKind::Bzpopmin, args),
+        b"BZPOPMAX" => blpop_hint(BlockKind::Bzpopmax, args),
+        b"BZMPOP" => mpop_hint(BlockKind::Bzmpop, args),
+        b"BLMPOP" => mpop_hint(BlockKind::Blmpop, args),
+        b"BLMOVE" => blmove_hint(args),
         // BRPOPLPUSH src dst timeout — single-key park on `src`.
         b"BRPOPLPUSH" => brpoplpush_hint(args),
         b"XREAD" => xread_block_hint(args),
@@ -66,6 +70,48 @@ fn brpoplpush_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
         keys: vec![args[1].to_vec()],
         timeout_ms: (secs * 1000.0) as u64,
     }
+}
+
+/// `BLMOVE source destination from to timeout` — parks on `source`. A
+/// cross-shard move parks before its command runs, so a malformed one must
+/// get no hint here or its error would never be answered.
+fn blmove_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
+    let side = |a: &[u8]| a.eq_ignore_ascii_case(b"LEFT") || a.eq_ignore_ascii_case(b"RIGHT");
+    if args.len() != 6 || !side(&args[3]) || !side(&args[4]) {
+        return BlockHint::None;
+    }
+    match timeout_ms(&args[5]) {
+        Some(timeout_ms) => {
+            BlockHint::Block { kind: BlockKind::Blmove, keys: vec![args[1].to_vec()], timeout_ms }
+        }
+        None => BlockHint::None,
+    }
+}
+
+/// `BZMPOP` / `BLMPOP timeout numkeys key… end [COUNT n]` — every key, in
+/// request order. Anything malformed is the command's own error to answer.
+fn mpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
+    if args.len() < 5 {
+        return BlockHint::None;
+    }
+    let parsed = if kind == BlockKind::Bzmpop {
+        kevy_verbs::mpop::parse_zmpop(args, 2)
+    } else {
+        kevy_verbs::mpop::parse_lmpop(args, 2)
+    };
+    match (parsed, timeout_ms(&args[1])) {
+        (Ok(p), Some(timeout_ms)) => {
+            let keys = (3..3 + p.numkeys).map(|i| args[i].to_vec()).collect();
+            BlockHint::Block { kind, keys, timeout_ms }
+        }
+        _ => BlockHint::None,
+    }
+}
+
+/// A blocking timeout in seconds as milliseconds; `None` when malformed.
+fn timeout_ms(arg: &[u8]) -> Option<u64> {
+    let secs = std::str::from_utf8(arg).ok()?.parse::<f64>().ok()?;
+    (secs.is_finite() && secs >= 0.0).then_some((secs * 1000.0) as u64)
 }
 
 fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {

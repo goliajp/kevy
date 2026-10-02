@@ -241,6 +241,17 @@ pub trait Commands: Clone + Send + 'static {
         None
     }
 
+    #[doc = include_str!("commands_docs/block_restore_for.md")]
+    fn block_restore_for<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        kind: BlockKind,
+        _serve_argv: &A,
+        key: &[u8],
+    ) -> Option<Argv> {
+        self.block_restore_argv(store, kind, key)
+    }
+
     #[doc = include_str!("commands_docs/block_ready.md")]
     fn block_ready<A: ArgvView + ?Sized>(
         &self,

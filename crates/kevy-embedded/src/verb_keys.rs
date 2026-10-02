@@ -12,6 +12,10 @@ use kevy_resp::ArgvView;
 
 /// The key whose shard runs `args`; `up` is its verb, uppercase.
 pub(crate) fn shard_key<'a, A: ArgvView + ?Sized>(up: &[u8], args: &'a A) -> Option<&'a [u8]> {
+    if up == b"ZMPOP" || up == b"LMPOP" {
+        // the single-key form `ZMPOP 1 key …` is all that reaches a shard
+        return args.get(2);
+    }
     if !kevy_verbs::is_streams_geo(up) {
         return args.get(1);
     }

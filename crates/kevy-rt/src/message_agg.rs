@@ -11,6 +11,14 @@ use std::collections::HashMap;
 /// Accumulator for a command's (possibly multi-shard) result.
 pub(crate) enum Agg {
     First(Option<SmallReply>),
+    /// A [`crate::Route::FirstHit`] pop across shards: the per-key
+    /// commands still to try, from `next` on, and the reply of the try in
+    /// flight once it lands.
+    FirstHit {
+        tries: Vec<(usize, Argv)>,
+        next: usize,
+        got: Option<SmallReply>,
+    },
     SumInt(i64),
     /// `WAIT` accumulator: MIN over the per-shard acked-replica
     /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).

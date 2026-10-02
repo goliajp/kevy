@@ -148,6 +148,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"RPOPLPUSH"
             | b"BRPOPLPUSH"
             | b"LMOVE"
+            | b"BLMOVE"
             | b"LSET"
             | b"SADD"
             | b"ZADD"

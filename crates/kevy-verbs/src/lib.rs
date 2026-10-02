@@ -38,6 +38,7 @@ mod hash_ttl;
 mod keyspace;
 mod list;
 mod list_move;
+pub mod mpop;
 pub mod multikey;
 mod record;
 mod record_group;
@@ -332,6 +333,9 @@ pub fn exec<A: ArgvView + ?Sized>(
         return Some(e);
     }
     if let Some(e) = set::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = mpop::exec(verb, store, args, out) {
         return Some(e);
     }
     if let Some(e) = zset_pick::exec(verb, store, args, out) {

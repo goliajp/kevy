@@ -29,15 +29,28 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"ZREVRANK" => zrevrank(store, args, out, v2),
         b"ZMSCORE" => zmscore(store, args, out, v2),
         b"ZRANDMEMBER" => zrandmember(store, args, out, v2),
+        b"BZPOPMIN" => bzpopmin(store, args, out, v2),
+        b"BZPOPMAX" => bzpopmax(store, args, out, v2),
         _ => return None,
     })
 }
 
-fn score(out: &mut Vec<u8>, s: f64, proto: RespVersion) {
+pub(crate) fn score(out: &mut Vec<u8>, s: f64, proto: RespVersion) {
     match proto {
         RespVersion::V3 => encode_double(out, s),
         _ => encode_bulk(out, &fmt_score(s)),
     }
+}
+
+/// A pop recorded as the removal of what it took: `ZREM` is in every
+/// version, so an older reader of the log or a replica can follow it, and
+/// a replay cannot take different members.
+pub(crate) fn zrem_record(key: &[u8], taken: &[(Vec<u8>, f64)]) -> Effect {
+    let mut frame = Vec::with_capacity(taken.len() + 2);
+    frame.push(b"ZREM".to_vec());
+    frame.push(key.to_vec());
+    frame.extend(taken.iter().map(|(m, _)| m.clone()));
+    Effect::Record(frame)
 }
 
 fn absent(out: &mut Vec<u8>, proto: RespVersion, array: bool) {
@@ -103,9 +116,70 @@ fn zpop<A: ArgvView + ?Sized>(
                 encode_bulk(out, m);
                 score(out, *s, proto);
             }
-            changed(!items.is_empty())
+            // ZPOPMAX is newer than some readers of the log
+            if max && !items.is_empty() {
+                zrem_record(&args[1], &items)
+            } else {
+                changed(!items.is_empty())
+            }
         }
     }
+}
+
+/// `BZPOPMIN key [key …] timeout`. One key with members pops one and
+/// answers `[key, member, score]`; otherwise nothing is written and a
+/// caller that can block parks the connection, as with `BLPOP`.
+pub fn bzpopmin<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) -> Effect {
+    bzpop(store, args, out, false, proto)
+}
+
+/// `BZPOPMAX key [key …] timeout`: `BZPOPMIN` from the top.
+pub fn bzpopmax<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) -> Effect {
+    bzpop(store, args, out, true, proto)
+}
+
+fn bzpop<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    max: bool,
+    proto: RespVersion,
+) -> Effect {
+    if args.len() < 3 {
+        wrong_args(out, if max { "bzpopmax" } else { "bzpopmin" });
+        return Effect::Unchanged;
+    }
+    if let Some(e) = crate::list_move::timeout_refusal(&args[args.len() - 1]) {
+        encode_error(out, e);
+        return Effect::Unchanged;
+    }
+    if args.len() > 3 {
+        return Effect::Unchanged;
+    }
+    let res = if max { store.zpopmax(&args[1], 1) } else { store.zpopmin(&args[1], 1) };
+    match res {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            if let Some((member, s)) = items.first() {
+                encode_array_len(out, 3);
+                encode_bulk(out, &args[1]);
+                encode_bulk(out, member);
+                score(out, *s, proto);
+                return zrem_record(&args[1], &items);
+            }
+        }
+    }
+    Effect::Unchanged
 }
 
 /// `ZRANK key member [WITHSCORE]`.
