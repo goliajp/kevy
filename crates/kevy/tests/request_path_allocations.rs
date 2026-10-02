@@ -133,6 +133,8 @@ fn forwarded_single_key_commands_allocate_nothing() {
     });
     assert!(up, "runtime did not start");
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    // replies that come back short or out of order fail here, not hang
+    c.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
 
     let (reqs, want) = pipeline("v");
     let mut got = vec![0u8; want.len()];
