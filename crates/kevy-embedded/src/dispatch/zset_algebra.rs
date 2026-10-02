@@ -1,19 +1,15 @@
-//! zset algebra `*STORE` forms + `ZINTERCARD`. Argument grammar and
-//! error wording mirror the server's `parse_zsetstore_args` /
-//! `parse_zintercard_args` in `kevy-rt::exec_build`.
+//! zset algebra `*STORE` forms + `ZINTERCARD`, parsed by the grammar the
+//! server uses (`kevy_verbs::multikey`).
 
 use crate::KevyResult;
 use crate::store::Store;
 
 use kevy_store::ZAggregate;
 
-use super::{emit_int, verb_name};
+use super::{Args, emit_int, verb_name};
 use kevy_resp::encode_error;
-use kevy_verbs::args::arg_u64;
-use kevy_verbs::reply::{ERR_SYNTAX, wrong_args};
-
-const ERR_NUMKEYS: &str = "ERR numkeys should be greater than 0";
-const ERR_KEYS_GT_ARGS: &str = "ERR Number of keys can't be greater than number of args";
+use kevy_verbs::multikey::{parse_zintercard, parse_zstore};
+use kevy_verbs::reply::wrong_args;
 
 /// One zset-algebra request; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
@@ -37,62 +33,12 @@ fn cmd_zstore(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, diff_form: bool, o
     if argv.len() < 4 {
         return wrong_args(out, &verb_name(argv));
     }
-    let Some(numkeys) = arg_u64(&argv[2]).map(|n| n as usize).filter(|&n| n > 0) else {
-        return encode_error(out, ERR_NUMKEYS);
+    let z = match parse_zstore(&Args::new(argv), diff_form) {
+        Ok(z) => z,
+        Err(e) => return encode_error(out, e.as_wire()),
     };
-    if argv.len() < 3 + numkeys {
-        return encode_error(out, ERR_KEYS_GT_ARGS);
-    }
-    let keys: Vec<&[u8]> = argv[3..3 + numkeys].iter().map(Vec::as_slice).collect();
-    let (weights, aggregate) = match parse_tail(argv, diff_form, numkeys) {
-        Ok(t) => t,
-        Err(msg) => return encode_error(out, msg),
-    };
-    emit_int(out, op(s, &argv[1], &keys, weights.as_deref(), aggregate).map(|n| n as i64));
-}
-
-/// The optional `[WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]` tail.
-fn parse_tail(
-    argv: &[Vec<u8>],
-    diff_form: bool,
-    numkeys: usize,
-) -> Result<(Option<Vec<f64>>, ZAggregate), &'static str> {
-    let mut weights = None;
-    let mut aggregate = ZAggregate::Sum;
-    let mut i = 3 + numkeys;
-    while i < argv.len() {
-        let a = &argv[i];
-        if !diff_form && a.eq_ignore_ascii_case(b"WEIGHTS") {
-            if argv.len() < i + 1 + numkeys {
-                return Err(ERR_SYNTAX);
-            }
-            let mut w = Vec::with_capacity(numkeys);
-            for j in 0..numkeys {
-                let v = std::str::from_utf8(&argv[i + 1 + j])
-                    .ok()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .ok_or("ERR weight value is not a float")?;
-                w.push(v);
-            }
-            weights = Some(w);
-            i += 1 + numkeys;
-        } else if !diff_form && a.eq_ignore_ascii_case(b"AGGREGATE") {
-            let m = argv.get(i + 1).ok_or(ERR_SYNTAX)?;
-            aggregate = if m.eq_ignore_ascii_case(b"SUM") {
-                ZAggregate::Sum
-            } else if m.eq_ignore_ascii_case(b"MIN") {
-                ZAggregate::Min
-            } else if m.eq_ignore_ascii_case(b"MAX") {
-                ZAggregate::Max
-            } else {
-                return Err(ERR_SYNTAX);
-            };
-            i += 2;
-        } else {
-            return Err(ERR_SYNTAX);
-        }
-    }
-    Ok((weights, aggregate))
+    let keys: Vec<&[u8]> = argv[3..3 + z.numkeys].iter().map(Vec::as_slice).collect();
+    emit_int(out, op(s, &argv[1], &keys, z.weights.as_deref(), z.aggregate).map(|n| n as i64));
 }
 
 /// `ZINTERCARD numkeys key… [LIMIT n]` — `limit = 0` means unlimited.
@@ -100,25 +46,10 @@ fn cmd_zintercard(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     if argv.len() < 3 {
         return wrong_args(out, &verb_name(argv));
     }
-    let Some(numkeys) = arg_u64(&argv[1]).map(|n| n as usize).filter(|&n| n > 0) else {
-        return encode_error(out, ERR_NUMKEYS);
+    let (numkeys, limit) = match parse_zintercard(&Args::new(argv)) {
+        Ok(t) => t,
+        Err(e) => return encode_error(out, e.as_wire()),
     };
-    if argv.len() < 2 + numkeys {
-        return encode_error(out, ERR_KEYS_GT_ARGS);
-    }
     let keys: Vec<&[u8]> = argv[2..2 + numkeys].iter().map(Vec::as_slice).collect();
-    let mut limit = 0usize;
-    let mut i = 2 + numkeys;
-    while i < argv.len() {
-        if argv[i].eq_ignore_ascii_case(b"LIMIT") {
-            let Some(n) = argv.get(i + 1).and_then(|v| arg_u64(v)) else {
-                return encode_error(out, "ERR LIMIT can't be negative");
-            };
-            limit = n as usize;
-            i += 2;
-        } else {
-            return encode_error(out, ERR_SYNTAX);
-        }
-    }
     emit_int(out, s.zintercard(&keys, limit).map(|n| n as i64));
 }

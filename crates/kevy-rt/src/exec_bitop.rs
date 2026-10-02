@@ -31,22 +31,14 @@ pub(crate) struct BitOpCall {
 }
 
 /// `BITOP` parsed out of argv, or the wire error Redis answers.
-pub(crate) fn parse_bitop<A: ArgvView + ?Sized>(args: &A) -> Result<BitOpCall, &'static str> {
-    if args.len() < 4 {
-        return Err("-ERR wrong number of arguments for 'bitop' command\r\n");
-    }
-    let op = match args[1].to_ascii_uppercase().as_slice() {
-        b"AND" => BitOp::And,
-        b"OR" => BitOp::Or,
-        b"XOR" => BitOp::Xor,
-        b"NOT" => BitOp::Not,
-        _ => return Err("-ERR syntax error\r\n"),
-    };
-    let srcs: Vec<Vec<u8>> = (3..args.len()).map(|i| args[i].to_vec()).collect();
-    if op == BitOp::Not && srcs.len() != 1 {
-        return Err("-ERR BITOP NOT must be called with a single source key.\r\n");
-    }
-    Ok(BitOpCall { op, dst: args[2].to_vec(), keys: srcs })
+pub(crate) fn parse_bitop<A: ArgvView + ?Sized>(args: &A) -> Result<BitOpCall, Vec<u8>> {
+    let op = kevy_verbs::multikey::parse_bitop(args).map_err(|e| {
+        let mut out = Vec::new();
+        kevy_resp::encode_error(&mut out, e.as_wire());
+        out
+    })?;
+    let keys = (3..args.len()).map(|i| args[i].to_vec()).collect();
+    Ok(BitOpCall { op, dst: args[2].to_vec(), keys })
 }
 
 impl<C: Commands> Shard<C> {
@@ -55,7 +47,7 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn start_bitop<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
         let BitOpCall { op, dst, keys } = match parse_bitop(args) {
             Ok(t) => t,
-            Err(e) => return self.fold_bitop_reply(conn_id, seq, e.as_bytes().to_vec()),
+            Err(e) => return self.fold_bitop_reply(conn_id, seq, e),
         };
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {

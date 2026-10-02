@@ -44,20 +44,15 @@ impl<C: Commands> Shard<C> {
     /// `args[2]` the destination, and an optional `args[3]` must be the
     /// word REPLACE.
     pub(crate) fn start_copy<A: ArgvView + ?Sized>(&mut self, conn_id: u64, seq: u64, args: &A) {
-        let replace = match args.len() {
-            3 => false,
-            4 if args[3].eq_ignore_ascii_case(b"REPLACE") => true,
-            4 => return self.fold_copy_reply(conn_id, seq, b"-ERR syntax error\r\n".to_vec()),
-            _ => {
-                let err = b"-ERR wrong number of arguments for 'copy' command\r\n".to_vec();
+        let replace = match kevy_verbs::multikey::parse_copy(args) {
+            Ok(replace) => replace,
+            Err(e) => {
+                let mut err = Vec::new();
+                kevy_resp::encode_error(&mut err, e.as_wire());
                 return self.fold_copy_reply(conn_id, seq, err);
             }
         };
         let (src, dst) = (args[1].to_vec(), args[2].to_vec());
-        if src == dst {
-            let err = b"-ERR source and destination objects are the same\r\n".to_vec();
-            return self.fold_copy_reply(conn_id, seq, err);
-        }
         let (src_shard, dst_shard) = (self.shard_of(&src), self.shard_of(&dst));
         if src_shard == dst_shard {
             // The same-shard path takes ONE op, but it folds into the
