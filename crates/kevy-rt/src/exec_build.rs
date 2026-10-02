@@ -67,7 +67,10 @@ impl<C: Commands> Shard<C> {
             Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
             Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
             Route::Dbsize => ((0..self.nshards).map(|s| (s, Op::Dbsize)).collect(), Agg::SumInt(0)),
-            Route::Flush => ((0..self.nshards).map(|s| (s, Op::Flush)).collect(), Agg::AllOk),
+            Route::Flush => {
+                let lazy = args.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"ASYNC"));
+                ((0..self.nshards).map(|s| (s, Op::Flush(lazy))).collect(), Agg::AllOk)
+            }
             Route::Save => ((0..self.nshards).map(|s| (s, Op::Save)).collect(), Agg::AllOk),
             Route::BgSave => ((0..self.nshards).map(|s| (s, Op::BgSave)).collect(), Agg::AllOk),
             Route::RewriteAof => {

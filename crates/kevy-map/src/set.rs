@@ -96,6 +96,26 @@ impl<K> KevySet<K> {
 }
 
 impl<K: KevyHash + Eq> KevySet<K> {
+    /// [`KevyMap::scan_step`] over the members: one home group per call,
+    /// `0` both starts and ends a sweep, and a grow between calls skips no
+    /// member present throughout.
+    ///
+    /// ```
+    /// let mut s = kevy_map::KevySet::new();
+    /// for i in 0..100u32 { s.insert(i); }
+    /// let (mut seen, mut cur) = (Vec::new(), 0u64);
+    /// loop {
+    ///     cur = s.scan_step(cur, |m| seen.push(*m));
+    ///     if cur == 0 { break; }
+    /// }
+    /// seen.sort_unstable();
+    /// seen.dedup();
+    /// assert_eq!(seen.len(), 100);
+    /// ```
+    pub fn scan_step(&self, cursor: u64, mut f: impl FnMut(&K)) -> u64 {
+        self.0.scan_step(cursor, |k, ()| f(k))
+    }
+
     /// Insert `key`. Returns `true` if newly added, `false` if it was already
     /// present (matches `HashSet::insert`).
     pub fn insert(&mut self, key: K) -> bool {

@@ -209,17 +209,6 @@ pub fn emit_zrange(
     }
 }
 
-/// The `[cursor, [elements…]]` envelope of a one-batch `HSCAN` /
-/// `SSCAN` / `ZSCAN`: the cursor is always "0".
-pub(crate) fn scan_page(out: &mut Vec<u8>, elems: &[Vec<u8>]) {
-    encode_array_len(out, 2);
-    encode_bulk(out, b"0");
-    encode_array_len(out, elems.len() as i64);
-    for e in elems {
-        encode_bulk(out, e);
-    }
-}
-
 /// A score as Redis prints it (see [`kevy_resp::write_double`]).
 ///
 /// ```

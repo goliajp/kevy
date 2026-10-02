@@ -163,12 +163,18 @@ impl Store {
 
     // ---- hash scan --------------------------------------------------
 
-    /// `HSCAN key cursor [COUNT n]` — return up to `count` `(field,
-    /// value)` pairs from the hash at `key`, plus the next cursor.
-    /// `cursor = 0` starts; `next_cursor = 0` means complete.
+    /// `HSCAN key cursor [COUNT n]` — about `count` `(field, value)` pairs
+    /// from the hash at `key`, plus the next cursor. `cursor = 0` starts;
+    /// `next_cursor = 0` means complete. Every field present for the whole
+    /// walk comes back at least once, however the hash grows meanwhile.
     pub fn hscan(&self, key: &[u8], cursor: u64, count: usize) -> KevyResult<PairPage> {
-        let pairs = self.hgetall(key)?;
-        Ok(page_into(pairs, cursor, count))
+        let mut pairs = Vec::new();
+        let next = self
+            .wshard(key)
+            .store
+            .hscan(key, cursor, count, |f, v| pairs.push((f.to_vec(), v.to_vec())))
+            .map_err(store_err)?;
+        Ok((next, pairs))
     }
 
     /// Iterator wrapper around [`Self::hscan`].

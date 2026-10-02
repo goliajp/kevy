@@ -49,7 +49,8 @@ pub(crate) enum Op {
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,
-    Flush,
+    /// `FLUSHALL`; `true` frees the old keyspace off the reactor (`ASYNC`).
+    Flush(bool),
     Save,
     /// Background snapshot: freeze a COW view now, persist off-thread.
     BgSave,
