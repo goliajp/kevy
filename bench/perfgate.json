@@ -25,10 +25,10 @@
     "zinterstore": "zinterstore"
   },
   "noise_by_angle": {
-    "_doc": "half-ranges the same binary showed against itself, worst of 5 A/A runs on lx64 (2026-10-02); an angle's rounds are judged on their median while they spread no wider",
+    "_doc": "half-ranges the same binary showed against itself on lx64, worst of the A/A runs; onekey_get re-measured 2026-10-02 with each shard pinned to its own cpu (3 runs: ops ±4.0–4.5%, cycles ±3.6–4.1%; ±11% unpinned)",
     "onekey_get": {
-      "ops": 0.11,
-      "cycles": 0.1
+      "ops": 0.05,
+      "cycles": 0.05
     },
     "zinterstore": {
       "cycles": 0.04
