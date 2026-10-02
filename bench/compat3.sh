@@ -348,6 +348,39 @@ check LCS rk1 rknokey
 check LCS rk1 rs1
 check LCS rk1 rk2 BAD
 check LCS rk1 rk2 LEN IDX
+# ZRANGE's 6.2 forms and the lexicographic family
+check ZADD zrr 1 a 2 b 3 c 4 d 5 e
+check ZRANGE zrr 0 1 REV
+check ZRANGE zrr 0 -1 REV WITHSCORES
+check ZRANGE zrr 2 4 BYSCORE
+check ZRANGE zrr (2 +inf BYSCORE LIMIT 1 2 WITHSCORES
+check ZRANGE zrr 4 2 BYSCORE REV
+check ZRANGE zrr +inf -inf BYSCORE REV LIMIT 0 2
+check ZRANGE zrr 0 -1 LIMIT 0 1
+check ZRANGE zrr 0 -1 BYSCORE BYLEX
+check ZRANGE zrr x 1 BYSCORE
+check ZRANGE zrr 1 5 BYSCORE LIMIT -1 2
+check ZRANGE zrr 1 5 BYSCORE LIMIT 1
+check ZREVRANGE zrr 0 1 LIMIT 0 1
+check ZADD zlx 0 a 0 b 0 c 0 d 0 e 0 f
+check ZRANGE zlx [b (e BYLEX
+check ZRANGE zlx - + BYLEX LIMIT 1 2
+check ZRANGE zlx (e [b BYLEX REV
+check ZRANGE zlx [b [e BYLEX WITHSCORES
+check ZRANGE zlx b e BYLEX
+check ZRANGEBYLEX zlx [b [d
+check ZRANGEBYLEX zlx - + LIMIT 2 3
+check ZRANGEBYLEX zlx a +
+check ZRANGEBYLEX zlx [b [d WITHSCORES
+check ZREVRANGEBYLEX zlx [d [b
+check ZREVRANGEBYLEX zlx + - LIMIT 1 2
+check ZLEXCOUNT zlx - +
+check ZLEXCOUNT zlx [b (e
+check ZLEXCOUNT zlx x y
+check ZREMRANGEBYLEX zlx [e +
+check ZRANGE zlx 0 -1
+check ZRANGEBYLEX b6str - +
+check ZRANGE b6str 0 -1 BYLEX
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

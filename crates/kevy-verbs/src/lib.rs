@@ -52,6 +52,7 @@ mod stream;
 mod stream_resp3;
 mod strings;
 mod verbs;
+mod zrange;
 mod zset;
 mod zset_pick;
 mod zset_range;

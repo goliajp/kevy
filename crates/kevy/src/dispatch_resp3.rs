@@ -191,12 +191,8 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         // a Double `,N`), vs the V2 flat interleaved bulk array. The
         // no-WITHSCORES form is the same plain `*N` array of bulks on
         // both protos (the zrange body handles that branch internally).
-        b"ZRANGE" => {
+        b"ZRANGE" | b"ZREVRANGE" | b"ZRANGEBYSCORE" | b"ZREVRANGEBYSCORE" => {
             kevy_verbs::cmd::zrange(store, args, out, RespVersion::V3);
-            true
-        }
-        b"ZRANGEBYSCORE" => {
-            kevy_verbs::cmd::zrangebyscore(store, args, out, RespVersion::V3);
             true
         }
         // RESP3 carries multi-line text replies as Verbatim strings

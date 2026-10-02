@@ -2,16 +2,13 @@
 //! pops, and `ZSCAN`.
 
 use kevy_resp::{ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error};
-use kevy_store::{Store, StoreError};
+use kevy_store::{LexBound, Store, StoreError};
 
-use crate::args::{arg_f64, arg_i64, parse_score_bound, scan_match};
+use crate::args::{arg_f64, arg_i64, scan_match};
 use crate::reply::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, Scores, emit_zrange, fmt_score, scan_page, store_err,
-    wrong_args,
+    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, fmt_score, scan_page, store_err, wrong_args,
 };
 use crate::{Effect, changed};
-
-const ERR_MIN_MAX: &str = "ERR min or max is not a float";
 
 /// One range or pop command; `None` = the verb is not in this group.
 pub(crate) fn exec<A: ArgvView + ?Sized>(
@@ -22,22 +19,16 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
 ) -> Option<Effect> {
     let v2 = RespVersion::V2;
     Some(match cmd {
-        b"ZRANGE" => {
-            zrange(store, args, out, v2);
+        b"ZRANGE" | b"ZREVRANGE" | b"ZRANGEBYSCORE" | b"ZREVRANGEBYSCORE" | b"ZRANGEBYLEX"
+        | b"ZREVRANGEBYLEX" => {
+            crate::zrange::zrange(store, args, out, v2);
             Effect::Read
         }
-        b"ZREVRANGE" => {
-            by_rank(store, args, out, v2, true);
+        b"ZLEXCOUNT" => {
+            lex(store, args, out, false);
             Effect::Read
         }
-        b"ZRANGEBYSCORE" => {
-            zrangebyscore(store, args, out, v2);
-            Effect::Read
-        }
-        b"ZREVRANGEBYSCORE" => {
-            by_score(store, args, out, v2, true);
-            Effect::Read
-        }
+        b"ZREMRANGEBYLEX" => lex(store, args, out, true),
         b"ZPOPMIN.BELOW" => zpopmin_below(store, args, out),
         b"ZSCAN" => {
             zscan(store, args, out);
@@ -47,30 +38,9 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
     })
 }
 
-/// `ZRANGE key start stop [WITHSCORES]`, by rank, in the reply shape of
-/// `proto`.
-///
-/// ```
-/// use kevy_resp::{Argv, RespVersion};
-/// let mut store = kevy_store::Store::new();
-/// store.zadd(b"z", &[(1.0, &b"a"[..])]).unwrap();
-/// let argv = Argv::from(vec![b"ZRANGE".to_vec(), b"z".to_vec(), b"0".to_vec(), b"-1".to_vec()]);
-/// let mut out = Vec::new();
-/// kevy_verbs::cmd::zrange(&mut store, &argv, &mut out, RespVersion::V2);
-/// assert_eq!(out, b"*1\r\n$1\r\na\r\n");
-/// ```
-pub fn zrange<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-    proto: RespVersion,
-) {
-    by_rank(store, args, out, proto, false);
-}
-
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`, in
-/// the reply shape of `proto`. `WITHSCORES` and `LIMIT` may come in
-/// either order, each at most once.
+/// the reply shape of `proto` — [`crate::cmd::zrange`] under its older
+/// name, which fixes the kind and direction.
 ///
 /// ```
 /// use kevy_resp::{Argv, RespVersion};
@@ -87,115 +57,39 @@ pub fn zrangebyscore<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
     proto: RespVersion,
 ) {
-    by_score(store, args, out, proto, false);
+    crate::zrange::zrange(store, args, out, proto);
 }
 
-/// `ZRANGE` / `ZREVRANGE key start stop [WITHSCORES]`.
-fn by_rank<A: ArgvView + ?Sized>(
+/// `ZLEXCOUNT key min max`, or with `remove` `ZREMRANGEBYLEX key min max`.
+fn lex<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
-    proto: RespVersion,
-    rev: bool,
-) {
-    if args.len() < 4 || args.len() > 5 {
-        return wrong_args(out, if rev { "zrevrange" } else { "zrange" });
+    remove: bool,
+) -> Effect {
+    if args.len() != 4 {
+        wrong_args(out, if remove { "zremrangebylex" } else { "zlexcount" });
+        return Effect::Unchanged;
     }
-    let scores = if args.len() == 5 { Scores::Included } else { Scores::Omitted };
-    if scores == Scores::Included && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
-        return encode_error(out, ERR_SYNTAX);
-    }
-    let (Some(start), Some(stop)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
-        return encode_error(out, ERR_NOT_INT);
+    let (Some(min), Some(max)) = (LexBound::parse(&args[2]), LexBound::parse(&args[3])) else {
+        encode_error(out, "ERR min or max not valid string range item");
+        return Effect::Unchanged;
     };
-    let res = if rev {
-        store.zrevrange(&args[1], start, stop)
+    let n = if remove {
+        store.zremrange_by_lex(&args[1], &min, &max)
     } else {
-        store.zrange(&args[1], start, stop)
+        store.zlexcount(&args[1], &min, &max)
     };
-    emit_zrange(res, scores, proto, out);
-}
-
-/// `ZRANGEBYSCORE key min max …` / `ZREVRANGEBYSCORE key max min …`:
-/// the reverse form names its bounds high first, as Redis does.
-fn by_score<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
-    out: &mut Vec<u8>,
-    proto: RespVersion,
-    rev: bool,
-) {
-    if args.len() < 4 {
-        return wrong_args(out, if rev { "zrevrangebyscore" } else { "zrangebyscore" });
-    }
-    let (lo, hi) = if rev { (3, 2) } else { (2, 3) };
-    let (Some(min), Some(max)) = (parse_score_bound(&args[lo]), parse_score_bound(&args[hi]))
-    else {
-        return encode_error(out, ERR_MIN_MAX);
-    };
-    let Some((scores, limit)) = range_modifiers(args, out) else {
-        return;
-    };
-    let res = if rev {
-        store.zrev_range_by_score(&args[1], min, max)
-    } else {
-        store.zrange_by_score(&args[1], min, max)
-    };
-    match res {
-        Err(e) => store_err(out, e),
-        Ok(mut items) => {
-            if let Some((off, cnt)) = limit {
-                let start = off.max(0) as usize;
-                if start >= items.len() {
-                    items.clear();
-                } else if cnt < 0 {
-                    // a negative count is everything after the offset
-                    items.drain(..start);
-                } else {
-                    let end = (start + cnt as usize).min(items.len());
-                    items = items[start..end].to_vec();
-                }
-            }
-            emit_zrange(Ok(items), scores, proto, out);
+    match n {
+        Ok(n) => {
+            kevy_resp::encode_integer(out, n as i64);
+            changed(remove && n > 0)
+        }
+        Err(e) => {
+            store_err(out, e);
+            Effect::Unchanged
         }
     }
-}
-
-/// The `[WITHSCORES] [LIMIT offset count]` tail, in either order, each
-/// at most once. `None` = the refusal is already in `out`.
-fn range_modifiers<A: ArgvView + ?Sized>(
-    args: &A,
-    out: &mut Vec<u8>,
-) -> Option<(Scores, Option<(i64, i64)>)> {
-    let mut scores = Scores::Omitted;
-    let mut limit: Option<(i64, i64)> = None;
-    let mut i = 4;
-    while i < args.len() {
-        let tok = &args[i];
-        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
-            if scores == Scores::Included {
-                encode_error(out, ERR_SYNTAX);
-                return None;
-            }
-            scores = Scores::Included;
-            i += 1;
-        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
-            if limit.is_some() || i + 2 >= args.len() {
-                encode_error(out, ERR_SYNTAX);
-                return None;
-            }
-            let (Some(off), Some(cnt)) = (arg_i64(&args[i + 1]), arg_i64(&args[i + 2])) else {
-                encode_error(out, ERR_NOT_INT);
-                return None;
-            };
-            limit = Some((off, cnt));
-            i += 3;
-        } else {
-            encode_error(out, ERR_SYNTAX);
-            return None;
-        }
-    }
-    Some((scores, limit))
 }
 
 /// The optional pop count at `i`: 1 when absent, the refusal otherwise.
