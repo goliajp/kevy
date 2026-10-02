@@ -8,10 +8,8 @@ use kevy_resp::{
 };
 use kevy_store::{SetCondition, Store};
 
-use crate::args::{arg_f64, arg_i64, upper_verb};
-use crate::reply::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, emit_int_result, store_err, wrong_args,
-};
+use crate::args::{arg_i64, upper_verb};
+use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, emit_int_result, store_err, wrong_args};
 use crate::{Effect, changed};
 
 /// One string command; `None` = the verb is not in this group.
@@ -75,13 +73,14 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"INCRBYFLOAT" => {
             if args.len() != 3 {
                 wrong_args(out, "incrbyfloat");
-            } else if let Some(d) = arg_f64(&args[2]) {
-                match store.incr_by_float(&args[1], d) {
-                    Ok(v) => encode_bulk(out, &v),
-                    Err(e) => store_err(out, e),
+                return Some(Effect::Unchanged);
+            }
+            match store.incr_by_float_text(&args[1], &args[2]) {
+                Ok(v) => encode_bulk(out, &v),
+                Err(e) => {
+                    store_err(out, e);
+                    return Some(Effect::Unchanged);
                 }
-            } else {
-                encode_error(out, ERR_NOT_FLOAT);
             }
             Effect::Write
         }
