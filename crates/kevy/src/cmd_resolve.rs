@@ -121,7 +121,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"REPL.TOKEN" => crate::cmd_repl::token_route(repl, args),
         b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(repl, args),
         b"DBSIZE" => Route::Dbsize,
-        b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
+        b"FLUSHDB" | b"FLUSHALL" if kevy_verbs::flush_args_ok(args) => Route::Flush,
         b"SAVE" => Route::Save,
         // SCHEDULE starts it now: no rewrite ever holds a save back here
         b"BGSAVE" if args.len() == 1 || (args.len() == 2 && args[1].eq_ignore_ascii_case(b"SCHEDULE")) => {

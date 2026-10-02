@@ -2308,8 +2308,8 @@ HSCAN
 *14
 $7
 summary
-$57
-Iterate a hash's fields and values (single-batch cursor).
+$35
+Iterate a hash's fields and values.
 $5
 since
 $5
@@ -2320,16 +2320,16 @@ $4
 hash
 $6
 syntax
-$46
-HSCAN key cursor [MATCH pattern] [COUNT count]
+$57
+HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
 $10
 complexity
-$59
-O(N) — the whole hash is copied and returned in one batch
+$143
+O(1) per call, a small hash whole; a large one about COUNT entries a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$166
-differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
+$4
+full
 $5
 flags
 *1
@@ -3726,8 +3726,8 @@ SSCAN
 *14
 $7
 summary
-$46
-Iterate a set's members (single-batch cursor).
+$24
+Iterate a set's members.
 $5
 since
 $5
@@ -3742,12 +3742,12 @@ $46
 SSCAN key cursor [MATCH pattern] [COUNT count]
 $10
 complexity
-$58
-O(N) — the whole set is copied and returned in one batch
+$142
+O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$133
-differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored
+$4
+full
 $5
 flags
 *1
@@ -4854,8 +4854,8 @@ ZSCAN
 *14
 $7
 summary
-$64
-Iterate a sorted set's members and scores (single-batch cursor).
+$42
+Iterate a sorted set's members and scores.
 $5
 since
 $5
@@ -4870,12 +4870,12 @@ $46
 ZSCAN key cursor [MATCH pattern] [COUNT count]
 $10
 complexity
-$38
-O(N) — the whole set is materialised
+$142
+O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$115
-differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
+$4
+full
 $5
 flags
 *1
@@ -5026,16 +5026,16 @@ $6
 stream
 $6
 syntax
-$101
-XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]
+$128
+XADD key [NOMKSTREAM] [KEEPREF | DELREF | ACKED] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]
 $10
 complexity
 $126
 O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
 $6
 compat
-$374
-differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
+$410
+differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit). With DELREF or ACKED it goes entry by entry, as Redis 8.10 does. Redis 8.10's IDMP / IDMPAUTO options are not parsed
 $5
 flags
 *1
@@ -5446,16 +5446,16 @@ $6
 stream
 $6
 syntax
-$52
-XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]
+$79
+XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count] [KEEPREF | DELREF | ACKED]
 $10
 complexity
-$38
-O(R log N + N*F) for R evicted entries
+$110
+O(R log N + N*F) for R evicted entries; DELREF adds O(R log P) per group, ACKED O(G log P) per entry looked at
 $6
 compat
-$163
-differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
+$174
+differs: answers as valkey 9.1 does, an approximate '~' KEEPREF trim removing only whole nodes as XADD's does; with DELREF or ACKED it goes entry by entry, as Redis 8.10 does
 $5
 flags
 *1
@@ -6194,16 +6194,16 @@ $6
 server
 $6
 syntax
-$8
-FLUSHALL
+$23
+FLUSHALL [ASYNC | SYNC]
 $10
 complexity
-$88
-O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump
+$162
+O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump. ASYNC: O(S) on the shards, the old keyspace freed on a thread of its own
 $6
 compat
-$169
-differs: ASYNC / SYNC are accepted and ignored (the flush is always synchronous per shard), and it bumps the CDC feed generation, so live FEED cursors get a resync error
+$174
+differs: it bumps the CDC feed generation, so live FEED cursors get a resync error; the bare form is synchronous, as Redis's is with lazyfree-lazy-user-flush off, its default
 $5
 flags
 *1
@@ -6226,16 +6226,16 @@ $6
 server
 $6
 syntax
-$7
-FLUSHDB
+$22
+FLUSHDB [ASYNC | SYNC]
 $10
 complexity
 $34
 O(N + S) — identical to FLUSHALL
 $6
 compat
-$88
-differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL; ASYNC / SYNC are ignored
+$62
+differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL
 $5
 flags
 *1

@@ -48,6 +48,22 @@ impl Store {
         DetachedEntries(self.map.detach())
     }
 
+    /// `FLUSHALL ASYNC`: empty the store as [`Self::flushall`] does, and
+    /// hand back what it held, for the caller to free off its own thread.
+    ///
+    /// ```
+    /// let mut store = kevy_store::Store::new();
+    /// store.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+    /// let old = store.flushall_detached();
+    /// assert_eq!((store.dbsize(), old.len()), (0, 1));
+    /// std::thread::spawn(move || drop(old)).join().unwrap();
+    /// ```
+    pub fn flushall_detached(&mut self) -> DetachedEntries {
+        let old = self.detach_entries();
+        self.flushall();
+        old
+    }
+
     /// An empty store with default settings: no maxmemory bound, no
     /// tiering budget, and no persistence attached — the caller wires
     /// those on afterwards.

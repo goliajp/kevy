@@ -127,6 +127,15 @@ impl Nodes {
         n.last = id;
     }
 
+    /// `(first, last, live entries)` of the node holding `id`.
+    pub(super) fn holding(&self, id: StreamId) -> (StreamId, StreamId, usize) {
+        let at = self.list.partition_point(|n| n.first <= id);
+        at.checked_sub(1).map_or((id, id, 1), |i| {
+            let n = &self.list[i];
+            (n.first, n.last, n.live as usize)
+        })
+    }
+
     /// The entry `id`, which the stream held, is gone.
     pub(super) fn delete(&mut self, id: StreamId) {
         let at = self.list.partition_point(|n| n.first <= id);
@@ -181,6 +190,16 @@ impl StreamData {
     /// leaves `max_deleted_id` alone: that marks a hole a deletion made
     /// among the entries, which a trim from the head never does.
     pub fn trim(&mut self, to: TrimTo, mode: TrimMode) -> usize {
+        self.trim_each(to, mode, &mut |_| {})
+    }
+
+    /// [`Self::trim`], handing each ID that goes to `gone`.
+    pub(super) fn trim_each(
+        &mut self,
+        to: TrimTo,
+        mode: TrimMode,
+        gone: &mut impl FnMut(StreamId),
+    ) -> usize {
         let limit = match mode {
             TrimMode::Approximate { limit } => limit,
             TrimMode::Exact => 0,
@@ -195,8 +214,12 @@ impl StreamData {
                 break;
             }
             let last = head.last;
-            while self.entries.first_key_value().is_some_and(|(id, _)| *id <= last) {
+            while let Some((&id, _)) = self.entries.first_key_value() {
+                if id > last {
+                    break;
+                }
                 self.entries.pop_first();
+                gone(id);
                 removed += 1;
             }
             self.nodes.list.pop_front();
@@ -214,6 +237,7 @@ impl StreamData {
             }
             self.entries.pop_first();
             self.nodes.delete(first);
+            gone(first);
             removed += 1;
         }
         removed

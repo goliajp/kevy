@@ -312,8 +312,11 @@ mod tests {
         // true — a fixed one must never be re-documented, and a documented one
         // must never be quietly "corrected" toward Redis's numbers by someone
         // who did not read our code.
-        let hscan = verb_meta("HSCAN").expect("HSCAN");
-        assert!(hscan.compat.contains("not a cursor iterator"), "HSCAN is still single-batch");
+        let scan = verb_meta("SCAN").expect("SCAN");
+        assert!(
+            scan.compat.contains("only valid on the server and shard count"),
+            "a SCAN cursor still names a shard"
+        );
     }
 
     /// The deviations we FIXED must not creep back into the table as folklore.
@@ -321,11 +324,11 @@ mod tests {
     /// itself.
     #[test]
     fn the_fixed_deviations_stay_fixed() {
-        for name in ["SPOP", "SRANDMEMBER", "RANDOMKEY"] {
+        for name in ["SPOP", "SRANDMEMBER", "RANDOMKEY", "HSCAN", "SSCAN", "ZSCAN"] {
             let m = verb_meta(name).expect(name);
             assert_eq!(
                 m.compat, "full",
-                "{name} is genuinely random now; the old NOT-random note must not come back"
+                "{name} is fixed (random draws, cursors that page); the old note must not come back"
             );
         }
         let zrank = verb_meta("ZRANK").expect("ZRANK");

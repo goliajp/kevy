@@ -267,9 +267,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
   - complexity: O(F) fields
   - compat: full
-- `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
-  - complexity: O(N) — the whole hash is copied and returned in one batch
-  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
+- `HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]` [readonly] — Iterate a hash's fields and values.
+  - complexity: O(1) per call, a small hash whole; a large one about COUNT entries a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `HSET key field value [field value ...]` [write] — Set one or more hash fields; returns the number of new fields.
   - complexity: O(M) pairs
   - compat: full
@@ -405,9 +405,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SREM key member [member ...]` [write] — Remove one or more members from a set.
   - complexity: O(M) members
   - compat: full
-- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members (single-batch cursor).
-  - complexity: O(N) — the whole set is copied and returned in one batch
-  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored
+- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members.
+  - complexity: O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `SUNION key [key ...]` [readonly] — Return the union of the given sets (cross-shard gather).
   - complexity: O(sum of the source cardinalities)
   - compat: full
@@ -513,9 +513,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZREVRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range, highest score first.
   - complexity: O(N + M) — the set is read in rank order and reversed, then the M requested members are taken
   - compat: full
-- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores (single-batch cursor).
-  - complexity: O(N) — the whole set is materialised
-  - compat: differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
+- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores.
+  - complexity: O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `ZSCORE key member` [readonly] — Return a member's score.
   - complexity: O(1) — a hash lookup
   - compat: full
@@ -531,9 +531,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
   - complexity: O(A log P)
   - compat: full
-- `XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+- `XADD key [NOMKSTREAM] [KEEPREF | DELREF | ACKED] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
   - complexity: O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
-  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit). With DELREF or ACKED it goes entry by entry, as Redis 8.10 does. Redis 8.10's IDMP / IDMPAUTO options are not parsed
 - `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
   - complexity: O(log P + COUNT log N): at most COUNT x 10 pending entries are looked at per call
   - compat: full
@@ -570,9 +570,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
   - complexity: O(log N)
   - compat: full
-- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]` [write] — Trim a stream by length or minimum ID.
-  - complexity: O(R log N + N*F) for R evicted entries
-  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
+- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count] [KEEPREF | DELREF | ACKED]` [write] — Trim a stream by length or minimum ID.
+  - complexity: O(R log N + N*F) for R evicted entries; DELREF adds O(R log P) per group, ACKED O(G log P) per entry looked at
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' KEEPREF trim removing only whole nodes as XADD's does; with DELREF or ACKED it goes entry by entry, as Redis 8.10 does
 
 ### geo
 
@@ -651,12 +651,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `DEBUG SLEEP seconds | subcommand [args ...]` [readonly,admin] — Debug subcommands; SLEEP blocks the shard, other subcommands are tolerated as OK.
   - complexity: SLEEP: parks the ANSWERING shard's reactor thread for the duration (other shards keep serving). Everything else: O(1)
   - compat: differs: SLEEP is the only subcommand with an effect and it blocks one shard, not the server; every other subcommand is accepted and answered OK without doing anything
-- `FLUSHALL` [write] — Delete every key on every shard.
-  - complexity: O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump
-  - compat: differs: ASYNC / SYNC are accepted and ignored (the flush is always synchronous per shard), and it bumps the CDC feed generation, so live FEED cursors get a resync error
-- `FLUSHDB` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
+- `FLUSHALL [ASYNC | SYNC]` [write] — Delete every key on every shard.
+  - complexity: O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump. ASYNC: O(S) on the shards, the old keyspace freed on a thread of its own
+  - compat: differs: it bumps the CDC feed generation, so live FEED cursors get a resync error; the bare form is synchronous, as Redis's is with lazyfree-lazy-user-flush off, its default
+- `FLUSHDB [ASYNC | SYNC]` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
   - complexity: O(N + S) — identical to FLUSHALL
-  - compat: differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL; ASYNC / SYNC are ignored
+  - compat: differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL
 - `INFO [section]` [readonly] — Report server statistics and status sections as text.
   - complexity: O(1) in the keyspace — it never walks it; O(S) to sum the per-shard gauges
   - compat: differs: 8 sections only (server, clients, memory, persistence, stats, replication, cluster, keyspace) — no commandstats / latencystats / errorstats / cpu; reports redis_version 7.4.0 for client sniffing plus a kevy_version line, and the values are up to one tick stale

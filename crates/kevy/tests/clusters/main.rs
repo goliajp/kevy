@@ -11,6 +11,7 @@ mod cluster;
 mod cluster_client;
 mod copy_cross_shard;
 mod copy_replace_records;
+mod flush;
 mod list_move_cross_shard;
 mod lua_cluster;
 mod lua_multishard;
