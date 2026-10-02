@@ -63,6 +63,12 @@ pub const IORING_SETUP_SQ_AFF: u32 = 1 << 2;
 /// thread that calls `io_uring_enter` is the one that drains CQEs.
 pub const IORING_SETUP_COOP_TASKRUN: u32 = 1 << 8;
 
+/// **Linux 6.0+**, with `COOP_TASKRUN`. The kernel sets
+/// [`IORING_SQ_TASKRUN`] in the shared SQ flags whenever completion work
+/// for this ring waits to run, so an idle poll loop can tell when an
+/// `io_uring_enter` would do anything.
+pub const IORING_SETUP_TASKRUN_FLAG: u32 = 1 << 9;
+
 /// **Linux 6.0+**. Declare that **only one thread** ever submits to this
 /// ring. Lets the kernel skip locking on the submission path. Safe for
 /// kevy's per-shard rings (one shard thread owns each ring exclusively).
@@ -104,6 +110,10 @@ pub const IORING_SQ_CQ_OVERFLOW: u32 = 1 << 1;
 /// `sq_thread_idle` ms). Userland MUST call `io_uring_enter` with
 /// `IORING_ENTER_SQ_WAKEUP` to re-arm it.
 pub const IORING_SQ_NEED_WAKEUP: u32 = 1 << 0;
+
+/// Completion work waits to run for this ring (set only under
+/// `IORING_SETUP_TASKRUN_FLAG`); the next `io_uring_enter` runs it.
+pub const IORING_SQ_TASKRUN: u32 = 1 << 2;
 
 // ---- Operation opcodes (subset we use) ------------------------------------
 
