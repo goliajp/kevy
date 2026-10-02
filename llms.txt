@@ -639,9 +639,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `CONFIG GET parameter | SET parameter value | REWRITE | RESETSTAT` [write,admin] — Read or change server configuration parameters.
   - complexity: GET: O(patterns * 16). SET: O(1) plus one config swap that shards pick up on their next tick. REWRITE: O(config file size)
   - compat: differs: 16 Redis-named parameters exist; only maxmemory, maxmemory-policy, appendfsync, the auto-rewrite pair, hz, maxmemory-samples, loglevel and logfile are hot-settable — bind, port, io-threads, dir and appendonly error at runtime; RESETSTAT is a no-op
-- `CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF` [readonly,admin] — Connection introspection and control subcommands.
+- `CLIENT ID | GETNAME | SETNAME name | LIST [TYPE NORMAL | MASTER | REPLICA | PUBSUB] [ID client-id ...] | KILL filter | INFO | NO-EVICT ON|OFF` [readonly,admin] — Connection introspection and control subcommands.
   - complexity: ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan
-  - compat: differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown
+  - compat: differs: ID / GETNAME / SETNAME / INFO / LIST (TYPE, ID) / KILL (ID, ADDR) / NO-EVICT only, and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown; replication runs over links of its own, so LIST TYPE master / replica lists none
 - `CLUSTER INFO | NODES | SLOTS | SHARDS | KEYSLOT key | COUNTKEYSINSLOT slot` [readonly,admin] — Cluster topology introspection (virtual-node model over shards).
   - complexity: INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)
   - compat: differs: a read-only virtual-node topology derived from config (one virtual master per shard) — no gossip, no MEET / FORGET / SETSLOT effect (they reply OK as no-ops), no MIGRATE / ASK, no failover; COUNTKEYSINSLOT counts only the answering shard's keys

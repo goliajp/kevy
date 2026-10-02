@@ -6,6 +6,7 @@
 mod common;
 
 mod bitop_cross_shard;
+mod client_list;
 mod cluster;
 mod cluster_client;
 mod copy_cross_shard;

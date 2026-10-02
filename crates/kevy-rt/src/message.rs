@@ -107,7 +107,7 @@ pub(crate) enum Op {
     PrefixStats(Vec<u8>),
     /// `CLIENT LIST` — render this shard's conn-table rows; reply is
     /// an opaque text chunk ([`Part::ExtensionChunk`]).
-    ClientList,
+    ClientList(crate::client_ops::ClientListFilter),
     /// `CLIENT KILL` — close this shard's conns matching the selector;
     /// reply is the matched count ([`Part::Int`]).
     ClientKill(crate::client_ops::ClientKillFilter),
