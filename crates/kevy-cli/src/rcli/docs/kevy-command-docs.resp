@@ -6356,16 +6356,16 @@ $6
 server
 $6
 syntax
-$22
-SHUTDOWN [NOSAVE|SAVE]
+$46
+SHUTDOWN [NOSAVE | SAVE] [NOW] [FORCE] [ABORT]
 $10
 complexity
 $58
 O(1) to trip the stop flag; the drain that follows is O(N)
 $6
 compat
-$87
-differs: only SHUTDOWN [NOSAVE|SAVE] parses — NOW, FORCE and ABORT are a syntax error
+$263
+differs: no shutdown waits for replicas, so NOW changes nothing and ABORT always answers that no shutdown is in progress; the final snapshot is taken while the process drains, so a failed one does not stop the shutdown — every shutdown behaves as SHUTDOWN FORCE
 $5
 flags
 *2
