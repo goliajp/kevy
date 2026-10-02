@@ -107,7 +107,7 @@ impl Store {
             _ => false,
         };
         if empty {
-            self.remove_entry(key);
+            self.remove_emptied(key);
         }
     }
 

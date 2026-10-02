@@ -254,6 +254,8 @@ pub(crate) enum Agg {
         /// empty, and the move ends there with a nil reply. `Err(())` = the
         /// source is not a list.
         taken: Option<Result<Option<Vec<u8>>, ()>>,
+        /// Step 1 emptied the source: its `del` follows the move's events.
+        src_emptied: bool,
         /// Step 2's verdict, `Some(false)` when the destination refused.
         pushed: Option<bool>,
     },

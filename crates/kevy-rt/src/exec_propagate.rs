@@ -82,6 +82,8 @@ impl<C: Commands> Shard<C> {
         if !crate::propagation::take_armed() {
             return;
         }
+        // a parked command has nothing to announce yet
+        crate::propagation::take_notify();
         match crate::propagation::take_override() {
             crate::propagation::Propagate::AsIs => {}
             prop => self.record_propagation_override(prop, args),
