@@ -68,6 +68,10 @@ impl<C: Commands> Shard<C> {
         tail: &[u8],
         io: &mut KevyMap<u64, UringConn>,
     ) -> bool {
+        // a held conn's next SET waits in its input like any other command
+        if self.is_held(cid) {
+            return false;
+        }
         let BigArgGenericProbe::Promote {
             total,
             bytes_present,

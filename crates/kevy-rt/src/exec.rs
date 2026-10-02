@@ -136,18 +136,35 @@ impl<C: Commands> Shard<C> {
             Route::Psubscribe => self.do_psubscribe(conn_id, seq, args),
             Route::Punsubscribe => self.do_punsubscribe(conn_id, seq, args),
             Route::Publish => self.do_publish(conn_id, seq, args),
-            Route::Watch => self.do_watch(conn_id, seq, args),
+            // EXEC reads the versions WATCH collects: nothing after it may
+            // run before they are in
+            Route::Watch => {
+                self.do_watch(conn_id, seq, args);
+                self.hold_if_pending(conn_id, seq);
+            }
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
-            Route::BitOpStore => self.start_bitop(conn_id, seq, args),
-            Route::Copy => self.start_copy(conn_id, seq, args),
+            Route::BitOpStore => {
+                self.start_bitop(conn_id, seq, args);
+                self.hold_if_pending(conn_id, seq);
+            }
+            Route::Copy => {
+                self.start_copy(conn_id, seq, args);
+                self.hold_if_pending(conn_id, seq);
+            }
             Route::ReadAcross { first, count } => {
                 let across =
                     crate::exec_read_across::Across { keys: first..first + count, dst: None };
                 self.start_read_across(conn_id, seq, args, across, is_quit, cluster_conn);
             }
-            Route::SetMove => self.start_set_move(conn_id, seq, args, is_quit, cluster_conn),
-            Route::MSetNx => self.start_msetnx(conn_id, seq, args, is_quit, cluster_conn),
+            Route::SetMove => {
+                self.start_set_move(conn_id, seq, args, is_quit, cluster_conn);
+                self.hold_if_pending(conn_id, seq);
+            }
+            Route::MSetNx => {
+                self.start_msetnx(conn_id, seq, args, is_quit, cluster_conn);
+                self.hold_if_pending(conn_id, seq);
+            }
             Route::PubSub => {
                 let reply = self.pubsub_info(args);
                 self.push_pending_single(conn_id, is_quit);
@@ -157,15 +174,21 @@ impl<C: Commands> Shard<C> {
                 let across =
                     crate::exec_read_across::Across { keys: first..first + count, dst: Some(dst) };
                 self.start_read_across(conn_id, seq, args, across, is_quit, cluster_conn);
+                self.hold_if_pending(conn_id, seq);
             }
             Route::FirstHit { numkeys } => {
                 self.start_first_hit(conn_id, seq, proto, args, numkeys, is_quit, cluster_conn);
+                self.hold_if_pending(conn_id, seq);
             }
-            Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
+            Route::Rename { nx } => {
+                self.start_rename(conn_id, seq, args, nx);
+                self.hold_if_pending(conn_id, seq);
+            }
             Route::ListMove { from, to } => {
                 let (from_left, to_left) =
                     (matches!(from, ListEnd::Left), matches!(to, ListEnd::Left));
                 self.start_list_move(conn_id, seq, args, from_left, to_left);
+                self.hold_if_pending(conn_id, seq);
             }
             // FEED.* — parse + shard-index dispatch live in
             // [`crate::exec_feed`] (500-LOC house rule).
@@ -267,6 +290,8 @@ impl<C: Commands> Shard<C> {
         route: Route,
         is_quit: bool,
     ) {
+        // gather, then write the result: a second step, so a hold
+        let two_step = matches!(route, Route::ZAlgebraStore(_) | Route::GeoStore { .. });
         let (targets, agg) = self.build_multi_targets(args, route);
         let remaining = targets.len().max(1) as u32;
         self.push_pending_slot(conn_id, remaining, agg, is_quit);
@@ -276,6 +301,9 @@ impl<C: Commands> Shard<C> {
             return;
         }
         self.dispatch_targets(conn_id, seq, targets);
+        if two_step {
+            self.hold_if_pending(conn_id, seq);
+        }
     }
 
     /// Register a `PendingSlot` for `conn_id` waiting on `remaining` parts
@@ -333,21 +361,8 @@ impl<C: Commands> Shard<C> {
     /// never come through here — `start_single` pushes them straight onto
     /// `request_batch` (the hot batched lane).
     pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
-        // Read-your-writes across the two cross-shard lanes. Single-key
-        // forwards (SET/GET) buffer in `request_batch` and only leave the
-        // shard when `flush_requests` runs at the end of the reactor
-        // iteration; a multi-key op fans out here via the *immediate*
-        // `send_to` below. Within one connection's command stream — most
-        // visibly a queued `SET` then `MGET` inside a MULTI/EXEC — the
-        // immediate gather would otherwise reach the owning shard BEFORE
-        // the still-buffered write, reading stale (nil) state. Flushing the
-        // batched lane first sends those writes ahead of this op's requests
-        // on the same origin→peer ring (FIFO), so the peer applies the
-        // write before it serves the gather. `flush_requests` short-circuits
-        // on an empty batch, so a lone non-transactional MGET (nothing
-        // buffered) pays one predicted-not-taken branch and still fans out
-        // fully asynchronously.
-        self.flush_requests();
+        // `send_to` sends this shard's buffered single-key forwards ahead of
+        // these requests, so a gather reads the writes sent before it
         for (shard, op) in targets {
             if shard == self.id {
                 self.exec_local(conn_id, seq, op);

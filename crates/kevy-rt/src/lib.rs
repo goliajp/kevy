@@ -128,6 +128,7 @@ mod exec_feed;
 mod exec_first_hit;
 mod exec_fold;
 mod exec_geostore;
+mod exec_hold;
 mod exec_listmove;
 mod exec_msetnx;
 mod exec_mutated;
