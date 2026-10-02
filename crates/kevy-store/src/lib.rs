@@ -102,6 +102,7 @@ mod hash_read;
 mod hash_weight;
 pub use hash_read::FieldValuePairs;
 mod hash_ttl;
+mod hash_ttl_read;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod keyspace_load;
