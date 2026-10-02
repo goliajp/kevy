@@ -163,6 +163,7 @@ registry! {
     b"LSET" WR,
     b"LTRIM" WR,
     b"MSET" WR,
+    b"MSETNX" WR,
     b"PERSIST" WR,
     b"PEXPIRE" WR,
     b"PEXPIREAT" WR,

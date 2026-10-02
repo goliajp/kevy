@@ -157,6 +157,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("MEMORY", -2),
     ("MGET", -2),
     ("MSET", -3),
+    ("MSETNX", -3),
     ("MULTI", 1),
     ("PERSIST", 2),
     ("PEXPIRE", 3),

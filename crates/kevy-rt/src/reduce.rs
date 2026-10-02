@@ -137,6 +137,7 @@ fn materialize_shape(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::FirstHit { .. }
         | Agg::ReadAcross { .. }
         | Agg::SetMove { .. }
+        | Agg::MSetNx { .. }
         | Agg::BitOpGather { .. }
         | Agg::ZStoreGather { .. }
         | Agg::GeoStore { .. }

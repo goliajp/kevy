@@ -19,6 +19,12 @@ pub(crate) enum Agg {
         next: usize,
         got: Option<SmallReply>,
     },
+    /// A cross-shard `MSETNX` asking whether any key exists: the pairs to
+    /// set, by shard, once none does, and how many existed so far.
+    MSetNx {
+        pairs: Vec<(usize, crate::message::KvPairs)>,
+        existing: i64,
+    },
     /// A cross-shard `SMOVE`: which step it is in, the keys and member,
     /// and the last step's answer.
     SetMove {

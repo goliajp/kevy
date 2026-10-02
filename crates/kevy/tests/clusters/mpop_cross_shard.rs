@@ -340,3 +340,20 @@ fn smove_moves_a_member_between_shards_in_redis_order() {
     assert_eq!(call(&mut c, &[b"SMOVE", src, dst, b"b"]), b":1\r\n");
     assert_eq!(call(&mut c, &[b"EXISTS", src]), b":0\r\n", "the emptied source goes");
 }
+
+/// `MSETNX` over keys on different shards sets every pair or none.
+#[test]
+fn msetnx_sets_all_or_none_across_shards() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let k = apart("mx", 3);
+    assert_eq!(call(&mut c, &[b"MSETNX", b(&k[0]), b"1", b(&k[1]), b"2"]), b":1\r\n");
+    assert_eq!(call(&mut c, &[b"GET", b(&k[1])]), b"$1\r\n2\r\n");
+    assert_eq!(call(&mut c, &[b"MSETNX", b(&k[2]), b"3", b(&k[1]), b"9"]), b":0\r\n");
+    assert_eq!(
+        call(&mut c, &[b"EXISTS", b(&k[2])]),
+        b":0\r\n",
+        "a key that existed elsewhere stops all"
+    );
+    assert_eq!(call(&mut c, &[b"GET", b(&k[1])]), b"$1\r\n2\r\n");
+}

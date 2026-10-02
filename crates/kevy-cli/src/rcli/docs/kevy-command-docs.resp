@@ -1,4 +1,4 @@
-*474
+*476
 $4
 KEYS
 *14
@@ -1210,6 +1210,38 @@ $6
 compat
 $202
 differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic
+$5
+flags
+*1
+$5
+write
+$6
+MSETNX
+*14
+$7
+summary
+$62
+Set multiple key/value pairs, only if none of the keys exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$32
+MSETNX key value [key value ...]
+$10
+complexity
+$10
+O(N) pairs
+$6
+compat
+$172
+differs: keys on different shards are checked and then set, so another client may create one of them in between; co-locate the keys with a {hashtag} for Redis's atomic form
 $5
 flags
 *1

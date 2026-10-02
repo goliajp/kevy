@@ -374,6 +374,17 @@ pub enum Route {
         /// How many there are.
         count: usize,
     },
+    /// `MSETNX key value [key value …]`. Keys on one shard run there as
+    /// sent; keys apart are first asked whether any exists, and only when
+    /// none does are the pairs set, shard by shard — not atomic across the
+    /// shards, as `MSET` is not.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// assert_ne!(Route::MSetNx, Route::MSet);
+    /// ```
+    MSetNx,
     /// `SMOVE src dst member`. Keys on one shard run there as sent; keys
     /// apart move the member in three steps — the destination's type, the
     /// source's checks and removal, the destination's add — putting the
