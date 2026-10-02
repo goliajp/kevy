@@ -216,7 +216,8 @@ fn removals_merge_thinned_segments_and_order_holds() {
         rng ^= rng << 17;
         rng
     };
-    let n = 20 * ZSEG_CAP as u64;
+    // three segments' worth still splits and merges under miri
+    let n = if cfg!(miri) { 3 } else { 20 } * ZSEG_CAP as u64;
     for i in 0..n {
         let m = alloc::format!("m{i:06}");
         let score = (next() % 1000) as f64;
