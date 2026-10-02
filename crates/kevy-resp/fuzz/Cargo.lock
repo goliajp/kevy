@@ -65,10 +65,15 @@ name = "kevy-hash"
 version = "7.0.0"
 
 [[package]]
+name = "kevy-num"
+version = "7.0.0"
+
+[[package]]
 name = "kevy-resp"
 version = "7.0.0"
 dependencies = [
  "kevy-bytes",
+ "kevy-num",
 ]
 
 [[package]]
