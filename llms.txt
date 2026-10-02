@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (226 total)
+## Verbs (231 total)
 
 ### scan
 
@@ -119,6 +119,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: differs: EXAT / PXAT / PERSIST are not accepted, and an expiry of zero or less is refused rather than applied
 - `GETRANGE key start end` [readonly] — Return a byte range of a string value.
   - complexity: O(M) over the returned bytes
+  - compat: full
+- `LCS key1 key2 [LEN] [IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]` [readonly] — Return the longest common subsequence of two strings, its length, or its matching ranges.
+  - complexity: O(N*M) — the lengths of the two strings
   - compat: full
 - `SETBIT key offset value` [write] — Set the bit at the given offset, returning its old value.
   - complexity: O(1) amortised; O(N) on the call that grows the value out to the offset
@@ -339,6 +342,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SINTER key [key ...]` [readonly] — Return the intersection of the given sets (cross-shard gather).
   - complexity: O(sum of the source cardinalities) — there is NO smallest-set-first ordering, so SINTER huge tiny costs O(huge) where Redis costs O(tiny * k)
   - compat: full
+- `SINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the size of the intersection of the given sets, counting at most LIMIT.
+  - complexity: O(N*M) worst case — N the smallest set, M the keys
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `SINTERSTORE destination key [key ...]` [write] — Store the intersection of the given sets into destination.
   - complexity: O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm
   - compat: full
@@ -387,12 +393,18 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZCOUNT key min max` [readonly] — Count members with scores within the given bounds.
   - complexity: O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned
   - compat: full
+- `ZDIFF numkeys key [key ...] [WITHSCORES]` [readonly] — Return the difference of the first sorted set and the rest.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZDIFFSTORE destination numkeys key [key ...]` [write] — Store the difference of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R); each source is extracted whole on its own shard
   - compat: full
 - `ZINCRBY key increment member` [write] — Increment a member's score in a sorted set.
   - complexity: O(log N)
   - compat: full
+- `ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]` [readonly] — Return the intersection of the given sorted sets.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the cardinality of the intersection of the given sorted sets.
   - complexity: O(sum of the source cardinalities) — LIMIT does not short-circuit the gather, only the combine
   - compat: full
@@ -450,6 +462,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZSCORE key member` [readonly] — Return a member's score.
   - complexity: O(1) — a hash lookup
   - compat: full
+- `ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]` [readonly] — Return the union of the given sorted sets.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the union of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R)
   - compat: full
