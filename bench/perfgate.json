@@ -10,13 +10,29 @@
     "ops": 0.92,
     "instr": 1.03,
     "cycles": 1.05,
-    "p95_us": 1.20
+    "p95_us": 1.2
   },
   "noise": {
     "ops": 0.04,
     "instr": 0.01,
     "cycles": 0.025,
-    "p95_us": 0.10
+    "p95_us": 0.1
+  },
+  "instr_by_callgrind": {
+    "_doc": "instructions of these throughput angles are judged by the named callgrind angle: identical code moves them ±2–3% round to round",
+    "onekey_get": "xonekey_get",
+    "onekey_set": "xonekey_set",
+    "zinterstore": "zinterstore"
+  },
+  "noise_by_angle": {
+    "_doc": "half-ranges the same binary showed against itself, worst of 5 A/A runs on lx64 (2026-10-02); an angle's rounds are judged on their median while they spread no wider",
+    "onekey_get": {
+      "ops": 0.11,
+      "cycles": 0.1
+    },
+    "zinterstore": {
+      "cycles": 0.04
+    }
   },
   "angles": [
     "pinned_get",
