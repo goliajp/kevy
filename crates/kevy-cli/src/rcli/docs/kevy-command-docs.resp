@@ -1,4 +1,4 @@
-*462
+*470
 $4
 KEYS
 *14
@@ -3953,13 +3953,45 @@ $5
 write
 $9
 extension
+$9
+ZLEXCOUNT
+*14
+$7
+summary
+$44
+Count the members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$21
+ZLEXCOUNT key min max
+$10
+complexity
+$45
+O(log² N) — two binary searches over ranks
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $6
 ZRANGE
 *14
 $7
 summary
-$29
-Return members by rank range.
+$58
+Return members by rank, score or member range, either way.
 $5
 since
 $5
@@ -3970,16 +4002,16 @@ $4
 zset
 $6
 syntax
-$34
-ZRANGE key start stop [WITHSCORES]
+$79
+ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
 $10
 complexity
-$89
-O(log N + M) — one rank descent seeks to start, then the M requested members are walked
+$139
+O(log N + M) — one rank descent seeks to start, then the M requested members are walked; BYLEX finds its ends by binary search over ranks
 $6
 compat
-$148
-differs: only the legacy 'key start stop [WITHSCORES]' form is accepted — the Redis 6.2 BYSCORE / BYLEX / REV / LIMIT arguments are a syntax error
+$4
+full
 $5
 flags
 *1
@@ -4049,6 +4081,38 @@ flags
 *1
 $8
 readonly
+$11
+ZRANGEBYLEX
+*14
+$7
+summary
+$41
+Return members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$44
+ZRANGEBYLEX key min max [LIMIT offset count]
+$10
+complexity
+$14
+O(log² N + M)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $5
 ZRANK
 *14
@@ -4104,6 +4168,38 @@ $10
 complexity
 $10
 O(M log N)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$14
+ZREMRANGEBYLEX
+*14
+$7
+summary
+$45
+Remove the members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$26
+ZREMRANGEBYLEX key min max
+$10
+complexity
+$20
+O(log² N + M log N)
 $6
 compat
 $4
@@ -4200,6 +4296,38 @@ $10
 complexity
 $84
 O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$14
+ZREVRANGEBYLEX
+*14
+$7
+summary
+$56
+Return members between two member bounds, highest first.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$47
+ZREVRANGEBYLEX key max min [LIMIT offset count]
+$10
+complexity
+$14
+O(log² N + M)
 $6
 compat
 $4
