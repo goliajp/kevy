@@ -3,16 +3,12 @@
 //! A zset past [`Z_PROMOTE`] members stops being one `Arc<ZSetData>`
 //! and becomes `Value::SegZSet`: the member→score side is a
 //! [`SegMap`] (the Stage-HS bucket-sharded stone), and the
-//! score-ordered side is a vector of `Arc`-shared [`RankTree`]
-//! segments holding contiguous `(score, member)` ranges of ≤
-//! [`ZSEG_CAP`] entries. A snapshot view pins everything with one
-//! outer Arc clone; the first write during that window clones one
-//! member bucket plus one segment tree — never the whole value. This
-//! reuses both existing stones untouched (no fork of the B-tree's
-//! rebalancing internals); the price is an O(segments) prefix walk on
-//! rank arithmetic, microseconds even at hundreds of millions of
-//! members. Design rationale: the element-COW RFC under
-//! the element-COW RFC.
+//! score-ordered side is one B+tree counted for rank whose nodes are
+//! `Arc`-shared. A snapshot view pins everything with one outer Arc
+//! clone; the first write during that window clones one member bucket
+//! plus the tree nodes on its path — never the whole value. Rank,
+//! partition by score and the start of an iteration are one descent
+//! each, at any size.
 //!
 //! ```
 //! use kevy_store::zset_seg::SegZSetData;
@@ -25,13 +21,9 @@
 //! assert_eq!(z.ordered().map(|(m, _)| m).collect::<Vec<_>>(), [&b"b"[..], b"a"]);
 //! ```
 
-#[cfg(not(feature = "std"))]
-use crate::nostd_prelude::*;
 use crate::seg_map::SegMap;
 use crate::value::{Score, ScoreBound, SmallBytes};
-use alloc::sync::Arc;
-use core::mem::size_of;
-use kevy_ranktree::RankTree;
+use crate::zindex::ZIndex;
 
 /// Flat `Value::ZSet` size at which a write promotes to the segmented
 /// representation.
@@ -47,29 +39,19 @@ use kevy_ranktree::RankTree;
 /// # Ok::<(), kevy_store::StoreError>(())
 /// ```
 pub const Z_PROMOTE: usize = 16 * 1024;
-/// Entries per score-ordered segment tree; one segment is the per-write
-/// COW clone bound, and — as with `seg_map::BUCKET_SPLIT` — the grain
-/// score-scattered write bursts aggregate over per tick. 2K entries
-/// keeps a burst's per-tick clone total under the tick bar (empirically
-/// sized alongside `BUCKET_SPLIT` — see its note).
+/// The most entries one score-ordered segment held, when the score order
+/// was a row of segment trees. It is one tree now, copied a path at a
+/// time; nothing reads this.
 ///
 /// ```
-/// use kevy_store::zset_seg::{SegZSetData, ZSEG_CAP};
-/// let mut z = SegZSetData::default();
-/// for i in 0..3 * ZSEG_CAP {
-///     z.insert(&i.to_be_bytes(), -(i as f64));
-/// }
-/// // spread over several segments, the order is still global
-/// let first = z.ordered().next().unwrap();
-/// assert_eq!(first.1, -((3 * ZSEG_CAP - 1) as f64));
+/// # #![allow(deprecated)]
+/// assert_eq!(kevy_store::zset_seg::ZSEG_CAP, 512);
 /// ```
+#[deprecated(since = "7.3.0", note = "the score order is one tree; nothing reads this")]
 pub const ZSEG_CAP: usize = 512;
 
-type ZKey = (Score, SmallBytes);
-
-/// A giant sorted set: sharded member→score map + ordered segment
-/// trees. Segments are non-empty and range-disjoint; `maxes[i]` caches
-/// `segs[i]`'s largest key for O(log segments) routing.
+/// A giant sorted set: sharded member→score map + one rank-counted
+/// score order.
 ///
 /// ```
 /// use kevy_store::zset_seg::SegZSetData;
@@ -81,8 +63,7 @@ type ZKey = (Score, SmallBytes);
 #[derive(Debug, Clone, Default)]
 pub struct SegZSetData {
     by_member: SegMap<f64>,
-    segs: Vec<Arc<RankTree<ZKey>>>,
-    maxes: Vec<ZKey>,
+    order: ZIndex,
 }
 
 impl SegZSetData {
@@ -147,13 +128,6 @@ impl SegZSetData {
         self.by_member.contains_key(member)
     }
 
-    /// Segment index a key routes to for insertion (first segment whose
-    /// max is ≥ the key; past-the-end keys go to the last segment).
-    fn route(&self, key: &ZKey) -> usize {
-        let i = self.maxes.partition_point(|mx| mx < key);
-        i.min(self.segs.len().saturating_sub(1))
-    }
-
     /// Insert or update; returns whether the member was new. COW cost:
     /// one member bucket + one segment tree.
     ///
@@ -168,54 +142,21 @@ impl SegZSetData {
         self.insert_weighed(member, score).0
     }
 
-    /// [`Self::insert`], also answering by how many bytes the structure
-    /// around the members moved: the member table's growth, and a
-    /// segment pointer for each segment split off or retired.
+    /// [`Self::insert`], also answering by how many bytes the member
+    /// table grew; the score order is weighed per member.
     pub(crate) fn insert_weighed(&mut self, member: &[u8], score: f64) -> (bool, i64) {
-        let segs = self.segs.len();
         let smb = SmallBytes::from_slice(member);
         let (old, grown) = self.by_member.insert_sized(smb.clone(), score);
-        let is_new = self.order(old, smb, score);
-        (is_new, grown + Self::seg_bytes(self.segs.len(), segs))
-    }
-
-    /// A segment pointer's bytes for every segment between `before` and `now`.
-    #[inline]
-    fn seg_bytes(now: usize, before: usize) -> i64 {
-        (now as i64 - before as i64) * size_of::<Arc<RankTree<ZKey>>>() as i64
-    }
-
-    /// Put `(score, smb)` in order after the member table took it; `old`
-    /// is the score it held before. Whether the member was new.
-    fn order(&mut self, old: Option<f64>, smb: SmallBytes, score: f64) -> bool {
         if let Some(old_sc) = old {
-            // See ZSetData::insert. Same reasoning, and one cost more: the
-            // path below reaches its segment through Arc::make_mut, so under
-            // a live snapshot an unchanged score deep-clones a segment of up
-            // to ZSEG_CAP entries in order to put back what was in it.
+            // See ZSetData::insert: an unchanged score leaves the order,
+            // and under a live snapshot its path, alone.
             if Score(old_sc) == Score(score) {
-                return false;
+                return (false, grown);
             }
-            self.remove_ordered(&(Score(old_sc), smb.clone()));
+            self.order.remove(old_sc, smb.as_slice());
         }
-        let key = (Score(score), smb);
-        if self.segs.is_empty() {
-            let mut t = RankTree::new();
-            t.insert(key.clone());
-            self.segs.push(Arc::new(t));
-            self.maxes.push(key);
-            return old.is_none();
-        }
-        let si = self.route(&key);
-        let seg = Arc::make_mut(&mut self.segs[si]);
-        seg.insert(key.clone());
-        if key > self.maxes[si] {
-            self.maxes[si] = key;
-        }
-        if seg.len() > ZSEG_CAP {
-            self.split(si);
-        }
-        old.is_none()
+        self.order.insert(score, smb);
+        (old.is_none(), grown)
     }
 
     /// Remove a member; returns whether it was present.
@@ -232,73 +173,12 @@ impl SegZSetData {
     }
 
     /// [`Self::remove`]; when the member was there, by how many bytes the
-    /// structure around the members moved (a segment it emptied retires;
-    /// the member table does not shrink).
+    /// structure around the members moved: none, the member table does
+    /// not shrink and the score order is weighed per member.
     pub(crate) fn remove_weighed(&mut self, member: &[u8]) -> Option<i64> {
-        let segs = self.segs.len();
         let sc = self.by_member.remove(member)?;
-        self.remove_ordered(&(Score(sc), SmallBytes::from_slice(member)));
-        Some(Self::seg_bytes(self.segs.len(), segs))
-    }
-
-    /// Drop `key` from its segment, retiring emptied segments and
-    /// refreshing the cached max when the tail key goes.
-    fn remove_ordered(&mut self, key: &ZKey) {
-        let si = self.route(key);
-        let seg = Arc::make_mut(&mut self.segs[si]);
-        seg.remove(key);
-        if seg.is_empty() {
-            self.segs.remove(si);
-            self.maxes.remove(si);
-            return;
-        }
-        if *key == self.maxes[si] {
-            self.maxes[si] = seg.iter_rev().next().expect("non-empty").clone();
-        }
-        if seg.len() < ZSEG_CAP / 4 {
-            self.merge_sparse(si);
-        }
-    }
-
-    /// Fold a sparse segment `si` into its smaller neighbour when the two
-    /// fit in half a segment: without it, removals leave segments that only
-    /// ever thin out. Half full, the merged segment takes `ZSEG_CAP / 2`
-    /// inserts before it splits again, so the two never alternate.
-    fn merge_sparse(&mut self, si: usize) {
-        let len = |i: usize| self.segs.get(i).map_or(usize::MAX, |t| t.len());
-        let left = if si == 0 { usize::MAX } else { len(si - 1) };
-        let lo = if left <= len(si + 1) { si.wrapping_sub(1) } else { si };
-        if lo == usize::MAX || lo + 1 >= self.segs.len() || len(lo) + len(lo + 1) > ZSEG_CAP / 2 {
-            return;
-        }
-        let hi = self.segs.remove(lo + 1);
-        let merged = Arc::make_mut(&mut self.segs[lo]);
-        for k in hi.iter() {
-            merged.insert(k.clone());
-        }
-        // the merged segment's max is the higher one's
-        self.maxes.remove(lo);
-    }
-
-    /// Split segment `si` (over [`ZSEG_CAP`]) into two rank halves.
-    /// O(segment): both halves rebuild from the ordered walk.
-    fn split(&mut self, si: usize) {
-        let src = &self.segs[si];
-        let half = src.len() / 2;
-        let mut lo = RankTree::new();
-        let mut hi = RankTree::new();
-        for (i, k) in src.iter().enumerate() {
-            if i < half {
-                lo.insert(k.clone());
-            } else {
-                hi.insert(k.clone());
-            }
-        }
-        let lo_max = lo.iter_rev().next().expect("half non-empty").clone();
-        self.segs[si] = Arc::new(lo);
-        self.segs.insert(si + 1, Arc::new(hi));
-        self.maxes.insert(si, lo_max);
-        // maxes[si + 1] keeps the old segment's max — still hi's max.
+        self.order.remove(sc, member);
+        Some(0)
     }
 
     /// `(member, score)` pairs in ascending `(score, member)` order.
@@ -313,11 +193,11 @@ impl SegZSetData {
     /// assert_eq!(got, [(&b"c"[..], 1.0), (b"a", 2.0), (b"b", 2.0)]);
     /// ```
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
-        self.segs.iter().flat_map(|t| t.iter()).map(|(s, m)| (m.as_slice(), s.0))
+        self.order.iter()
     }
 
-    /// Like [`Self::ordered`] but starting at ascending `rank` — an
-    /// O(segments) prefix walk, then a seek inside the hit segment.
+    /// Like [`Self::ordered`] but starting at ascending `rank`: one
+    /// descent to it.
     ///
     /// ```
     /// use kevy_store::zset_seg::SegZSetData;
@@ -329,25 +209,7 @@ impl SegZSetData {
     /// assert_eq!(tail, [&b"b"[..], b"c"]);
     /// ```
     pub fn ordered_from(&self, rank: usize) -> impl Iterator<Item = (&[u8], f64)> {
-        let (si, off) = self.locate_rank(rank);
-        self.segs[si..]
-            .iter()
-            .enumerate()
-            .flat_map(move |(j, t)| t.iter_from(if j == 0 { off } else { 0 }))
-            .map(|(s, m)| (m.as_slice(), s.0))
-    }
-
-    /// Segment index + in-segment rank for a global rank. `rank >= len`
-    /// yields `(segs.len(), 0)` — an empty tail.
-    fn locate_rank(&self, rank: usize) -> (usize, usize) {
-        let mut remaining = rank;
-        for (si, t) in self.segs.iter().enumerate() {
-            if remaining < t.len() {
-                return (si, remaining);
-            }
-            remaining -= t.len();
-        }
-        (self.segs.len(), 0)
+        self.order.iter_from(rank)
     }
 
     /// The ascending rank of `member` (whose score is `score`).
@@ -361,13 +223,7 @@ impl SegZSetData {
     /// assert_eq!(z.rank_of(b"b", 5.0), None); // the score must match
     /// ```
     pub fn rank_of(&self, member: &[u8], score: f64) -> Option<usize> {
-        let key = (Score(score), SmallBytes::from_slice(member));
-        if self.segs.is_empty() {
-            return None;
-        }
-        let si = self.route(&key);
-        let base: usize = self.segs[..si].iter().map(|t| t.len()).sum();
-        self.segs[si].rank_of(&key).map(|r| base + r)
+        self.order.rank_of(score, member)
     }
 
     /// First rank whose score satisfies `min` as a lower bound.
@@ -404,22 +260,13 @@ impl SegZSetData {
     }
 
     /// Count of leading keys for which the (monotone) score predicate
-    /// holds: whole segments answer from their cached max, the frontier
-    /// segment does one O(log) partition descent.
+    /// holds: one descent.
     fn frontier_rank<F: Fn(f64) -> bool>(&self, pred: F) -> usize {
-        let mut acc = 0usize;
-        for (si, t) in self.segs.iter().enumerate() {
-            if pred(self.maxes[si].0.0) {
-                acc += t.len();
-            } else {
-                return acc + t.partition_point(|(s, _)| pred(s.0));
-            }
-        }
-        acc
+        self.order.partition(pred)
     }
 
-    /// Build from the flat representation: ordered chunks become
-    /// segment trees; members re-shard through the SegMap insert.
+    /// Build from the flat representation: the order is built bottom up
+    /// from the flat one's; members re-shard through the SegMap insert.
     ///
     /// ```
     /// use kevy_store::zset_seg::SegZSetData;
@@ -433,26 +280,13 @@ impl SegZSetData {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn from_flat(flat: &crate::value::ZSetData) -> Self {
-        let mut out = SegZSetData::default();
-        let mut cur = RankTree::new();
+        let mut by_member = SegMap::default();
         for (m, sc) in flat.ordered() {
-            let smb = SmallBytes::from_slice(m);
-            out.by_member.insert(smb.clone(), sc);
-            cur.insert((Score(sc), smb));
-            if cur.len() == ZSEG_CAP {
-                out.push_built_seg(&mut cur);
-            }
+            by_member.insert(SmallBytes::from_slice(m), sc);
         }
-        if !cur.is_empty() {
-            out.push_built_seg(&mut cur);
-        }
-        out
-    }
-
-    fn push_built_seg(&mut self, cur: &mut RankTree<ZKey>) {
-        let max = cur.iter_rev().next().expect("non-empty").clone();
-        self.segs.push(Arc::new(core::mem::take(cur)));
-        self.maxes.push(max);
+        let entries = flat.ordered().map(|(m, sc)| (sc, SmallBytes::from_slice(m)));
+        let order = ZIndex::from_sorted(by_member.len(), entries);
+        SegZSetData { by_member, order }
     }
 
     /// [`crate::Value::weight`]'s SegZSet arm — the flat ZSet model
@@ -462,17 +296,12 @@ impl SegZSetData {
             + self.by_member.shell_bytes()
             + self.by_member.keys().map(|m| 2 * crate::hash_weight::held(m)).sum::<u64>()
             + (self.len() as u64).saturating_mul(crate::value::RANKTREE_SLOT_BYTES)
-            + (self.segs.len() * size_of::<Arc<RankTree<ZKey>>>()) as u64
     }
 
-    /// Every bucket AND every segment tree unique — the bio-drop gate.
+    /// Every bucket unique and the score order's root unshared — the
+    /// bio-drop gate. Nodes below a root a write copied may still be
+    /// shared with a snapshot; the drop then only counts them down.
     pub(crate) fn all_unique(&self) -> bool {
-        self.by_member.all_unique() && self.segs.iter().all(|t| Arc::strong_count(t) == 1)
-    }
-
-    /// Test-only: `(strong_count, len)` per segment tree.
-    #[cfg(test)]
-    pub(crate) fn seg_stats(&self) -> Vec<(usize, usize)> {
-        self.segs.iter().map(|t| (Arc::strong_count(t), t.len())).collect()
+        self.by_member.all_unique() && self.order.root_unique()
     }
 }

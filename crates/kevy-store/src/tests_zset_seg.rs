@@ -84,22 +84,25 @@ fn zincr_only_workload_promotes() {
     miri,
     ignore = "16K-element promotion loops; hours under miri's interpretation overhead. The unsafe surface these paths reach (kevy-map slot management) is miri-covered by the flat-zset subset and kevy-map's own suite; SegZSet itself is safe composition (kevy-store is forbid(unsafe_code))."
 )]
-fn cow_write_under_pinned_view_clones_one_segment() {
+fn cow_write_under_pinned_view_leaves_the_view_whole() {
     let mut st = Store::new();
     let n = 3 * Z_PROMOTE;
     zadd_n(&mut st, b"z", n);
+    let before = st.zrange(b"z", 0, -1).unwrap();
     let view = st.collect_snapshot();
     st.zadd(b"z", &[(50.5, b"after-pin".as_slice())]).unwrap();
 
     let Some(Value::SegZSet(live)) = st.map.get(b"z".as_slice()).map(|e| &e.value) else {
         panic!("still segmented");
     };
-    let stats = live.seg_stats();
-    let unique = stats.iter().filter(|(rc, _)| *rc == 1).count();
-    let shared = stats.iter().filter(|(rc, _)| *rc >= 2).count();
-    assert_eq!(unique, 1, "exactly the routed segment tree is unshared");
-    assert!(shared >= 2, "untouched segment trees stay view-shared");
-
+    assert!(!live.all_unique(), "the buckets the write did not touch stay view-shared");
+    let mut pinned = alloc::vec::Vec::new();
+    view.each(|_, v, _| {
+        if let Value::SegZSet(z) = v {
+            pinned = z.ordered().map(|(m, s)| (m.to_vec(), s)).collect();
+        }
+    });
+    assert_eq!(pinned, before, "the view keeps the order it pinned");
     let mut view_len = 0usize;
     view.each(|_, v, _| {
         if let Value::SegZSet(z) = v {
@@ -201,12 +204,11 @@ fn load_zset_applies_the_encoding_switch() {
     assert!(!is_segzset(&st, b"small"));
 }
 
-/// Random inserts and removes against a model: order holds, segments stay
-/// in bounds, and after most members go, the segment count shrinks with
-/// them instead of staying where the peak left it.
+/// Random inserts, score updates and removes against a model: order and
+/// ranks hold.
 #[test]
-fn removals_merge_thinned_segments_and_order_holds() {
-    use crate::zset_seg::{SegZSetData, ZSEG_CAP};
+fn random_updates_and_removals_keep_order_and_ranks() {
+    use crate::zset_seg::SegZSetData;
     let mut z = SegZSetData::default();
     let mut model = alloc::collections::BTreeMap::new();
     let mut rng = 0x2545_f491_4f6c_dd1du64;
@@ -216,32 +218,25 @@ fn removals_merge_thinned_segments_and_order_holds() {
         rng ^= rng << 17;
         rng
     };
-    // three segments' worth still splits and merges under miri
-    let n = if cfg!(miri) { 3 } else { 20 } * ZSEG_CAP as u64;
-    for i in 0..n {
-        let m = alloc::format!("m{i:06}");
-        let score = (next() % 1000) as f64;
-        z.insert(m.as_bytes(), score);
-        model.insert(m.into_bytes(), score);
-    }
-    let peak = z.seg_stats().len();
-    for i in 0..n {
-        if next() % 10 != 0 {
-            let m = alloc::format!("m{i:06}");
+    let n = if cfg!(miri) { 1500 } else { 10_000 };
+    for _ in 0..3 * n {
+        let m = alloc::format!("m{:06}", next() % n);
+        if next() % 4 == 0 {
             assert_eq!(z.remove(m.as_bytes()), model.remove(m.as_bytes()).is_some());
+        } else {
+            let score = (next() % 1000) as f64;
+            assert_eq!(
+                z.insert(m.as_bytes(), score),
+                model.insert(m.into_bytes(), score).is_none()
+            );
         }
     }
-    let lens: alloc::vec::Vec<usize> = z.seg_stats().iter().map(|&(_, l)| l).collect();
-    assert!(lens.iter().all(|&l| (1..=ZSEG_CAP).contains(&l)), "{lens:?}");
     let mut want: alloc::vec::Vec<(&[u8], f64)> =
         model.iter().map(|(m, s)| (m.as_slice(), *s)).collect();
     want.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
     assert!(z.ordered().eq(want.iter().copied()), "order broke");
-    let left = model.len();
-    println!("peak {peak} segments; {left} members left in {} segments", lens.len());
-    assert!(
-        lens.len() * (ZSEG_CAP / 8) <= left + ZSEG_CAP,
-        "{} segments for {left} members",
-        lens.len()
-    );
+    for (r, (m, s)) in want.iter().enumerate().step_by(97) {
+        assert_eq!(z.rank_of(m, *s), Some(r));
+        assert_eq!(z.ordered_from(r).next(), Some((*m, *s)));
+    }
 }
