@@ -54,7 +54,7 @@ fn float_increments_replay_to_the_same_text() {
             .with_ttl_reaper_manual()
             .with_appendfsync(AppendFsync::Always)
     };
-    let deltas = [0.1, 1e-17, 2.5e-17, 1e300, -1e300, 123456789.123456789, 1.0 / 3.0];
+    let deltas = [0.1, 1e-17, 2.5e-17, 1e300, -1e300, 123456789.12345679, 1.0 / 3.0];
     let (k, h) = {
         let s = Store::open(cfg()).unwrap();
         for d in deltas {
