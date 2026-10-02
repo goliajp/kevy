@@ -187,7 +187,8 @@ impl<C: Commands> Shard<C> {
             match reply {
                 Ok(true) => {}
                 Ok(false) => {
-                    conn.output.extend_from_slice(b"$-1\r\n");
+                    let nil: &[u8] = if proto == RespVersion::V3 { b"_\r\n" } else { b"$-1\r\n" };
+                    conn.output.extend_from_slice(nil);
                 }
                 Err(_) => {
                     // WRONGTYPE — only error a string-only GET can hit

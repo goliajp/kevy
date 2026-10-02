@@ -6,6 +6,7 @@ use crate::Commands;
 use crate::message::{Agg, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
+use kevy_resp::RespVersion;
 
 impl<C: Commands> Shard<C> {
     /// Fold a sub-result into its slot; emit completed replies in seq order.
@@ -25,6 +26,16 @@ impl<C: Commands> Shard<C> {
                 return; // already emitted (defensive — shouldn't happen)
             }
             let idx = (seq - conn.next_emit) as usize;
+            // a reply built outside the dispatch (an orchestrated op, an
+            // error, a pubsub ack) carries RESP2 nulls
+            let part = match part {
+                Part::Reply(b)
+                    if conn.pending.get(idx).is_some_and(|s| s.proto == RespVersion::V3) =>
+                {
+                    Part::Reply(b.resp3_nulls())
+                }
+                part => part,
+            };
             // The in-order single-target reply — the forwarded GET/SET of a
             // pipeline — goes straight to the output: no aggregator, no
             // stored copy, no materialise.

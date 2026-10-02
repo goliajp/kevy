@@ -245,7 +245,9 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             if let Some(slot) = c.pending.front_mut() {
                 slot.remaining = 0;
-                slot.done = Some(SmallReply::from_vec(bytes));
+                let reply = SmallReply::from_vec(bytes);
+                let v3 = slot.proto == kevy_resp::RespVersion::V3;
+                slot.done = Some(if v3 { reply.resp3_nulls() } else { reply });
             }
             drain_front(c);
         }

@@ -160,6 +160,7 @@ mod persist_jobs;
 mod persist_rewrite;
 mod persist_worker;
 pub mod propagation;
+mod pubsub_frames;
 mod reduce;
 mod repl_trace;
 mod replica_inbox;
@@ -184,6 +185,7 @@ mod shard_lifecycle;
 mod shard_run;
 mod shard_tick;
 mod slow_iter;
+mod small_reply;
 mod types;
 #[cfg(target_os = "linux")]
 mod uring_aof;

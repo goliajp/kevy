@@ -34,6 +34,19 @@ CASES = [
     ("XINFO CONSUMERS", [b"XINFO", b"CONSUMERS", b"xc", b"g"],    [[b"XADD", b"xc", b"1-1", b"k", b"v"],
                                                                    [b"XGROUP", b"CREATE", b"xc", b"g", b"0"],
                                                                    [b"XGROUP", b"CREATECONSUMER", b"xc", b"g", b"c"]]),
+    # Absent values: RESP3 has a single null, `_`. Every case above answers
+    # with data, so the gate stayed green while kevy sent `$-1` / `*-1` to
+    # RESP3 clients. One per path a null can leave by: a command body, the
+    # GET fast path, a nested element, a gather across shards, an
+    # orchestrated move, a pop with a count, a WITHSCORE rank.
+    ("GET nil",      [b"GET", b"nil:a"],                          []),
+    ("HGET nil",     [b"HGET", b"nil:h", b"f"],                   []),
+    ("HMGET nil",    [b"HMGET", b"nil:h2", b"f", b"g"],           [[b"HSET", b"nil:h2", b"f", b"v"]]),
+    ("MGET nil",     [b"MGET", b"nil:m1", b"nil:a", b"nil:b", b"nil:c", b"nil:d"], [[b"SET", b"nil:m1", b"v"]]),
+    ("LMOVE nil",    [b"LMOVE", b"nil:l", b"nil:dst", b"LEFT", b"RIGHT"], []),
+    ("RPOP count nil", [b"RPOP", b"nil:l2", b"2"],                []),
+    ("ZRANK WS nil", [b"ZRANK", b"nil:z", b"m", b"WITHSCORE"],    [[b"ZADD", b"nil:z", b"1", b"a"]]),
+    ("ZMSCORE nil",  [b"ZMSCORE", b"nil:z2", b"a", b"x"],         [[b"ZADD", b"nil:z2", b"1", b"a"]]),
 ]
 
 
