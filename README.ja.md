@@ -232,7 +232,7 @@ kevyはブラウザの中で本物のストアとして動きます。npmパッ�
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy)は、
 `wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
 ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
-両側とも依存ゼロ。七ファイル、パックで653 KB（回線上はgzipで667 KB）です。
+両側とも依存ゼロ。七ファイル、回線上はgzipで675 KBです。
 
 ```sh
 npm install @goliapkg/kevy

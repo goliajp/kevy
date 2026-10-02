@@ -47,7 +47,7 @@ at replay instead of silently applied. A log stored by a pre-4.0 tab
 replays unchanged (v1, read forever) and upgrades to v2 at its first
 compaction; a log pumped out of a browser tab still replays in a
 native kevy unchanged, and vice versa. The package is seven files
-(653 KB packed, 667 KB gzipped over the wire): the wasm module, the loader, the OPFS worker,
+(675 KB gzipped over the wire): the wasm module, the loader, the OPFS worker,
 hand-written TypeScript typings, and the usual README, changelog and manifest.
 Zero dependencies on both sides of the boundary.
 
