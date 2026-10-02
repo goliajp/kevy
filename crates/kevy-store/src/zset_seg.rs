@@ -245,9 +245,34 @@ impl SegZSetData {
         if seg.is_empty() {
             self.segs.remove(si);
             self.maxes.remove(si);
-        } else if *key == self.maxes[si] {
+            return;
+        }
+        if *key == self.maxes[si] {
             self.maxes[si] = seg.iter_rev().next().expect("non-empty").clone();
         }
+        if seg.len() < ZSEG_CAP / 4 {
+            self.merge_sparse(si);
+        }
+    }
+
+    /// Fold a sparse segment `si` into its smaller neighbour when the two
+    /// fit in half a segment: without it, removals leave segments that only
+    /// ever thin out. Half full, the merged segment takes `ZSEG_CAP / 2`
+    /// inserts before it splits again, so the two never alternate.
+    fn merge_sparse(&mut self, si: usize) {
+        let len = |i: usize| self.segs.get(i).map_or(usize::MAX, |t| t.len());
+        let left = if si == 0 { usize::MAX } else { len(si - 1) };
+        let lo = if left <= len(si + 1) { si.wrapping_sub(1) } else { si };
+        if lo == usize::MAX || lo + 1 >= self.segs.len() || len(lo) + len(lo + 1) > ZSEG_CAP / 2 {
+            return;
+        }
+        let hi = self.segs.remove(lo + 1);
+        let merged = Arc::make_mut(&mut self.segs[lo]);
+        for k in hi.iter() {
+            merged.insert(k.clone());
+        }
+        // the merged segment's max is the higher one's
+        self.maxes.remove(lo);
     }
 
     /// Split segment `si` (over [`ZSEG_CAP`]) into two rank halves.
