@@ -49,7 +49,16 @@ pub(crate) fn dispatch_into_resp3<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    let start = out.len();
     dispatch_with_proto(ctx, store, args, out, true);
+    resp3_tail(out, start);
+}
+
+/// The command bodies speak RESP2 nulls; RESP3 has only `_`.
+#[inline]
+fn resp3_tail(out: &mut Vec<u8>, start: usize) {
+    let n = kevy_resp::resp3_nulls(&mut out[start..]);
+    out.truncate(start + n);
 }
 
 /// The ids [`crate::cmd_resolve::kevy_resolve`] hands out. Only the tier-1
@@ -70,6 +79,7 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
     proto_v3: bool,
     out: &mut Vec<u8>,
 ) {
+    let start = out.len();
     if verb == VERB_GET {
         tier1_get(store, args, out);
     } else if verb == VERB_SET {
@@ -78,6 +88,9 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
         }
     } else {
         dispatch_with_proto(ctx, store, args, out, proto_v3);
+    }
+    if proto_v3 {
+        resp3_tail(out, start);
     }
 }
 
