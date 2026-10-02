@@ -55,12 +55,31 @@ pub fn encode_bulk(out: &mut Vec<u8>, data: &[u8]) {
     // dispatch hands each command an empty `Vec`) fills without repeated reallocs
     // as it grows — the bulk reply is the hot GET path. 16 covers '$', the length
     // digits, and both CRLFs.
-    out.reserve(data.len() + 16);
-    out.push(b'$');
-    push_int(out, data.len() as i64);
-    out.extend_from_slice(b"\r\n");
+    out.reserve(data.len() + 25);
+    bulk_header(out, data.len());
     out.extend_from_slice(data);
     out.extend_from_slice(b"\r\n");
+}
+
+/// `$<len>\r\n`, built back to front on the stack, then one append.
+#[inline]
+fn bulk_header(out: &mut Vec<u8>, len: usize) {
+    let mut buf = [0u8; 23];
+    buf[21] = b'\r';
+    buf[22] = b'\n';
+    let mut i = 21;
+    let mut n = len;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'$';
+    out.extend_from_slice(&buf[i..]);
 }
 
 /// `$-1\r\n` — the RESP2 null bulk string.
@@ -188,5 +207,18 @@ mod tests {
         out.clear();
         encode_null_bulk(&mut out);
         assert_eq!(out, b"$-1\r\n");
+    }
+
+    #[test]
+    fn bulk_headers_match_the_formatted_length() {
+        for len in [0usize, 1, 9, 10, 99, 100, 12_345, u32::MAX as usize, usize::MAX] {
+            let mut out = b"x".to_vec();
+            bulk_header(&mut out, len);
+            assert_eq!(out, format!("x${len}\r\n").into_bytes());
+        }
+        let mut out = Vec::new();
+        encode_bulk(&mut out, &[b'v'; 1000]);
+        assert_eq!(&out[..7], b"$1000\r\n");
+        assert_eq!(out.len(), 7 + 1000 + 2);
     }
 }
