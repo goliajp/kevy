@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (209 total)
+## Verbs (219 total)
 
 ### scan
 
@@ -240,6 +240,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### list
 
+- `BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout` [write,blocking] — Blocking LMOVE: move an element between two lists, waiting for the source to have one.
+  - complexity: O(1) to serve
+  - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT count]` [write,blocking] — Blocking LMPOP: pop from the first non-empty list, waiting for one.
+  - complexity: O(N + M) — N keys tried, M elements popped
+  - compat: differs: same multi-key priority deviation as BLPOP
 - `BLPOP key [key ...] timeout` [write,blocking] — Blocking left pop across one or more lists (effect logged as LPOP).
   - complexity: O(1) to serve; the park is O(1) and waiters are woken FIFO per key
   - compat: differs: on a multi-shard server the multi-key form does not honour Redis's left-to-right key priority — keys on the connection's own shard are served before remote ones
@@ -258,6 +264,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` [write] — Atomically move an element between two lists.
   - complexity: O(1)
   - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count]` [write] — Pop elements from the first non-empty list among the keys.
+  - complexity: O(N + M) — N keys tried, M elements popped
+  - compat: differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
 - `LPOP key [count]` [write] — Pop one or more elements from the head of a list.
   - complexity: O(C) elements popped
   - compat: differs: LPOP key 0 on an existing key replies a nil array where Redis replies an empty array
@@ -339,6 +348,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### zset
 
+- `BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT count]` [write,blocking] — Blocking ZMPOP: pop from the first non-empty sorted set, waiting for one.
+  - complexity: O(K) + O(M log N) — K keys tried, M members popped
+  - compat: differs: same multi-key priority deviation as BLPOP
+- `BZPOPMAX key [key ...] timeout` [write,blocking] — Blocking pop of the highest-scored member across one or more sorted sets.
+  - complexity: O(log N) per pop; the park is O(1)
+  - compat: full
 - `BZPOPMIN key [key ...] timeout` [write,blocking] — Blocking pop of the lowest-scored member across one or more sorted sets.
   - complexity: O(log N) per pop; the park is O(1)
   - compat: full
@@ -363,6 +378,15 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the intersection of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R)
   - compat: full
+- `ZMPOP numkeys key [key ...] MIN|MAX [COUNT count]` [write] — Pop members from the first non-empty sorted set among the keys.
+  - complexity: O(K) + O(M log N) — K keys tried, M members popped
+  - compat: differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
+- `ZMSCORE key member [member ...]` [readonly] — Return the scores of several members.
+  - complexity: O(M) — one hash lookup per member
+  - compat: full
+- `ZPOPMAX key [count]` [write] — Pop up to count members with the highest scores.
+  - complexity: O(M log N)
+  - compat: full
 - `ZPOPMIN key [count]` [write] — Pop up to count members with the lowest scores.
   - complexity: O(M log N)
   - compat: full
@@ -375,9 +399,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds.
   - complexity: O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk
   - compat: full
-- `ZRANK key member` [readonly] — Return a member's rank, ordered from the lowest score.
+- `ZRANDMEMBER key [count [WITHSCORES]]` [readonly] — Return random members, distinct for a positive count and possibly repeated for a negative one.
+  - complexity: O(M log N) — each pick is one rank descent
+  - compat: full
+- `ZRANK key member [WITHSCORE]` [readonly] — Return a member's rank, ordered from the lowest score.
   - complexity: O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
-  - compat: differs: the Redis 7.2 WITHSCORE option is not supported
+  - compat: full
 - `ZREM key member [member ...]` [write] — Remove one or more members from a sorted set.
   - complexity: O(M log N)
   - compat: full
@@ -389,6 +416,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds, highest first.
   - complexity: O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
+  - compat: full
+- `ZREVRANK key member [WITHSCORE]` [readonly] — Return a member's rank, ordered from the highest score.
+  - complexity: O(log N)
   - compat: full
 - `ZREVRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range, highest score first.
   - complexity: O(N + M) — the set is read in rank order and reversed, then the M requested members are taken
