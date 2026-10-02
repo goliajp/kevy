@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (250 total)
+## Verbs (251 total)
 
 ### scan
 
@@ -59,28 +59,28 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: differs: the multi-key form is gathered per shard, so the count is not a point-in-time snapshot across shards
 - `EXPIRETIME key` [readonly] — Return a key's absolute expiry in Unix seconds (-1 no TTL, -2 missing).
   - complexity: O(1)
+  - compat: differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
+- `EXPIRE key seconds [NX | XX | GT | LT]` [write] — Set a key's TTL in seconds (non-positive TTL deletes the key).
+  - complexity: O(1)
   - compat: full
-- `EXPIRE key seconds` [write] — Set a key's TTL in seconds (non-positive TTL deletes the key).
+- `EXPIREAT key unix-time-seconds [NX | XX | GT | LT]` [write] — Set a key's expiry as an absolute Unix timestamp in seconds.
   - complexity: O(1)
-  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3, so EXPIRE key seconds NX is a wrong-arity error
-- `EXPIREAT key unix-time-seconds` [write] — Set a key's expiry as an absolute Unix timestamp in seconds.
-  - complexity: O(1)
-  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+  - compat: full
 - `PERSIST key` [write] — Remove a key's TTL.
   - complexity: O(1)
   - compat: full
-- `PEXPIRE key milliseconds` [write] — Set a key's TTL in milliseconds.
+- `PEXPIRE key milliseconds [NX | XX | GT | LT]` [write] — Set a key's TTL in milliseconds.
   - complexity: O(1)
-  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
-- `PEXPIREAT key unix-time-milliseconds` [write] — Set a key's expiry as an absolute Unix timestamp in milliseconds.
+  - compat: full
+- `PEXPIREAT key unix-time-milliseconds [NX | XX | GT | LT]` [write] — Set a key's expiry as an absolute Unix timestamp in milliseconds.
   - complexity: O(1)
-  - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+  - compat: full
 - `PEXPIRETIME key` [readonly] — Return a key's absolute expiry in Unix milliseconds (-1 no TTL, -2 missing).
   - complexity: O(1) — the deadline is kept on the monotonic clock and read back through the wall clock to the nearest millisecond
-  - compat: full
+  - compat: differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 - `PTTL key` [readonly] — Return a key's remaining TTL in milliseconds (-1 no TTL, -2 missing).
   - complexity: O(1)
-  - compat: full
+  - compat: differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 - `RENAME key newkey` [write] — Rename a key, overwriting the destination (write routed at the runtime Op level).
   - complexity: O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)
   - compat: differs: a cross-shard rename is a non-atomic Take then Put — there is a window in which neither key is visible; co-locate the two keys with a {hashtag} for the atomic path
@@ -95,7 +95,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: differs: a BY or GET pattern that names other keys is refused with Redis's cluster-mode error
 - `TTL key` [readonly] — Return a key's remaining TTL in seconds (-1 no TTL, -2 missing).
   - complexity: O(1)
-  - compat: full
+  - compat: differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 - `TYPE key` [readonly] — Return the type of the value stored at key.
   - complexity: O(1)
   - compat: full
@@ -135,12 +135,15 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `BITPOS key bit [start [end]]` [readonly] — Return the position of the first bit set to 0 or 1.
   - complexity: O(N) over the scanned bytes
   - compat: differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+- `DIGEST key` [readonly] — Return the XXH3 digest of a string value as 16 hex digits.
+  - complexity: O(N) over the value's bytes
+  - compat: full
 - `GETBIT key offset` [readonly] — Return the bit at the given offset of a string.
   - complexity: O(1)
   - compat: full
-- `GETEX key [EX seconds | PX milliseconds]` [write] — Read a key and set its expiry in the same call.
+- `GETEX key [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | PERSIST]` [write] — Read a key and set its expiry in the same call.
   - complexity: O(1)
-  - compat: differs: EXAT / PXAT / PERSIST are not accepted, and an expiry of zero or less is refused rather than applied
+  - compat: full
 - `BITFIELD key [GET encoding offset | [OVERFLOW WRAP|SAT|FAIL] SET encoding offset value | [OVERFLOW WRAP|SAT|FAIL] INCRBY encoding offset increment ...]` [write] — Read, write and increment integers of 1 to 64 bits at any bit offset of a string.
   - complexity: O(N) — the string is copied once for any write
   - compat: full
@@ -182,7 +185,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `INCRBYFLOAT key increment` [write] — Increment the float value of a key by the given amount.
   - complexity: O(1)
-  - compat: differs: arithmetic is f64 and the reply uses Rust's shortest-round-trip float printer, not a long double accumulator, so trailing digits can diverge from Redis
+  - compat: full
 - `MGET key [key ...]` [readonly] — Return the values of multiple keys (cross-shard gather).
   - complexity: O(N) keys, one O(1) probe each on the owning shard
   - compat: differs: keys are grouped by shard and each shard is probed independently, so the reply is not a point-in-time snapshot across shards
@@ -195,9 +198,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `PSETEX key milliseconds value` [write] — Set a key's value with a TTL in milliseconds.
   - complexity: O(1)
   - compat: full
-- `SET key value [EX seconds|PX milliseconds] [NX|XX]` [write] — Set a key's string value with optional TTL and existence conditions.
-  - complexity: O(1)
-  - compat: differs: only NX / XX / EX / PX are parsed — KEEPTTL, EXAT, PXAT, GET and the IFEQ family are a syntax error; a repeated expire option is silently accepted last-one-wins instead of erroring
+- `SET key value [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifeq-digest | IFDNE ifne-digest] [GET] [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | KEEPTTL]` [write] — Set a key's string value with optional TTL and existence conditions.
+  - complexity: O(1), plus O(N) over the old value for IFEQ / IFNE / IFDEQ / IFDNE
+  - compat: differs: with GET and a digest that is not 16 characters long, Redis answers the old value and then the error, two replies to one command; kevy answers the error alone
 - `SETEX key seconds value` [write] — Set a key's value with a TTL in seconds.
   - complexity: O(1)
   - compat: full
@@ -320,7 +323,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
 - `LPOP key [count]` [write] — Pop one or more elements from the head of a list.
   - complexity: O(C) elements popped
-  - compat: differs: LPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+  - compat: full
 - `LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]` [readonly] — Return the index of matching elements in a list.
   - complexity: O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy
   - compat: full
@@ -347,7 +350,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `RPOP key [count]` [write] — Pop one or more elements from the tail of a list.
   - complexity: O(C) elements popped
-  - compat: differs: RPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+  - compat: full
 - `RPOPLPUSH source destination` [write] — Pop the source tail and push it onto the destination head.
   - complexity: O(1)
   - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH

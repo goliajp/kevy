@@ -360,7 +360,12 @@ fn help_hints_and_completion_come_from_the_servers_reference() {
 
     // A kevy server documents syntax lines, shown until an argument is typed.
     let hint = |input: &str| cli(&["-p", &p, "--test_hint", input], b"", &[]).stdout;
-    assert_eq!(hint("set "), "key value [EX seconds|PX milliseconds] [NX|XX]\n");
+    assert_eq!(
+        hint("set "),
+        "key value [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifeq-digest | \
+         IFDNE ifne-digest] [GET] [EX seconds | PX milliseconds | EXAT unix-time-seconds | \
+         PXAT unix-time-milliseconds | KEEPTTL]\n"
+    );
     assert_eq!(hint("set k "), "\n");
     assert_eq!(hint("nosuch "), "\n");
 

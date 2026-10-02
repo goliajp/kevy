@@ -95,6 +95,7 @@ registry! {
     b"DECR" WR,
     b"DECRBY" WR,
     b"DEL" WR,
+    b"DIGEST" RD,
     b"EXISTS" RD,
     b"EXPIRE" WR,
     b"EXPIREAT" WR,
