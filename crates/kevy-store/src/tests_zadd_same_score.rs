@@ -115,7 +115,7 @@ fn same_score_readd_is_invisible_seg() {
     assert!(st.zrange(b"k", 0, -1).unwrap() == order_before, "the order moved");
 }
 
-/// `-0` and `0` are one score, as they are in Redis, because `zadd_one`
+/// `-0` and `0` are one score, as they are in Redis, because `zadd_at`
 /// folds the sign at the door. Before that fold this ordering was `zlo`
 /// first — `total_cmp` separates the zeros and orders the negative before
 /// the positive — while a real `redis:8` answered `zhi` first, on the

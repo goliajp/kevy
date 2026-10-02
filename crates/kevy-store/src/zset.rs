@@ -77,19 +77,6 @@ impl Store {
         self.reweigh_entry(key);
     }
 
-    /// A.8: read the key's zset slot for ZADD. None when absent.
-    fn zset_value_for_set(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
-        match self.live_entry_mut(key) {
-            None => Ok(None),
-            Some(e) => match &e.value {
-                Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => {
-                    Ok(Some(&mut e.value))
-                }
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
     fn drop_if_empty_zset(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
             Some(Value::ZSet(z)) => z.len() == 0,
@@ -106,13 +93,18 @@ impl Store {
     /// argv: no per-member allocation; routes through the
     /// encoding-switch path.
     pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> Result<usize, StoreError> {
-        if pairs.is_empty() {
+        let Some(((score0, m0), rest)) = pairs.split_first() else {
             return Ok(0);
-        }
-        let mut added = 0usize;
+        };
+        // one probe for the whole command: every member then reaches the
+        // zset through its slot, which no member's insert can move
+        let (slot, mut added, todo) = match self.live_slot(key) {
+            Some(slot) => (slot, 0usize, pairs),
+            None => (self.zadd_create(key, m0, fold_zero_sign(*score0)), 1, rest),
+        };
         let mut delta: i64 = 0;
-        for (score, m) in pairs {
-            match self.zadd_one(key, m, *score)? {
+        for (score, m) in todo {
+            match self.zadd_at(key, slot, m, *score)? {
                 ZaddOutcome::AddedInline => added += 1,
                 ZaddOutcome::UpdatedInline => {}
                 ZaddOutcome::AddedHeap(w) => {
@@ -122,7 +114,7 @@ impl Store {
                 ZaddOutcome::UpdatedHeap(w) => delta += w,
             }
         }
-        self.account_delta(key, delta);
+        self.account_delta_at(Some(slot), delta);
         Ok(added)
     }
 
@@ -232,25 +224,28 @@ impl Store {
     }
 
     /// A.8 core: set one `(member, score)` pair via encoding-switch.
-    fn zadd_one(&mut self, key: &[u8], m: &[u8], score: f64) -> Result<ZaddOutcome, StoreError> {
+    fn zadd_at(
+        &mut self,
+        key: &[u8],
+        at: usize,
+        m: &[u8],
+        score: f64,
+    ) -> Result<ZaddOutcome, StoreError> {
         let score = fold_zero_sign(score);
-        if self.zset_value_for_set(key)?.is_none() {
-            return Ok(self.zadd_create(key, m, score));
-        }
-        let v = self.zset_value_for_set(key)?.expect("present and a zset");
+        let v = &mut self.map.entry_at_mut(key, at).expect("the slot live_slot found").value;
         match v {
             Value::SmallZSetInline(z) => match z.try_set(m, score) {
                 ZAddResult::Added => Ok(ZaddOutcome::AddedInline),
                 ZAddResult::Updated => Ok(ZaddOutcome::UpdatedInline),
                 ZAddResult::NoRoom => {
                     let outcome = promote_inline_zset_and_add(v, m, score);
-                    self.reweigh_entry(key);
+                    self.reweigh_at(at, None);
                     Ok(outcome)
                 }
             },
             Value::ZSet(z) if z.len() >= Z_PROMOTE => {
                 let is_new = promote_flat_zset_and_add(v, m, score);
-                self.reweigh_entry(key);
+                self.reweigh_at(at, None);
                 // Reweighed from scratch — swallow the per-member delta.
                 if is_new { Ok(ZaddOutcome::AddedHeap(0)) } else { Ok(ZaddOutcome::UpdatedHeap(0)) }
             }
@@ -260,23 +255,17 @@ impl Store {
         }
     }
 
-    /// Create a fresh entry holding one `(member, score)` pair.
-    fn zadd_create(&mut self, key: &[u8], m: &[u8], score: f64) -> ZaddOutcome {
-        if let Some(inline) = SmallZSetData::with_one(m, score) {
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::SmallZSetInline(inline), None),
-            );
-            ZaddOutcome::AddedInline
-        } else {
-            let mut z = ZSetData::default();
-            z.insert(m, score);
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::ZSet(Arc::new(z)), None),
-            );
-            ZaddOutcome::AddedInline
-        }
+    /// Create a fresh entry holding one `(member, score)` pair; its slot.
+    fn zadd_create(&mut self, key: &[u8], m: &[u8], score: f64) -> usize {
+        let value = match SmallZSetData::with_one(m, score) {
+            Some(inline) => Value::SmallZSetInline(inline),
+            None => {
+                let mut z = ZSetData::default();
+                z.insert(m, score);
+                Value::ZSet(Arc::new(z))
+            }
+        };
+        self.insert_entry_at(SmallBytes::from_slice(key), Entry::new(value, None)).0
     }
 }
 
