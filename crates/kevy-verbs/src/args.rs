@@ -62,10 +62,39 @@ pub fn arg_u64(b: &[u8]) -> Option<u64> {
 /// assert_eq!(arg_f64(b"nan"), None);
 /// ```
 pub fn arg_f64(b: &[u8]) -> Option<f64> {
+    if let Some(n) = short_int(b) {
+        return Some(n as f64);
+    }
     // std's parser already takes every `inf` / `infinity` spelling, signed
     // and in any case, so no lowercased copy is needed
     let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
     if f.is_nan() { None } else { Some(f) }
+}
+
+/// A plain integer of at most 15 digits, which an f64 holds exactly — the
+/// common score, read without the float parser. `-0` is left to it, so
+/// the sign of a zero is whatever the parser makes of it.
+fn short_int(b: &[u8]) -> Option<i64> {
+    let (neg, digits) = match b.split_first()? {
+        (b'-', rest) => (true, rest),
+        (b'+', rest) => (false, rest),
+        _ => (false, b),
+    };
+    if digits.is_empty() || digits.len() > 15 {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for &d in digits {
+        let d = d.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        n = n * 10 + i64::from(d);
+    }
+    if neg && n == 0 {
+        return None;
+    }
+    Some(if neg { -n } else { n })
 }
 
 /// A score range bound: a leading `(` makes it exclusive.
@@ -259,4 +288,66 @@ pub fn scan_opts<A: ArgvView + ?Sized>(args: &A) -> Result<ScanOpts, ScanOptsErr
         i += 2;
     }
     Ok(opts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::arg_f64;
+
+    /// What the float parser alone answers.
+    fn reference(b: &[u8]) -> Option<f64> {
+        let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
+        if f.is_nan() { None } else { Some(f) }
+    }
+
+    #[test]
+    fn the_integer_fast_path_answers_as_the_float_parser_does() {
+        let mut cases: Vec<Vec<u8>> = [
+            "0",
+            "-0",
+            "+0",
+            "00",
+            "-00",
+            "7",
+            "-7",
+            "+7",
+            "007",
+            "-007",
+            "123456789012345",
+            "-123456789012345",
+            "1234567890123456",
+            "999999999999999",
+            "9007199254740993",
+            "",
+            "-",
+            "+",
+            " 5",
+            "5 ",
+            "1e3",
+            "1.5",
+            "-1.5",
+            "inf",
+            "-inf",
+            "nan",
+            "5x",
+            "--5",
+            "0x10",
+        ]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+        for n in [1i64, 9, 10, 99, 100, 12_345, 99_999_999, 4_503_599_627_370_495] {
+            cases.push(n.to_string().into_bytes());
+            cases.push((-n).to_string().into_bytes());
+        }
+        for c in &cases {
+            let (got, want) = (arg_f64(c), reference(c));
+            assert_eq!(
+                got.map(f64::to_bits),
+                want.map(f64::to_bits),
+                "{:?}",
+                String::from_utf8_lossy(c)
+            );
+        }
+    }
 }
