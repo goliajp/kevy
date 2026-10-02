@@ -46,7 +46,7 @@ const URING_SPIN_LIMIT: u32 = 256;
 // — split out so this file stays under the 500-LOC house rule.
 // Re-exported so the sibling uring modules keep their
 // `crate::uring_reactor::…` paths.
-use crate::uring_idle::{IdleStep, idle_step};
+use crate::uring_idle::{IdleStep, ReplyWait, idle_step};
 pub(crate) use crate::uring_ops::{
     CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN, OP_AOF,
     OP_BIG_CANCEL, OP_BIG_READ, OP_MSG_FAIL, OP_MSG_WAKE, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
@@ -102,6 +102,7 @@ impl<C: Commands> Shard<C> {
         // idle-ladder comment below.
         let mut last_inbound_batch: usize = 0;
         let mut hot_until: Option<std::time::Instant> = None;
+        let mut reply_wait = ReplyWait::default();
         let mut park = ParkState::default();
         let mut woke_from_park = false;
 
@@ -413,13 +414,16 @@ impl<C: Commands> Shard<C> {
             // parking would strand its fd half-open, so keep spinning.
             let reap_pending = !self.closing_uring_conns.is_empty();
             if !io_work && did_inbound == 0 && !has_backlog && !reap_pending {
-                // Forwarded requests outstanding ⇒ replies land
-                // within ~one cross-shard RTT — stay in the spin rung
-                // rather than paying a kernel sleep + wake per reply
-                // batch. Bounded: inflight can only drain (the owner
-                // answers) or the conn dies (folds error responses).
+                // Forwarded requests outstanding: spin while replies are
+                // expected soon, park once waiting costs more than the
+                // owner's wake (see `ReplyWait`).
                 if self.xshard_inflight > 0 {
-                    std::hint::spin_loop();
+                    if reply_wait.idle(std::time::Instant::now) == IdleStep::Park {
+                        self.uring_park(&mut ring, &mut park)?;
+                        woke_from_park = true;
+                    } else {
+                        std::hint::spin_loop();
+                    }
                     continue;
                 }
                 idle_spins = idle_spins.saturating_add(1);
@@ -447,8 +451,11 @@ impl<C: Commands> Shard<C> {
             } else {
                 idle_spins = 0;
                 if did_inbound > 0 {
+                    reply_wait.arrived(std::time::Instant::now);
                     last_inbound_batch = did_inbound;
                     hot_until = None;
+                } else {
+                    reply_wait.interrupted();
                 }
             }
         }
