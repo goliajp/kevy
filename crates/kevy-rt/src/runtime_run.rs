@@ -32,6 +32,7 @@ struct Shared {
     /// `inboxes[j][i]` = shard j's consumer half from shard i.
     inboxes: Vec<Vec<Option<Consumer<Inbound>>>>,
     wakers: Vec<Arc<Waker>>,
+    #[cfg(target_os = "linux")]
     ring_fds: Arc<[std::sync::atomic::AtomicI32]>,
     parked: Vec<Arc<CachePadded<ParkFlag>>>,
     inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>>,
@@ -85,6 +86,7 @@ impl Shared {
             outboxes,
             inboxes,
             wakers,
+            #[cfg(target_os = "linux")]
             ring_fds: (0..n).map(|_| std::sync::atomic::AtomicI32::new(-1)).collect(),
             parked,
             inbound_dirty,
@@ -334,6 +336,7 @@ impl<C: Commands> Runtime<C> {
                 outboxes: std::mem::take(&mut shared.outboxes[id]),
                 backlog: (0..n).map(|_| VecDeque::new()).collect(),
                 wakers: shared.wakers.clone(),
+                #[cfg(target_os = "linux")]
                 ring_fds: shared.ring_fds.clone(),
                 conns: KevyMap::new(),
                 conn_slot_hint: 0,
