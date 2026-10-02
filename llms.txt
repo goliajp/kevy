@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (236 total)
+## Verbs (237 total)
 
 ### scan
 
@@ -354,6 +354,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SMEMBERS key` [readonly] — Return all members of a set.
   - complexity: O(N) members
   - compat: full
+- `SMOVE source destination member` [write] — Move a member from one set to another.
+  - complexity: O(1)
+  - compat: differs: when the two keys live on different shards the member is removed from one and then added to the other, so the move is not atomic; co-locate the keys with a {hashtag} for Redis's atomic form
 - `SPOP key [count]` [write] — Remove and return one or more random members of a set.
   - complexity: O(count) expected — each member is drawn by probing a random slot and taking the first occupied one
   - compat: full
