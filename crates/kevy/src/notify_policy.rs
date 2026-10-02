@@ -7,12 +7,20 @@
 use kevy_resp::ArgvView;
 use kevy_rt::NotifyKind;
 use kevy_rt::propagation::{Notify, set_notify};
+use kevy_store::Store;
 use kevy_verbs::Effect;
 
-/// Ask the runtime for this write's events, when not its default.
+/// Ask the runtime for this write's events, when not its default. `store`
+/// is read after the write, never changed.
 #[cold]
-pub(crate) fn note<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, effect: &Effect, reply: &[u8]) {
-    if let Some(n) = events(cmd, args, effect, reply) {
+pub(crate) fn note<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    args: &A,
+    effect: &Effect,
+    reply: &[u8],
+    store: &Store,
+) {
+    if let Some(n) = events(cmd, args, effect, reply, store) {
         set_notify(n);
     }
 }
@@ -22,6 +30,7 @@ fn events<A: ArgvView + ?Sized>(
     args: &A,
     effect: &Effect,
     reply: &[u8],
+    store: &Store,
 ) -> Option<Notify> {
     // a read is never announced, and no post-write step would take its ask
     if matches!(effect, Effect::Read) {
@@ -30,11 +39,60 @@ fn events<A: ArgvView + ?Sized>(
     if reply.first() == Some(&b'-') || matches!(effect, Effect::Unchanged | Effect::Skip) {
         return Some(Notify::Suppress);
     }
-    popped(cmd, args, effect).or_else(|| written(cmd, args, reply))
+    popped(cmd, args, effect)
+        .or_else(|| deadlines(cmd, args, store))
+        .or_else(|| written(cmd, args, reply))
 }
 
 fn one(class: NotifyKind, event: &'static str, key: &[u8]) -> Option<Notify> {
     Some(Notify::Events(vec![(class, event, key.to_vec())]))
+}
+
+/// The writes that may set a deadline: `expire` after what they wrote, or
+/// `del` when the deadline had already passed and the key went.
+fn deadlines<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, store: &Store) -> Option<Notify> {
+    let key = &args[1];
+    let gone = || one(NotifyKind::Generic, "del", key);
+    let set_and = |expire: bool| {
+        let mut ev = vec![(NotifyKind::String, "set", key.to_vec())];
+        if expire {
+            ev.push((NotifyKind::Generic, "expire", key.to_vec()));
+        }
+        Some(Notify::Events(ev))
+    };
+    match cmd {
+        _ if matches!(
+            cmd,
+            b"SET" | b"GETEX" | b"EXPIRE" | b"PEXPIRE" | b"EXPIREAT" | b"PEXPIREAT"
+        ) && !store.is_live(key) =>
+        {
+            gone()
+        }
+        b"SET" => set_and(sets_deadline(args, 3)),
+        b"SETEX" | b"PSETEX" => set_and(true),
+        b"GETEX" if sets_deadline(args, 2) => one(NotifyKind::Generic, "expire", key),
+        b"GETEX" => one(NotifyKind::Generic, "persist", key),
+        b"EXPIRE" | b"PEXPIRE" | b"EXPIREAT" | b"PEXPIREAT" => {
+            one(NotifyKind::Generic, "expire", key)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the `SET` / `GETEX` options from `args[from..]` name a deadline;
+/// the options that take a value are stepped over whole, so a compared
+/// value that reads `EX` is not taken for one.
+fn sets_deadline<A: ArgvView + ?Sized>(args: &A, from: usize) -> bool {
+    let mut i = from;
+    while i < args.len() {
+        let w = &args[i];
+        let is = |name: &[u8]| w.eq_ignore_ascii_case(name);
+        if is(b"EX") || is(b"PX") || is(b"EXAT") || is(b"PXAT") {
+            return true;
+        }
+        i += if is(b"IFEQ") || is(b"IFNE") || is(b"IFDEQ") || is(b"IFDNE") { 2 } else { 1 };
+    }
+    false
 }
 
 /// The pops: the end they took from, on the key they took from.
@@ -62,6 +120,10 @@ fn popped<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, effect: &Effect) -> Option
 /// The other writes whose events are not their verb on argument 1.
 fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<Notify> {
     match cmd {
+        b"SETNX" | b"GETSET" => one(NotifyKind::String, "set", &args[1]),
+        b"GETDEL" | b"UNLINK" if args.len() == 2 => one(NotifyKind::Generic, "del", &args[1]),
+        b"INCR" | b"DECR" | b"DECRBY" => one(NotifyKind::String, "incrby", &args[1]),
+        b"COPY" => one(NotifyKind::Generic, "copy_to", &args[2]),
         // an empty range removes the destination, which is a `del`
         b"ZRANGESTORE" if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
         // a stored SORT announces its destination; an empty result removes it

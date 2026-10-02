@@ -182,6 +182,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "EXPIRETIME",
     "GET",
     "GETDEL",
+    "DIGEST",
     "GETEX",
     "GETRANGE",
     "GETSET",
@@ -408,3 +409,6 @@ mod tests;
 #[cfg(all(feature = "text", feature = "vector"))]
 #[path = "dispatch_tests_index.rs"]
 mod tests_index;
+#[cfg(test)]
+#[path = "dispatch_tests_redis.rs"]
+mod tests_redis;

@@ -41,8 +41,10 @@ use std::collections::{HashMap, HashSet};
 
 mod crc16;
 mod hashtag;
+mod xxh3;
 pub use crc16::{crc16, key_hash_slot};
 pub use hashtag::hashtag;
+pub use xxh3::xxh3_64;
 
 /// FxHash mixing constant (rustc's `rustc-hash` seed).
 const SEED: u64 = 0x517c_c1b7_2722_0a95;

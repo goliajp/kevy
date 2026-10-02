@@ -20,6 +20,7 @@ workspace = true
 kevy-store = { path = "../kevy-store", version = "7.0.0" }
 kevy-resp = { path = "../kevy-resp", version = "7.0.0" }
 kevy-num = { path = "../kevy-num", version = "7.0.0" }
+kevy-hash = { path = "../kevy-hash", version = "7.0.0" }
 kevy-geo = { path = "../kevy-geo", version = "7.0.0", optional = true }
 
 [features]

@@ -85,6 +85,21 @@ impl Store {
         self.set_value(key, pick_value_for_set(value), expire, cond)
     }
 
+    /// `SET … KEEPTTL`: write `value` over whatever `key` holds and keep
+    /// the deadline it had, to the nanosecond.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let mut s = kevy_store::Store::new();
+    /// s.set(b"k", b"a".to_vec(), Some(Duration::from_secs(100)), kevy_store::SetCondition::Always);
+    /// s.set_slice_keep_ttl(b"k", b"b");
+    /// assert!(s.pttl(b"k") > 99_000);
+    /// assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"b"[..]));
+    /// ```
+    pub fn set_slice_keep_ttl(&mut self, key: &[u8], value: &[u8]) {
+        self.put_keep_ttl(key.to_vec(), pick_value_for_set(value));
+    }
+
     fn set_value(
         &mut self,
         key: &[u8],

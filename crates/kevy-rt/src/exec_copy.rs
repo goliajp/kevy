@@ -150,6 +150,9 @@ impl<C: Commands> Shard<C> {
         self.log_value_placed(&dst, &value, ttl_ms);
         self.store.put_with_ttl(dst.clone(), value, ttl_ms);
         self.note_key_mutated(&dst);
+        if self.generic_events_on() {
+            self.notify_keyspace_event(b"copy_to", &dst);
+        }
         Part::CopyPutDone { stored: true }
     }
 

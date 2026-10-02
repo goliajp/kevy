@@ -16,6 +16,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "EXPIRETIME",
     "GET",
     "GETDEL",
+    "DIGEST",
     "GETEX",
     "GETRANGE",
     "GETSET",

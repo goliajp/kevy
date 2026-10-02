@@ -1,4 +1,4 @@
-*500
+*502
 $4
 KEYS
 *14
@@ -184,8 +184,8 @@ $4
 O(1)
 $6
 compat
-$4
-full
+$191
+differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 $5
 flags
 *1
@@ -208,16 +208,16 @@ $7
 generic
 $6
 syntax
-$18
-EXPIRE key seconds
+$38
+EXPIRE key seconds [NX | XX | GT | LT]
 $10
 complexity
 $4
 O(1)
 $6
 compat
-$134
-differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3, so EXPIRE key seconds NX is a wrong-arity error
+$4
+full
 $5
 flags
 *1
@@ -240,16 +240,16 @@ $7
 generic
 $6
 syntax
-$30
-EXPIREAT key unix-time-seconds
+$50
+EXPIREAT key unix-time-seconds [NX | XX | GT | LT]
 $10
 complexity
 $4
 O(1)
 $6
 compat
-$85
-differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+$4
+full
 $5
 flags
 *1
@@ -304,16 +304,16 @@ $7
 generic
 $6
 syntax
-$24
-PEXPIRE key milliseconds
+$44
+PEXPIRE key milliseconds [NX | XX | GT | LT]
 $10
 complexity
 $4
 O(1)
 $6
 compat
-$85
-differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+$4
+full
 $5
 flags
 *1
@@ -336,16 +336,16 @@ $7
 generic
 $6
 syntax
-$36
-PEXPIREAT key unix-time-milliseconds
+$56
+PEXPIREAT key unix-time-milliseconds [NX | XX | GT | LT]
 $10
 complexity
 $4
 O(1)
 $6
 compat
-$85
-differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+$4
+full
 $5
 flags
 *1
@@ -472,8 +472,8 @@ $116
 O(1) — the deadline is kept on the monotonic clock and read back through the wall clock to the nearest millisecond
 $6
 compat
-$4
-full
+$191
+differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 $5
 flags
 *1
@@ -504,8 +504,8 @@ $4
 O(1)
 $6
 compat
-$4
-full
+$191
+differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 $5
 flags
 *1
@@ -664,8 +664,8 @@ $4
 O(1)
 $6
 compat
-$4
-full
+$191
+differs: a deadline is kept in nanoseconds from the process's start, so one set more than about 584 years ahead is held at that horizon and this reports the horizon rather than the time given
 $5
 flags
 *1
@@ -848,16 +848,16 @@ $6
 string
 $6
 syntax
-$42
-BITOP AND|OR|XOR|NOT destkey key [key ...]
+$77
+BITOP AND | OR | XOR | NOT | DIFF | DIFF1 | ANDOR | ONE destkey key [key ...]
 $10
 complexity
 $134
 O(N) over the longest source; on a multi-shard server each source is read on its own shard and the result written on the destination's
 $6
 compat
-$81
-differs: the DIFF / DIFF1 / ANDOR / ONE operators of Redis 8.2 are a syntax error
+$231
+differs: when the keys live on different shards each source is read on its own shard and the result placed on the destination's, so the write is not atomic with the reads; co-locate the keys with a {hashtag} for Redis's atomic form
 $5
 flags
 *1
@@ -868,8 +868,8 @@ BITCOUNT
 *14
 $7
 summary
-$57
-Count set bits in a string, optionally over a byte range.
+$64
+Count set bits in a string, optionally over a byte or bit range.
 $5
 since
 $5
@@ -880,16 +880,16 @@ $6
 string
 $6
 syntax
-$24
-BITCOUNT key [start end]
+$37
+BITCOUNT key [start end [BYTE | BIT]]
 $10
 complexity
 $27
 O(N) over the counted bytes
 $6
 compat
-$94
-differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+$4
+full
 $5
 flags
 *1
@@ -912,16 +912,48 @@ $6
 string
 $6
 syntax
-$28
-BITPOS key bit [start [end]]
+$41
+BITPOS key bit [start [end [BYTE | BIT]]]
 $10
 complexity
 $27
 O(N) over the scanned bytes
 $6
 compat
-$94
-differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$6
+DIGEST
+*14
+$7
+summary
+$58
+Return the XXH3 digest of a string value as 16 hex digits.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$10
+DIGEST key
+$10
+complexity
+$27
+O(N) over the value's bytes
+$6
+compat
+$4
+full
 $5
 flags
 *1
@@ -976,16 +1008,16 @@ $6
 string
 $6
 syntax
-$40
-GETEX key [EX seconds | PX milliseconds]
+$105
+GETEX key [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | PERSIST]
 $10
 complexity
 $4
 O(1)
 $6
 compat
-$109
-differs: EXAT / PXAT / PERSIST are not accepted, and an expiry of zero or less is refused rather than applied
+$4
+full
 $5
 flags
 *1
@@ -1432,8 +1464,8 @@ $4
 O(1)
 $6
 compat
-$160
-differs: arithmetic is f64 and the reply uses Rust's shortest-round-trip float printer, not a long double accumulator, so trailing digits can diverge from Redis
+$4
+full
 $5
 flags
 *1
@@ -1584,16 +1616,16 @@ $6
 string
 $6
 syntax
-$50
-SET key value [EX seconds|PX milliseconds] [NX|XX]
+$201
+SET key value [NX | XX | IFEQ ifeq-value | IFNE ifne-value | IFDEQ ifeq-digest | IFDNE ifne-digest] [GET] [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | KEEPTTL]
 $10
 complexity
-$4
-O(1)
+$66
+O(1), plus O(N) over the old value for IFEQ / IFNE / IFDEQ / IFDNE
 $6
 compat
-$191
-differs: only NX / XX / EX / PX are parsed — KEEPTTL, EXAT, PXAT, GET and the IFEQ family are a syntax error; a repeated expire option is silently accepted last-one-wins instead of erroring
+$167
+differs: with GET and a digest that is not 16 characters long, Redis answers the old value and then the error, two replies to one command; kevy answers the error alone
 $5
 flags
 *1
@@ -2850,8 +2882,8 @@ $20
 O(C) elements popped
 $6
 compat
-$93
-differs: LPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+$4
+full
 $5
 flags
 *1
@@ -3138,8 +3170,8 @@ $20
 O(C) elements popped
 $6
 compat
-$93
-differs: RPOP key 0 on an existing key replies a nil array where Redis replies an empty array
+$4
+full
 $5
 flags
 *1

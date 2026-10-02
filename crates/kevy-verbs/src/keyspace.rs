@@ -7,7 +7,7 @@ use std::time::Duration;
 use kevy_resp::{ArgvView, encode_error, encode_integer, encode_simple_string};
 use kevy_store::{RenameOutcome, Store};
 
-use crate::args::{arg_i64, rest_borrowed};
+use crate::args::{arg_i64, rest_borrowed, upper_verb};
 use crate::reply::{ERR_NOT_INT, wrong_args};
 use crate::{Effect, changed};
 
@@ -41,10 +41,10 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             }
             Effect::Read
         }
-        b"EXPIRE" => expire(store, args, 1000, "expire", out),
-        b"PEXPIRE" => expire(store, args, 1, "pexpire", out),
-        b"EXPIREAT" => expireat(store, args, 1000, "expireat", out),
-        b"PEXPIREAT" => expireat(store, args, 1, "pexpireat", out),
+        b"EXPIRE" => expire(store, args, 1000, false, "expire", out),
+        b"PEXPIRE" => expire(store, args, 1, false, "pexpire", out),
+        b"EXPIREAT" => expire(store, args, 1000, true, "expireat", out),
+        b"PEXPIREAT" => expire(store, args, 1, true, "pexpireat", out),
         b"TTL" => ttl(store, args, true, "ttl", out),
         b"PTTL" => ttl(store, args, false, "pttl", out),
         b"EXPIRETIME" => expire_time(store, args, true, "expiretime", out),
@@ -83,56 +83,135 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
     })
 }
 
-/// `EXPIRE` / `PEXPIRE`: a non-positive TTL deletes the key, answering
-/// 1 if it existed, as Redis does.
+/// `EXPIRE` / `PEXPIRE` (from now) and `EXPIREAT` / `PEXPIREAT` (a unix
+/// time) `key time [NX | XX | GT | LT]`. A deadline already past deletes
+/// the key, answering 1 if it existed, as Redis does.
 fn expire<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     unit_ms: i64,
+    absolute: bool,
     cmd: &str,
     out: &mut Vec<u8>,
 ) -> Effect {
-    if args.len() != 3 {
+    if args.len() < 3 {
         wrong_args(out, cmd);
         return Effect::Unchanged;
     }
-    let Some(n) = arg_i64(&args[2]) else {
-        encode_error(out, ERR_NOT_INT);
+    let cond = match ExpireCond::parse(args) {
+        Ok(c) => c,
+        Err(e) => {
+            encode_error(out, &e);
+            return Effect::Unchanged;
+        }
+    };
+    let Some(ms) = expire_ms(&args[2], unit_ms, absolute, cmd, out) else {
         return Effect::Unchanged;
     };
+    let key = &args[1];
     // the probe that writes also decides existence: a separate check reads
     // the cached clock while the write reads a fresh one, so a key lapsed
     // between the two would be answered as present yet written as absent
-    let set = if n <= 0 {
-        store.del(&[&args[1]]) == 1
-    } else {
-        store.expire(&args[1], Duration::from_millis(n.saturating_mul(unit_ms) as u64))
+    let set = match (cond, absolute) {
+        (None, false) if ms <= 0 => store.del(&[key]) == 1,
+        (None, false) => store.expire(key, Duration::from_millis(ms as u64)),
+        (None, true) => store.expire_at_unix_ms(key, ms.max(0) as u64),
+        (Some(c), _) => expire_if(store, key, c, if absolute { ms } else { ms + now_ms() }),
     };
     encode_integer(out, i64::from(set));
     changed(set)
 }
 
-/// `EXPIREAT` (seconds) / `PEXPIREAT` (milliseconds): an absolute unix
-/// deadline, so it replays to the same instant. A past one deletes.
-fn expireat<A: ArgvView + ?Sized>(
-    store: &mut Store,
-    args: &A,
+fn now_ms() -> i64 {
+    kevy_store::now_unix_ms() as i64
+}
+
+/// The time argument in milliseconds, or `None` once the error is written:
+/// not an integer, or out of what Redis accepts — seconds whose
+/// milliseconds overflow, or a relative time whose deadline would.
+fn expire_ms(
+    raw: &[u8],
     unit_ms: i64,
+    absolute: bool,
     cmd: &str,
     out: &mut Vec<u8>,
-) -> Effect {
-    if args.len() != 3 {
-        wrong_args(out, cmd);
-        return Effect::Unchanged;
-    }
-    let Some(n) = arg_i64(&args[2]) else {
+) -> Option<i64> {
+    let Some(n) = arg_i64(raw) else {
         encode_error(out, ERR_NOT_INT);
-        return Effect::Unchanged;
+        return None;
     };
-    let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;
-    let set = store.expire_at_unix_ms(&args[1], deadline_ms);
-    encode_integer(out, i64::from(set));
-    changed(set)
+    let ms = n.checked_mul(unit_ms);
+    // the clock is read only when the sum could overflow: a unix time in
+    // milliseconds stays below 2^42 for the next century
+    let fits =
+        |ms: i64| absolute || ms <= i64::MAX - (1 << 42) || ms.checked_add(now_ms()).is_some();
+    match ms {
+        Some(ms) if fits(ms) => Some(ms),
+        _ => {
+            encode_error(out, &format!("ERR invalid expire time in '{cmd}' command"));
+            None
+        }
+    }
+}
+
+/// Apply the deadline `at` (unix ms) to `key` when `c` allows it.
+fn expire_if(store: &mut Store, key: &[u8], c: ExpireCond, at: i64) -> bool {
+    if !store.key_exists(key) || !c.allows(at, store.deadline_unix_ms(key)) {
+        return false;
+    }
+    if at <= now_ms() {
+        return store.del(&[key]) == 1;
+    }
+    store.expire_at_unix_ms(key, at as u64)
+}
+
+/// The `NX | XX | GT | LT` conditions of the `EXPIRE` family.
+#[derive(Clone, Copy, Default)]
+struct ExpireCond {
+    nx: bool,
+    xx: bool,
+    gt: bool,
+    lt: bool,
+}
+
+impl ExpireCond {
+    /// The conditions after the time, `None` when there are none; the
+    /// errors are Redis's, checked before the time is read.
+    fn parse<A: ArgvView + ?Sized>(args: &A) -> Result<Option<Self>, String> {
+        let mut c = Self::default();
+        let mut buf = [0u8; 32];
+        for i in 3..args.len() {
+            match upper_verb(&args[i], &mut buf) {
+                b"NX" => c.nx = true,
+                b"XX" => c.xx = true,
+                b"GT" => c.gt = true,
+                b"LT" => c.lt = true,
+                _ => {
+                    let opt = String::from_utf8_lossy(&args[i]);
+                    return Err(format!("ERR Unsupported option {opt}"));
+                }
+            }
+        }
+        if c.nx && (c.xx || c.gt || c.lt) {
+            return Err(
+                "ERR NX and XX, GT or LT options at the same time are not compatible".into()
+            );
+        }
+        if c.gt && c.lt {
+            return Err("ERR GT and LT options at the same time are not compatible".into());
+        }
+        Ok((args.len() > 3).then_some(c))
+    }
+
+    /// Whether the new deadline `at` may replace `cur`; no deadline counts
+    /// as an infinite one.
+    fn allows(self, at: i64, cur: Option<u64>) -> bool {
+        let cur = cur.map(|c| c as i64);
+        !(self.nx && cur.is_some())
+            && !(self.xx && cur.is_none())
+            && !(self.gt && cur.is_none_or(|c| at <= c))
+            && !(self.lt && cur.is_some_and(|c| at >= c))
+    }
 }
 
 /// `TTL` (seconds, rounded to nearest) / `PTTL` (milliseconds); the -2
