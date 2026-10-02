@@ -28,7 +28,9 @@ pub use store::{StoreSearchError, store_keys, store_search};
 
 use kevy_geo::{decode_score, encode_base32_geohash, encode_score, haversine_meters};
 use kevy_resp::CmdError;
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
+};
 use kevy_store::Store;
 
 use crate::Effect;
@@ -60,15 +62,17 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             Effect::Read
         }
         b"GEOSEARCH" => {
-            search::cmd_geosearch(store, args, out);
+            search::cmd_geosearch(store, args, out, RespVersion::V2);
             Effect::Read
         }
         b"GEOSEARCHSTORE" => {
             search::cmd_geosearchstore(store, args, out);
             Effect::Write
         }
-        b"GEORADIUS" => radius::cmd_georadius(store, args, out, false),
-        b"GEORADIUSBYMEMBER" => radius::cmd_georadiusbymember(store, args, out, false),
+        b"GEORADIUS" => radius::cmd_georadius(store, args, out, false, RespVersion::V2),
+        b"GEORADIUSBYMEMBER" => {
+            radius::cmd_georadiusbymember(store, args, out, false, RespVersion::V2)
+        }
         _ => return None,
     })
 }
@@ -95,10 +99,46 @@ pub fn exec_read_only<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> bool {
     match verb {
-        b"GEORADIUS_RO" => radius::cmd_georadius(store, args, out, true),
-        b"GEORADIUSBYMEMBER_RO" => radius::cmd_georadiusbymember(store, args, out, true),
+        b"GEORADIUS_RO" => radius::cmd_georadius(store, args, out, true, RespVersion::V2),
+        b"GEORADIUSBYMEMBER_RO" => {
+            radius::cmd_georadiusbymember(store, args, out, true, RespVersion::V2)
+        }
         _ => return false,
     };
+    true
+}
+
+/// The searches whose reply carries coordinates, in `proto`: GEOSEARCH and
+/// the four legacy radius forms. `false` = `verb` is none of them.
+///
+/// ```
+/// let mut store = kevy_store::Store::new();
+/// let add = kevy_resp::Argv::from(vec![b"GEOADD".to_vec(), b"g".to_vec(), b"13".to_vec(), b"38".to_vec(), b"a".to_vec()]);
+/// kevy_verbs::exec(&mut store, b"GEOADD", &add, &mut Vec::new());
+/// let argv = kevy_resp::Argv::from(
+///     "GEOSEARCH g FROMLONLAT 13 38 BYRADIUS 1 km WITHCOORD".split(' ').map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>(),
+/// );
+/// let mut out = Vec::new();
+/// assert!(kevy_verbs::cmd::geo_search(b"GEOSEARCH", &mut store, &argv, &mut out, kevy_resp::RespVersion::V3));
+/// assert!(out.starts_with(b"*1\r\n*2\r\n$1\r\na\r\n*2\r\n,12.99999"), "{:?}", String::from_utf8_lossy(&out));
+/// ```
+pub fn geo_search<A: ArgvView + ?Sized>(
+    verb: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) -> bool {
+    match verb {
+        b"GEOSEARCH" => search::cmd_geosearch(store, args, out, proto),
+        b"GEORADIUS" | b"GEORADIUS_RO" => {
+            radius::cmd_georadius(store, args, out, verb == b"GEORADIUS_RO", proto);
+        }
+        b"GEORADIUSBYMEMBER" | b"GEORADIUSBYMEMBER_RO" => {
+            radius::cmd_georadiusbymember(store, args, out, verb.ends_with(b"_RO"), proto);
+        }
+        _ => return false,
+    }
     true
 }
 
@@ -268,8 +308,8 @@ fn cmd_geopos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
             Ok(Some(score)) => {
                 let (lon, lat) = decode_score(score);
                 encode_array_len(out, 2);
-                encode_bulk(out, fmt_geo_coord(lon).as_bytes());
-                encode_bulk(out, fmt_geo_coord(lat).as_bytes());
+                search::emit_coord(out, lon, RespVersion::V2);
+                search::emit_coord(out, lat, RespVersion::V2);
             }
             // GEOPOS returns the null array (`*-1\r\n`) for missing
             // members — matches Redis exactly.
@@ -277,13 +317,6 @@ fn cmd_geopos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
             Err(e) => return store_err(out, e),
         }
     }
-}
-
-/// Match Redis's GEO coordinate string format — fixed 17-digit precision
-/// after the decimal point so client tools that parse the textual reply
-/// see the full f64 mantissa we encoded into the score.
-fn fmt_geo_coord(v: f64) -> String {
-    format!("{v:.17}")
 }
 
 // ───────────── GEODIST ─────────────

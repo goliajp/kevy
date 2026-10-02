@@ -115,6 +115,13 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             kevy_verbs::cmd::lcs(store, args, out, RespVersion::V3);
             true
         }
+        b"GEOSEARCH"
+        | b"GEORADIUS"
+        | b"GEORADIUS_RO"
+        | b"GEORADIUSBYMEMBER"
+        | b"GEORADIUSBYMEMBER_RO" => {
+            kevy_verbs::cmd::geo_search(cmd, store, args, out, RespVersion::V3)
+        }
         b"ZMSCORE" => {
             kevy_verbs::cmd::zmscore(store, args, out, RespVersion::V3);
             true

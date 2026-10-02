@@ -220,23 +220,30 @@ pub(crate) fn scan_page(out: &mut Vec<u8>, elems: &[Vec<u8>]) {
     }
 }
 
-/// A score as Redis prints it: integral values carry no decimal point.
+/// A score as Redis prints it (see [`kevy_resp::write_double`]).
 ///
 /// ```
 /// use kevy_verbs::reply::fmt_score;
 /// assert_eq!(fmt_score(3.0), b"3");
 /// assert_eq!(fmt_score(2.5), b"2.5");
+/// assert_eq!(fmt_score(1e-7), b"1e-7");
 /// assert_eq!(fmt_score(f64::INFINITY), b"inf");
 /// ```
 pub fn fmt_score(s: f64) -> Vec<u8> {
-    if s.is_infinite() {
-        return if s > 0.0 { b"inf".to_vec() } else { b"-inf".to_vec() };
-    }
+    let mut out = Vec::with_capacity(24);
+    kevy_resp::write_double(&mut out, s);
+    out
+}
+
+/// What HINCRBYFLOAT answers: integral values without a decimal point,
+/// others in plain decimal. Redis prints this one from a long double, so
+/// it is not [`fmt_score`].
+pub(crate) fn fmt_incr_float(v: f64) -> Vec<u8> {
     // exact comparison on purpose: an epsilon would change the wire shape
     #[allow(clippy::float_cmp)]
-    let is_integer_valued = s == s.trunc();
-    if is_integer_valued && s.abs() < 1e17 {
-        return (s as i64).to_string().into_bytes();
+    let is_integer_valued = v == v.trunc();
+    if is_integer_valued && v.abs() < 1e17 {
+        return (v as i64).to_string().into_bytes();
     }
-    format!("{s}").into_bytes()
+    format!("{v}").into_bytes()
 }

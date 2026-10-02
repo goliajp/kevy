@@ -4,7 +4,7 @@
 //! under the project's 500-LOC limit.
 
 use kevy_resp::ArgvView;
-use kevy_resp::CmdError;
+use kevy_resp::{CmdError, RespVersion};
 
 use crate::args::arg_f64;
 
@@ -102,6 +102,7 @@ impl OptsBuilder {
             with_dist: self.with_dist,
             with_hash: self.with_hash,
             storedist: self.storedist,
+            proto: RespVersion::V2,
         })
     }
 }
