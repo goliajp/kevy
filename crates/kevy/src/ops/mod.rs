@@ -60,6 +60,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"ROLE" => replication::cmd_role(ctx, args, out),
+        // the connection takes RESET itself; a malformed one reaches here
+        b"RESET" => kevy_verbs::reply::wrong_args(out, "reset"),
         b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(ctx, args, out),
         b"MOVE-SCOPE" => scope_move::cmd_move_scope(ctx, store, args, out),
         b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(ctx, store, args, out),

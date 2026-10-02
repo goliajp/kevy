@@ -29,6 +29,7 @@ use kevy_store::{Store, StreamId};
 
 pub mod aof;
 pub mod args;
+mod bitfield;
 mod bitmap;
 pub mod cmd;
 #[cfg(feature = "streams-geo")]
@@ -324,6 +325,9 @@ pub fn exec<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> Option<Effect> {
     if let Some(e) = strings::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = bitfield::exec(verb, store, args, out) {
         return Some(e);
     }
     if let Some(e) = bitmap::exec(verb, store, args, out) {

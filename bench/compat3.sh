@@ -420,6 +420,54 @@ check MSETNX mx4 a mx4 b
 check GET mx4
 check MSETNX mx1
 check MSETNX mx1 a mx2
+check SET bf1 a
+check BITFIELD bf1 GET u8 0 SET i8 '#1' -3 INCRBY u4 3 9 GET i16 0
+check BITFIELD bf1 OVERFLOW SAT INCRBY u8 0 300 OVERFLOW FAIL INCRBY i8 8 -200
+check BITFIELD bf1 OVERFLOW WRAP SET u8 0 300 GET u8 0
+check BITFIELD bf1 GET i64 0 GET u63 1
+check BITFIELD bfnew GET u8 100
+check EXISTS bfnew
+check BITFIELD bfnew2 OVERFLOW FAIL INCRBY u8 16 300
+check STRLEN bfnew2
+check BITFIELD bf1
+check BITFIELD bf1 GET u64 0
+check BITFIELD bf1 GET U8 0
+check BITFIELD bf1 SET u8 -1 1
+check BITFIELD bf1 SET u8 0 x
+check BITFIELD bf1 GET u8 4294967296
+check BITFIELD bf1 OVERFLOW BAD
+check BITFIELD bf1 GET u8
+check BITFIELD bf1 BAD u8 0
+check BITFIELD sm2 GET u8 0
+check BITFIELD_RO bf1 GET i16 0 GET u8 '#1'
+check BITFIELD_RO bf1 OVERFLOW SAT GET u8 0
+check BITFIELD_RO bf1 SET u8 0 1
+check BITFIELD_RO bfnone GET u8 0
+check SET et1 v
+check EXPIREAT et1 4102444800
+check EXPIRETIME et1
+check PEXPIRETIME et1
+check PEXPIREAT et1 4102444800123
+check PEXPIRETIME et1
+check EXPIRETIME et1
+check EXPIRETIME bf1
+check PEXPIRETIME etnokey
+check EXPIRETIME et1 x
+check SMISMEMBER sm2 x a nope
+check SMISMEMBER smnokey a
+check SMISMEMBER bf1 a
+check SMISMEMBER sm2
+check PUBSUB NUMPAT
+check PUBSUB NUMSUB nobody
+check PUBSUB NUMSUB
+check PUBSUB CHANNELS
+check PUBSUB SHARDNUMSUB nobody
+check PUBSUB SHARDCHANNELS
+check PUBSUB HELP
+check PUBSUB BAD
+check PUBSUB NUMPAT x
+check RESET
+check RESET x
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

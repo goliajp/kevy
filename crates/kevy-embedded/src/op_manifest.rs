@@ -9,8 +9,11 @@
 pub(crate) const ESTORE_OPS: &[&str] = &[
     // strings
     "APPEND",
+    "BITFIELD",
+    "BITFIELD_RO",
     "DECR",
     "DECRBY",
+    "EXPIRETIME",
     "GET",
     "GETDEL",
     "GETEX",
@@ -28,11 +31,13 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "MGET",
     "MSET",
     "MSETNX",
+    "PEXPIRETIME",
     "RPUSHX",
     "SET",
     "SETNX",
     "SETRANGE",
     "SINTERCARD",
+    "SMISMEMBER",
     "SMOVE",
     "STRLEN",
     // bitmap

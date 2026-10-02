@@ -135,10 +135,12 @@ mod exec_notify;
 mod exec_op;
 mod exec_propagate;
 mod exec_pubsub;
+mod exec_pubsub_info;
 mod exec_pubsub_pattern;
 mod exec_read_across;
 mod exec_rename;
 mod exec_replwait;
+mod exec_reset;
 mod exec_scan;
 mod exec_slowlog;
 mod exec_smove;
@@ -190,6 +192,7 @@ mod shard_run;
 mod shard_tick;
 mod slow_iter;
 mod small_reply;
+mod txn_kind;
 mod types;
 #[cfg(target_os = "linux")]
 mod uring_aof;
@@ -269,9 +272,8 @@ pub use replication_gate::{RecordApplyGuard, ReplicatedApplyGuard, applying_reco
 pub use replication_secure::ReplicationSecurity;
 pub use route::{Route, XGroupCtx};
 pub use runtime::Runtime;
-pub use types::{
-    ExtensionReduced, LiveRuntimeConfig, ReplicaAck, ReplicaViewRow, ResolvedCmd, TxnKind,
-};
+pub use txn_kind::TxnKind;
+pub use types::{ExtensionReduced, LiveRuntimeConfig, ReplicaAck, ReplicaViewRow, ResolvedCmd};
 pub use verb_id::VerbId;
 
 const _: () = {

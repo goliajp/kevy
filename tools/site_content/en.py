@@ -192,7 +192,7 @@ let mut store = Store::new_in(&mut arena);""",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "RESP2 and RESP3, 238 commands — redis-cli and your client library "
+                "RESP2 and RESP3, 245 commands — redis-cli and your client library "
                 "connect unchanged. One machine, 4 cores per engine, loopback, median of 15 windows."
             ),
             "rows": [
@@ -291,7 +291,7 @@ PAGES["migrate"] = {
             "h2": "Coming from Redis",
             "body": [
                 "<b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and "
-                "answers 238 commands. Point your existing library at it, keep your "
+                "answers 245 commands. Point your existing library at it, keep your "
                 "code, keep your redis-cli. There is no SDK to adopt and no new "
                 "protocol to learn.",
                 "<b>So the only real question is what you gain.</b> Four things, and "
@@ -514,7 +514,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 238 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 238 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 245 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 245 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "Does the dataset have to fit in RAM?",
@@ -720,7 +720,7 @@ HGETALL flags""",
             "items": [
                 {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
                 {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "238 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
+                {"kicker": "Reference", "title": "Every command", "body": "245 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
