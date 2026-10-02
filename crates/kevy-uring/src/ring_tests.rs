@@ -461,3 +461,18 @@ fn a_message_wakes_a_waiting_ring_and_costs_the_sender_no_completion() {
     a.for_each_completion(|_| on_sender += 1);
     assert_eq!(on_sender, 0, "the sender must get no completion");
 }
+
+/// A bounded wait ends at the first completion, not at its deadline.
+#[test]
+fn a_bounded_wait_returns_when_a_completion_arrives() {
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    assert!(ring.prep_nop(0x77));
+    let t = std::time::Instant::now();
+    ring.wait_timeout(std::time::Duration::from_secs(1)).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_millis(500), "waited out the deadline");
+    let mut seen = Vec::new();
+    ring.for_each_completion(|c| seen.push(c.user_data));
+    assert_eq!(seen, vec![0x77]);
+}

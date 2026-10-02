@@ -92,6 +92,10 @@ pub const IORING_SETUP_DEFER_TASKRUN: u32 = 1 << 13;
 
 pub const IORING_ENTER_GETEVENTS: u32 = 1;
 
+/// **Linux 5.11+**. The enter's last two arguments are a
+/// `struct io_uring_getevents_arg` and its size, which carry a timeout.
+pub const IORING_ENTER_EXT_ARG: u32 = 1 << 3;
+
 /// Wake the SQPOLL kernel thread if it was parked. Userland must check the
 /// `IORING_SQ_NEED_WAKEUP` bit in the shared `sq_flags` and pass this flag
 /// to `io_uring_enter` whenever it is set.

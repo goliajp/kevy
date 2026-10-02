@@ -43,14 +43,16 @@ pub(crate) const REPLY_SPIN_MIN: Duration = Duration::from_micros(2);
 /// The longest.
 pub(crate) const REPLY_SPIN_MAX: Duration = Duration::from_micros(50);
 /// Replies that take longer than this on average are cheaper to wait for
-/// parked: a wake costs the owner a message and this shard a few µs, a
-/// spin costs this shard's core for the whole wait.
+/// asleep: a nap costs this shard one system call, a spin costs its core
+/// for the whole wait.
 pub(crate) const REPLY_PARK_BREAK_EVEN: Duration = Duration::from_micros(10);
 
 /// A shard with forwarded commands out and nothing else to do: spin while
-/// the replies are expected soon, park once waiting costs more than a wake.
-/// The expectation is a moving average of how long replies took, parked
-/// time included.
+/// the replies are expected soon, then nap for about as long as they
+/// usually take. The nap does not announce the shard parked, so the owner
+/// never pays to wake it; socket input still ends it early. The
+/// expectation is a moving average of how long replies took, naps
+/// included.
 pub(crate) struct ReplyWait {
     since: Option<Instant>,
     iters: u32,
@@ -92,7 +94,12 @@ impl ReplyWait {
         self.since = None;
     }
 
-    /// How long to spin before parking.
+    /// How long to nap once the spin is over.
+    pub(crate) fn nap(&self) -> Duration {
+        self.typical.clamp(REPLY_SPIN_MIN, REPLY_SPIN_MAX)
+    }
+
+    /// How long to spin before napping.
     pub(crate) fn window(&self) -> Duration {
         if self.typical > REPLY_PARK_BREAK_EVEN {
             REPLY_SPIN_MIN
@@ -146,6 +153,7 @@ mod tests {
         let start = t0 + Duration::from_millis(50);
         assert_eq!(idle_for(&mut w, 1, start), IdleStep::Poll);
         assert_eq!(idle_for(&mut w, 64, start + REPLY_SPIN_MIN), IdleStep::Park);
+        assert_eq!(w.nap().as_micros(), 39, "about the typical 40 µs, which it approaches");
     }
 
     #[test]
