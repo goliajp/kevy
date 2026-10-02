@@ -592,7 +592,10 @@ fn geo_and_collection_error_paths() {
         "geopos miss is a null array",
     );
     assert_starts(&run(&mut s, &[b"GEOPOS", b"nokey", b"m"]), b"*1", "geopos missing key");
-    assert_starts(&run(&mut s, &[b"GEOPOS", b"g"]), b"-ERR", "geopos wrong arity");
+    // no members is an empty answer, as in Redis, and the type still counts
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"g"]), b"*0", "geopos no members");
+    assert_starts(&run(&mut s, &[b"GEOPOS", b"str"]), b"-WRONGTYPE", "geopos no members wrongtype");
+    assert_starts(&run(&mut s, &[b"GEOPOS"]), b"-ERR", "geopos wrong arity");
 
     // The other overridden verbs' error arms, through the V2 chain.
     for argv in [
