@@ -153,6 +153,15 @@ fn pop<A: ArgvView + ?Sized>(store: &mut Store, args: &A, tail: bool, out: &mut 
     } else {
         1
     };
+    // a count of 0 takes nothing: an empty array for a list, nil for none
+    if count_given && count == 0 {
+        match store.llen(&args[1]) {
+            Ok(0) => encode_array_len(out, -1),
+            Ok(_) => encode_array_len(out, 0),
+            Err(e) => store_err(out, e),
+        }
+        return Effect::Unchanged;
+    }
     let res = if tail { store.rpop(&args[1], count) } else { store.lpop(&args[1], count) };
     let items = match res {
         Ok(items) => items,

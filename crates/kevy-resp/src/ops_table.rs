@@ -171,14 +171,12 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("APPEND",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("DECR",         WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("DECRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
+    op("DIGEST",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("GET",          RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("GETDEL",       WR, NG,   Some(N::String), None,    SERVER | ESTORE | REPLAY),
-    // GETEX's notify column is None on purpose. Redis fires `expire`
-    // (class Generic) for the EX/PX form and nothing for the bare one;
-    // it never emits a `getex` event. This engine keys the event NAME
-    // off the verb, so any class here would publish a name Redis does
-    // not have. The column stayed Some(String) while the verb was
-    // ESTORE-only and nothing on the server could act on it.
+    // GETEX's notify column is None on purpose: Redis never emits a
+    // `getex` event, and the default event is the verb's own name. Its
+    // `expire` / `persist` / `del` are asked for by what it did.
     op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("GETRANGE",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("SUBSTR",       RD, NG,   None,            None,    SERVER | ESTORE),

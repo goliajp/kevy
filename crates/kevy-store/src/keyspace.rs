@@ -145,6 +145,19 @@ impl Store {
         self.insert_entry(SmallBytes::from_vec(key), entry);
     }
 
+    /// Whether `key` holds a live value, read without reaping: a key past
+    /// its deadline answers `false` and is left for the sweep to remove.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+    /// assert!(s.is_live(b"k"));
+    /// assert!(!s.is_live(b"missing"));
+    /// ```
+    pub fn is_live(&self, key: &[u8]) -> bool {
+        self.map.get(key).is_some_and(|e| !e.is_expired_at(now_ns()))
+    }
+
     /// Whether a live (non-expired) entry exists at `key`. Reaps an
     /// expired entry as a side effect. Used by the cross-shard RENAME
     /// orchestrator's `nx` pre-check.

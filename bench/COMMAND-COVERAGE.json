@@ -902,12 +902,6 @@
         "XCFGSET"
       ],
       "reason": "Redis 8 stream internals (id-map records, per-stream config). Not in any client library's surface."
-    },
-    "DIGEST": {
-      "prefixes": [
-        "DIGEST"
-      ],
-      "reason": "Redis 8's keyspace digest. kevy has PREFIX.DIGEST, which answers the same question over a prefix rather than the whole keyspace and predates it."
     }
   },
   "_exempt_schema": "Each entry is {prefixes: [...], reason: \"...\"}. The prefixes are a LIST because Redis puts '|' inside verb names (XGROUP|CREATE), so a '|'-joined string cannot express one: it produced a bare PUBSUB fragment that swallowed PUBSUB CHANNELS/NUMSUB/NUMPAT — verbs a client library calls — under a reason about cluster mode. A prefix that matches nothing is reported, so a dead fragment cannot sit here looking like a decision.",

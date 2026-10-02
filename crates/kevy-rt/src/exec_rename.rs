@@ -126,7 +126,12 @@ impl<C: Commands> Shard<C> {
             RenameStep::Take => {
                 self.advance_rename_to_put(conn_id, seq, nx, src, dst, dst_shard, taken)
             }
-            RenameStep::Put => self.finish_rename_put(conn_id, seq, nx, src, taken, put_stored),
+            RenameStep::Put => {
+                if put_stored == Some(true) {
+                    self.notify_renamed(&src, &dst);
+                }
+                self.finish_rename_put(conn_id, seq, nx, src, taken, put_stored)
+            }
             // Restore (RENAMENX NX-refused) completed → src is back; reply :0.
             RenameStep::Restore => self.fill_rename_slot(conn_id, seq, b":0\r\n".to_vec()),
         }

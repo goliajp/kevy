@@ -74,6 +74,22 @@ impl<C: Commands> Shard<C> {
     /// on the per-class flag, then fire one keyspace event for the cmd's
     /// key (`args[1]` per Redis convention — keyless cmds short-circuit
     /// inside `Commands::notify_class` returning `None`).
+    /// Whether generic-class keyspace events (`del`, `rename_*`,
+    /// `copy_to`, …) are published.
+    pub(crate) fn generic_events_on(&self) -> bool {
+        self.notify_flags.is_active()
+            && self.notify_flags.contains(crate::NotificationFlags::GENERIC)
+    }
+
+    /// A rename's two events, `rename_from` on the source and then
+    /// `rename_to` on the destination, from the shard that saw it commit.
+    pub(crate) fn notify_renamed(&mut self, src: &[u8], dst: &[u8]) {
+        if self.generic_events_on() {
+            self.notify_keyspace_event(b"rename_from", src);
+            self.notify_keyspace_event(b"rename_to", dst);
+        }
+    }
+
     pub(crate) fn maybe_notify_dispatch<A: ArgvView + ?Sized>(
         &mut self,
         args: &A,

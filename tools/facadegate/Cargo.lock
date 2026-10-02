@@ -206,6 +206,7 @@ name = "kevy-verbs"
 version = "7.0.0"
 dependencies = [
  "kevy-geo",
+ "kevy-hash",
  "kevy-num",
  "kevy-resp",
  "kevy-store",
