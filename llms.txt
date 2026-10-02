@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (235 total)
+## Verbs (236 total)
 
 ### scan
 
@@ -441,6 +441,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZRANGEBYLEX key min max [LIMIT offset count]` [readonly] — Return members between two member bounds.
   - complexity: O(log² N + M)
   - compat: full
+- `ZRANGESTORE dst src min max [BYSCORE | BYLEX] [REV] [LIMIT offset count]` [write] — Store a range of a sorted set — by rank, score or member — into destination.
+  - complexity: O(log N + M) members stored
+  - compat: differs: when the two keys live on different shards the range is read from a copy of src and placed on dst's shard, so the store is not atomic with the read
 - `ZRANK key member [WITHSCORE]` [readonly] — Return a member's rank, ordered from the lowest score.
   - complexity: O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
   - compat: full
