@@ -309,69 +309,9 @@ fn parse_zsetstore_args<A: ArgvView + ?Sized>(
     args: &A,
     diff_form: bool,
 ) -> Result<ZStoreParsed, CmdError> {
-    if args.len() < 4 {
-        return Err(CmdError::Wire("ERR wrong number of arguments"));
-    }
-    let dst = args[1].to_vec();
-    let numkeys: usize = std::str::from_utf8(&args[2])
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|&n| n > 0)
-        .ok_or("ERR numkeys should be greater than 0")?;
-    if args.len() < 3 + numkeys {
-        return Err(CmdError::Wire("ERR Number of keys can't be greater than number of args"));
-    }
-    let keys: Vec<Vec<u8>> = (3..3 + numkeys).map(|i| args[i].to_vec()).collect();
-    let (weights, aggregate) = parse_zstore_tail(args, diff_form, numkeys)?;
-    Ok((dst, keys, weights, aggregate))
-}
-
-/// The optional `[WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]` tail of the
-/// zset-store arg forms. Extracted verbatim from
-/// [`parse_zsetstore_args`] (single call site, `inline(always)`) purely
-/// for the 50-LOC fn rule.
-#[inline(always)]
-fn parse_zstore_tail<A: ArgvView + ?Sized>(
-    args: &A,
-    diff_form: bool,
-    numkeys: usize,
-) -> Result<(Option<Vec<f64>>, kevy_store::ZAggregate), CmdError> {
-    let mut weights = None;
-    let mut aggregate = kevy_store::ZAggregate::Sum;
-    let mut i = 3 + numkeys;
-    while i < args.len() {
-        let a = &args[i];
-        if !diff_form && a.eq_ignore_ascii_case(b"WEIGHTS") {
-            if args.len() < i + 1 + numkeys {
-                return Err(CmdError::Wire("ERR syntax error"));
-            }
-            let mut w = Vec::with_capacity(numkeys);
-            for j in 0..numkeys {
-                let v = std::str::from_utf8(&args[i + 1 + j])
-                    .ok()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .ok_or("ERR weight value is not a float")?;
-                w.push(v);
-            }
-            weights = Some(w);
-            i += 1 + numkeys;
-        } else if !diff_form && a.eq_ignore_ascii_case(b"AGGREGATE") {
-            let m = args.get(i + 1).ok_or("ERR syntax error")?;
-            aggregate = if m.eq_ignore_ascii_case(b"SUM") {
-                kevy_store::ZAggregate::Sum
-            } else if m.eq_ignore_ascii_case(b"MIN") {
-                kevy_store::ZAggregate::Min
-            } else if m.eq_ignore_ascii_case(b"MAX") {
-                kevy_store::ZAggregate::Max
-            } else {
-                return Err(CmdError::Wire("ERR syntax error"));
-            };
-            i += 2;
-        } else {
-            return Err(CmdError::Wire("ERR syntax error"));
-        }
-    }
-    Ok((weights, aggregate))
+    let z = kevy_verbs::multikey::parse_zstore(args, diff_form)?;
+    let keys: Vec<Vec<u8>> = (3..3 + z.numkeys).map(|i| args[i].to_vec()).collect();
+    Ok((args[1].to_vec(), keys, z.weights, z.aggregate))
 }
 
 /// `S*STORE dst key [key …]`.
@@ -388,33 +328,8 @@ fn parse_setstore_args<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreParsed, C
 fn parse_zintercard_args<A: ArgvView + ?Sized>(
     args: &A,
 ) -> Result<(Vec<Vec<u8>>, usize), CmdError> {
-    if args.len() < 3 {
-        return Err(CmdError::Wire("ERR wrong number of arguments"));
-    }
-    let numkeys: usize = std::str::from_utf8(&args[1])
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|&n| n > 0)
-        .ok_or("ERR numkeys should be greater than 0")?;
-    if args.len() < 2 + numkeys {
-        return Err(CmdError::Wire("ERR Number of keys can't be greater than number of args"));
-    }
-    let keys: Vec<Vec<u8>> = (2..2 + numkeys).map(|i| args[i].to_vec()).collect();
-    let mut limit = 0usize;
-    let mut i = 2 + numkeys;
-    while i < args.len() {
-        if args[i].eq_ignore_ascii_case(b"LIMIT") {
-            limit = args
-                .get(i + 1)
-                .and_then(|v| std::str::from_utf8(v).ok())
-                .and_then(|s| s.parse().ok())
-                .ok_or("ERR LIMIT can't be negative")?;
-            i += 2;
-        } else {
-            return Err(CmdError::Wire("ERR syntax error"));
-        }
-    }
-    Ok((keys, limit))
+    let (numkeys, limit) = kevy_verbs::multikey::parse_zintercard(args)?;
+    Ok(((2..2 + numkeys).map(|i| args[i].to_vec()).collect(), limit))
 }
 
 /// One stream's single-stream rewrite of a multi-stream `XREAD` /

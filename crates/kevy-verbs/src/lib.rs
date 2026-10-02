@@ -38,6 +38,7 @@ mod hash_ttl;
 mod keyspace;
 mod list;
 mod list_move;
+pub mod multikey;
 mod record;
 mod record_group;
 mod record_read;
