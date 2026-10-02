@@ -275,7 +275,14 @@ fn exec_shared<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    match kevy_verbs::exec(store, cmd, args, out) {
+    let start = out.len();
+    let effect = kevy_verbs::exec(store, cmd, args, out);
+    if kevy_rt::propagation::notify_wanted()
+        && let Some(e) = &effect
+    {
+        crate::notify_policy::note(cmd, args, e, &out[start..]);
+    }
+    match effect {
         None => false,
         Some(Effect::Record(frame)) => {
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));

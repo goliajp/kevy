@@ -188,8 +188,12 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard list move: buffer each step's result in the agg
                 // so finalize can decide the next hop.
-                (Agg::ListMoveOrchestrator { taken, .. }, Part::ListMoveTaken(r)) => {
-                    *taken = Some(r)
+                (
+                    Agg::ListMoveOrchestrator { taken, src_emptied, .. },
+                    Part::ListMoveTaken(r, emptied),
+                ) => {
+                    *taken = Some(r);
+                    *src_emptied = emptied;
                 }
                 (Agg::ListMoveOrchestrator { pushed, .. }, Part::ListMovePushed { refused }) => {
                     *pushed = Some(refused.is_none())

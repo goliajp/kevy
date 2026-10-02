@@ -51,6 +51,7 @@ mod cmd_command;
 mod cmd_describe;
 mod cmd_digest;
 mod defrag_tick;
+mod notify_policy;
 pub use defrag_tick::kevy_alloc_is_global;
 mod cmd_failover;
 mod cmd_global_sample;

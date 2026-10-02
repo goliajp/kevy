@@ -109,6 +109,7 @@ impl<C: Commands> Shard<C> {
             from_left,
             to_left,
             taken: None,
+            src_emptied: false,
             pushed: None,
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
@@ -146,12 +147,24 @@ impl<C: Commands> Shard<C> {
             from_left,
             to_left,
             taken,
+            src_emptied,
             pushed,
         } = agg
         else {
             return;
         };
-        let m = Move { conn_id, seq, blocking, src, dst, src_shard, dst_shard, from_left, to_left };
+        let m = Move {
+            conn_id,
+            seq,
+            blocking,
+            src,
+            dst,
+            src_shard,
+            dst_shard,
+            from_left,
+            to_left,
+            src_emptied,
+        };
         match step {
             ListMoveStep::Take => self.after_take(m, taken),
             ListMoveStep::Push => self.after_push(m, taken, pushed),
@@ -198,6 +211,13 @@ impl<C: Commands> Shard<C> {
             return self.finish_list_move(m.conn_id, m.blocking, &m.src, b"$-1\r\n".to_vec());
         };
         if pushed == Some(true) {
+            // announced once the move holds, as Redis orders them: the push,
+            // the pop, the emptied source
+            self.notify_list_event(&m.dst, m.to_left, false);
+            self.notify_list_event(&m.src, m.from_left, true);
+            if m.src_emptied && self.notify_flags.contains(crate::NotificationFlags::GENERIC) {
+                self.notify_keyspace_event(b"del", &m.src);
+            }
             let mut out = Vec::with_capacity(element.len() + 16);
             kevy_resp::encode_bulk(&mut out, &element);
             return self.finish_list_move(m.conn_id, m.blocking, &m.src, out);
@@ -266,6 +286,7 @@ struct Move {
     dst_shard: usize,
     from_left: bool,
     to_left: bool,
+    src_emptied: bool,
 }
 
 impl Move {
@@ -281,6 +302,7 @@ impl Move {
             from_left: self.from_left,
             to_left: self.to_left,
             taken: taken.map(|v| Ok(Some(v))),
+            src_emptied: self.src_emptied,
             pushed,
         }
     }
@@ -305,8 +327,12 @@ impl<C: Commands> Shard<C> {
         self.note_key_mutated(src);
         self.note_key_mutated(dst);
         self.log_list_pop(src, from_left);
-        self.notify_list_event(src, from_left, true);
+        // Redis announces the push, then the pop, then the emptied source
         self.notify_list_event(dst, to_left, false);
+        self.notify_list_event(src, from_left, true);
+        if self.notify_flags.is_active() {
+            self.drain_store_notify();
+        }
     }
 
     /// One `LPOP` / `RPOP` effect record. The pushed half is logged by
@@ -364,11 +390,12 @@ impl<C: Commands> Shard<C> {
                 if element.is_some() {
                     self.note_key_mutated(key);
                     self.log_list_pop(key, from_left);
-                    self.notify_list_event(key, from_left, true);
                 }
-                Part::ListMoveTaken(Ok(element))
+                // the move's events go out from its origin once the push holds
+                let emptied = self.hold_emptied(key);
+                Part::ListMoveTaken(Ok(element), emptied)
             }
-            Err(_) => Part::ListMoveTaken(Err(())),
+            Err(_) => Part::ListMoveTaken(Err(()), false),
         }
     }
 
@@ -385,7 +412,6 @@ impl<C: Commands> Shard<C> {
         match pushed {
             Ok(_) => {
                 self.note_key_mutated(key);
-                self.notify_list_event(key, to_left, false);
                 self.log_list_push(key, &value, to_left);
                 Part::ListMovePushed { refused: None }
             }
@@ -409,5 +435,22 @@ impl<C: Commands> Shard<C> {
         self.note_key_mutated(key);
         self.log_list_push(key, value, from_left);
         Part::Ok
+    }
+
+    /// Whether the store queued an emptied-`key` event, taken back so the
+    /// move can publish it after its own; other queued events go out now.
+    fn hold_emptied(&mut self, key: &[u8]) -> bool {
+        if !self.store.has_notify_events() {
+            return false;
+        }
+        let mut emptied = false;
+        for (kind, k) in self.store.take_notify_events() {
+            if kind == kevy_store::KeyspaceEvent::Emptied && k == key {
+                emptied = true;
+            } else {
+                self.notify_keyspace_event(kind.name().as_bytes(), &k);
+            }
+        }
+        emptied
     }
 }

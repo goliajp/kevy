@@ -242,7 +242,7 @@ impl<C: Commands> Shard<C> {
         {
             src.push_mutation(&view);
         }
-        self.maybe_notify_dispatch(&view);
+        self.maybe_notify_dispatch(&view, None);
         self.wake_key(&key);
         let _ok = self.store.set(&key, body, None, kevy_store::SetCondition::Always);
         self.note_key_mutated(&key);

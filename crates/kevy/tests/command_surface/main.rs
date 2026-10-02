@@ -11,6 +11,7 @@ mod commands;
 mod config_set;
 mod geo;
 mod hash_ttl_e2e;
+mod keyspace_events_sharded;
 mod keyspace_notify;
 mod randomkey_is_random;
 mod rename;
