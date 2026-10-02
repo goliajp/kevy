@@ -124,12 +124,30 @@ impl Store {
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
     pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
-        self.list_push(key, values, true)
+        self.list_push(key, values, true, true)
     }
 
     /// `RPUSH` — append each value; returns the new length.
     pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
-        self.list_push(key, values, false)
+        self.list_push(key, values, false, true)
+    }
+
+    /// `LPUSHX` — [`Self::lpush`] onto a list that exists; `0` otherwise.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// assert_eq!(s.lpushx(b"q", &[b"a".as_slice()])?, 0);
+    /// s.rpush(b"q", &[b"a".as_slice()])?;
+    /// assert_eq!(s.lpushx(b"q", &[b"b".as_slice()])?, 2);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn lpushx(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
+        self.list_push(key, values, true, false)
+    }
+
+    /// `RPUSHX` — [`Self::rpush`] onto a list that exists; `0` otherwise.
+    pub fn rpushx(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
+        self.list_push(key, values, false, false)
     }
 
     /// The push loop: one probe for the whole command, every value then
@@ -139,13 +157,15 @@ impl Store {
         key: &[u8],
         values: &[&[u8]],
         front: bool,
+        create: bool,
     ) -> Result<usize, StoreError> {
         let Some((first, rest)) = values.split_first() else {
             return Ok(self.list_len(key));
         };
         let (slot, todo) = match self.live_slot(key) {
             Some(slot) => (slot, values),
-            None => (self.list_push_create(key, first), rest),
+            None if create => (self.list_push_create(key, first), rest),
+            None => return Ok(0),
         };
         let mut delta: i64 = 0;
         for v in todo {

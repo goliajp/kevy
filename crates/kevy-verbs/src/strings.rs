@@ -85,9 +85,9 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             }
             Effect::Write
         }
-        b"GETRANGE" => {
+        b"GETRANGE" | b"SUBSTR" => {
             if args.len() != 4 {
-                wrong_args(out, "getrange");
+                wrong_args(out, if cmd == b"SUBSTR" { "substr" } else { "getrange" });
             } else if let (Some(a), Some(b)) = (arg_i64(&args[2]), arg_i64(&args[3])) {
                 match store.getrange(&args[1], a, b) {
                     Ok(v) => encode_bulk(out, &v),

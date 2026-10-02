@@ -69,10 +69,10 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
         }
         // Hash — class `h`.
         b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
-        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyKind::Hash,
+        | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" | b"HPERSIST" => NotifyKind::Hash,
         // List — class `l`.
-        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
-        | b"RPOPLPUSH" | b"LMOVE" => NotifyKind::List,
+        b"LPUSH" | b"RPUSH" | b"LPUSHX" | b"RPUSHX" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM"
+        | b"LTRIM" | b"LINSERT" | b"RPOPLPUSH" | b"LMOVE" => NotifyKind::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE" => {
             NotifyKind::Set
@@ -149,6 +149,8 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"BRPOPLPUSH"
             | b"LMOVE"
             | b"BLMOVE"
+            | b"LPUSHX"
+            | b"RPUSHX"
             | b"LSET"
             | b"SADD"
             | b"ZADD"

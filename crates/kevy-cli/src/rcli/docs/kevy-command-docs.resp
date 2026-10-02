@@ -1,4 +1,4 @@
-*438
+*452
 $4
 KEYS
 *14
@@ -1343,6 +1343,38 @@ flags
 *1
 $8
 readonly
+$6
+SUBSTR
+*14
+$7
+summary
+$64
+Return a byte range of a string value; the old name of GETRANGE.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$20
+SUBSTR key start end
+$10
+complexity
+$28
+O(M) over the returned bytes
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 HDEL
 *14
@@ -1432,13 +1464,77 @@ $32
 O(F) fields in the FIELDS clause
 $6
 compat
-$120
-differs: the FIELDS parse error reads 'Mandatory keyword FIELDS is missing' where Redis says 'Mandatory argument FIELDS'
+$4
+full
 $5
 flags
 *1
 $5
 write
+$9
+HEXPIREAT
+*14
+$7
+summary
+$57
+Set per-field expiries as absolute Unix-second deadlines.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$80
+HEXPIREAT key unix-time-seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$11
+HEXPIRETIME
+*14
+$7
+summary
+$75
+Return per-field absolute expiries in Unix seconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$50
+HEXPIRETIME key FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 HGET
 *14
@@ -1752,8 +1848,8 @@ $11
 O(F) fields
 $6
 compat
-$117
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it
+$4
+full
 $5
 flags
 *1
@@ -1784,8 +1880,8 @@ $11
 O(F) fields
 $6
 compat
-$52
-differs: same FIELDS error-text deviation as HEXPIRE
+$4
+full
 $5
 flags
 *1
@@ -1816,8 +1912,8 @@ $11
 O(F) fields
 $6
 compat
-$52
-differs: same FIELDS error-text deviation as HEXPIRE
+$4
+full
 $5
 flags
 *1
@@ -1919,6 +2015,38 @@ flags
 *1
 $5
 write
+$12
+HPEXPIRETIME
+*14
+$7
+summary
+$80
+Return per-field absolute expiries in Unix milliseconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$51
+HPEXPIRETIME key FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $5
 HPTTL
 *14
@@ -1944,8 +2072,40 @@ $11
 O(F) fields
 $6
 compat
-$88
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$7
+HSTRLEN
+*14
+$7
+summary
+$58
+Return the length of a hash field's value (0 when absent).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$17
+HSTRLEN key field
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$4
+full
 $5
 flags
 *1
@@ -1976,8 +2136,8 @@ $11
 O(F) fields
 $6
 compat
-$88
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+$4
+full
 $5
 flags
 *1
@@ -2410,6 +2570,38 @@ flags
 $5
 write
 $6
+LPUSHX
+*14
+$7
+summary
+$45
+Prepend elements to a list only if it exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$32
+LPUSHX key element [element ...]
+$10
+complexity
+$20
+O(N) elements pushed
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$6
 LRANGE
 *14
 $7
@@ -2656,6 +2848,38 @@ $10
 complexity
 $32
 O(M) values, O(1) amortised each
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$6
+RPUSHX
+*14
+$7
+summary
+$44
+Append elements to a list only if it exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$32
+RPUSHX key element [element ...]
+$10
+complexity
+$20
+O(N) elements pushed
 $6
 compat
 $4

@@ -127,6 +127,19 @@ const SCRIPT: &[(&str, &[&str])] = &[
     ("BZMPOP 0 1 z MIN", &["zpopmin(z)", "del(z)"]),
     ("RPUSH q 1", &["rpush(q)"]),
     ("BLMPOP 0 1 q RIGHT", &["rpop(q)", "del(q)"]),
+    ("RPUSH l a", &["rpush(l)"]),
+    ("LPUSHX l x", &["lpush(l)"]),
+    ("RPUSHX l y z", &["rpush(l)"]),
+    ("LPUSHX nokey a", &[]),
+    ("HSET h f 1 g 2", &["hset(h)"]),
+    ("HEXPIRE h 100 FIELDS 1 f", &["hexpire(h)"]),
+    ("HEXPIREAT h 4102444800 FIELDS 1 f", &["hexpire(h)"]),
+    ("HPEXPIRE h 100000 FIELDS 1 g", &["hexpire(h)"]),
+    ("HPEXPIREAT h 4102444800000 NX FIELDS 1 f", &[]),
+    ("HPERSIST h FIELDS 1 f", &["hpersist(h)"]),
+    ("HEXPIREAT h 1 FIELDS 1 f", &["hdel(h)"]),
+    ("HEXPIRE h 0 FIELDS 1 g", &["hdel(h)", "del(h)"]),
+    ("HEXPIRE nokey 10 FIELDS 1 f", &[]),
 ];
 
 fn run_script(nshards: usize) {

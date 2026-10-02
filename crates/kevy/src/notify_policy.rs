@@ -47,6 +47,14 @@ fn events<A: ArgvView + ?Sized>(
                 kevy_verbs::mpop::parse_zmpop(args, at).ok()?.end == kevy_store::ListEnd::Left;
             one(NotifyKind::Zset, if min { "zpopmin" } else { "zpopmax" }, &frame[1])
         }
+        (b"LPUSHX", _) => one(NotifyKind::List, "lpush", &args[1]),
+        (b"RPUSHX", _) => one(NotifyKind::List, "rpush", &args[1]),
+        // every field-TTL setter is an `hexpire`, unless its deadline had
+        // passed and the fields went, which is an `hdel` (code 2)
+        (b"HEXPIRE" | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT", _) => {
+            let deleted = reply.windows(4).any(|w| w == b":2\r\n");
+            one(NotifyKind::Hash, if deleted { "hdel" } else { "hexpire" }, &args[1])
+        }
         (b"LMOVE" | b"BLMOVE", _) => moved(args, &args[3], &args[4]),
         (b"RPOPLPUSH" | b"BRPOPLPUSH", _) => moved(args, b"RIGHT", b"LEFT"),
         _ => None,

@@ -366,7 +366,8 @@ pub(crate) fn wake_idx_for_verb(upper: &[u8]) -> Option<u8> {
     // a member from being empty / a smaller-scored member arrives at the
     // front). ZREM / ZPOPMIN / ZREMRANGEBY* only shrink, so they can't
     // satisfy a parked BZPOPMIN — leaving them out of the wake set.
-    matches!(upper, b"LPUSH" | b"RPUSH" | b"XADD" | b"ZADD" | b"ZINCRBY").then_some(1)
+    matches!(upper, b"LPUSH" | b"RPUSH" | b"LPUSHX" | b"RPUSHX" | b"XADD" | b"ZADD" | b"ZINCRBY")
+        .then_some(1)
 }
 
 /// Materialise the parked argv for an `XREAD BLOCK ... STREAMS k1 ...

@@ -262,6 +262,50 @@ check BLMOVE bstr bdst LEFT RIGHT 0
 check LRANGE bdst 0 -1
 check BRPOPLPUSH nokey bdst 0.05
 check BLPOP nokey -1
+# HSTRLEN, LPUSHX / RPUSHX, SUBSTR, the field-TTL family's grammar
+check HSET b6h f hello g 12345 n -1.5
+check HSTRLEN b6h f
+check HSTRLEN b6h n
+check HSTRLEN b6h nope
+check HSTRLEN b6nokey f
+check HSTRLEN b6h f extra
+check SET b6str v
+check HSTRLEN b6str f
+check LPUSHX b6nokey a
+check RPUSHX b6nokey a
+check EXISTS b6nokey
+check RPUSH b6l a
+check LPUSHX b6l x y
+check RPUSHX b6l z
+check LRANGE b6l 0 -1
+check LPUSHX b6str a
+check SET b6s HelloWorld
+check SUBSTR b6s 0 4
+check SUBSTR b6s -3 -1
+check SUBSTR b6s 4 2
+check SUBSTR b6nokey 0 1
+check SUBSTR b6s x 1
+check SUBSTR b6l 0 1
+check HSET b6t a 1 b 2
+check HEXPIRETIME b6t FIELDS 2 a nope
+check HEXPIREAT b6t 4102444800 FIELDS 2 a nope
+check HEXPIRETIME b6t FIELDS 1 a
+check HPEXPIRETIME b6t FIELDS 1 a
+check HEXPIREAT b6t 4102444800 NX FIELDS 1 a
+check HEXPIREAT b6t 4102444801 GT FIELDS 1 a
+check HEXPIREAT b6t 1 FIELDS 1 b
+check HEXISTS b6t b
+check HEXPIREAT b6t 4102444800 FIELDS 0 a
+check HEXPIREAT b6t 4102444800 FIELDS 2 a
+check HEXPIREAT b6t 4102444800 BAD 1 a
+check HEXPIREAT b6t -1 FIELDS 1 a
+check HEXPIRE b6t 100 NX XX FIELDS 1 a
+check HEXPIRE b6t 100 FIELDS 1 a FIELDS 1 a
+check HPEXPIREAT b6t 70368744177664 FIELDS 1 a
+check HTTL b6t NX FIELDS 1 a
+check HTTL b6t FIELDS 2 a
+check HTTL b6t FIELDS 0 a
+check HPERSIST b6t FIELDS 1 a
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

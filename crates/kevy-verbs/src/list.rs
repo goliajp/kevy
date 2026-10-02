@@ -34,6 +34,22 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             }
             Effect::Write
         }
+        b"LPUSHX" | b"RPUSHX" => {
+            if args.len() < 3 {
+                wrong_args(out, if cmd == b"LPUSHX" { "lpushx" } else { "rpushx" });
+                return Some(Effect::Unchanged);
+            }
+            let vals = rest_borrowed(args, 2);
+            let res = if cmd == b"LPUSHX" {
+                store.lpushx(&args[1], &vals)
+            } else {
+                store.rpushx(&args[1], &vals)
+            };
+            // a missing key takes nothing
+            let pushed = matches!(res, Ok(n) if n > 0);
+            emit_int_result(res.map(|n| n as i64), out);
+            changed(pushed)
+        }
         b"LPOP" => pop(store, args, false, out),
         b"RPOP" => pop(store, args, true, out),
         b"BLPOP" => blocking_pop(store, args, false, out),
