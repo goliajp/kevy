@@ -4,14 +4,63 @@
 //! under the project's 500-LOC limit.
 
 use kevy_resp::ArgvView;
-use kevy_resp::{CmdError, RespVersion};
+use kevy_resp::{CmdError, RespVersion, encode_error};
 
 use crate::args::arg_f64;
 
 use super::super::parse_unit;
 use super::{Anchor, LegacyRadiusParsed, Opts, Shape, Sort};
 
-pub(in crate::geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, CmdError> {
+/// Why a geo search's arguments were refused: a fixed reply, or a centre
+/// off the map, whose reply quotes the pair.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::geo) enum GeoError {
+    Wire(&'static str),
+    BadCenter(f64, f64),
+}
+
+impl From<&'static str> for GeoError {
+    fn from(s: &'static str) -> Self {
+        Self::Wire(s)
+    }
+}
+
+impl From<CmdError> for GeoError {
+    fn from(e: CmdError) -> Self {
+        Self::Wire(e.as_wire())
+    }
+}
+
+impl GeoError {
+    pub(in crate::geo) fn emit(self, out: &mut Vec<u8>) {
+        match self {
+            Self::Wire(s) => encode_error(out, s),
+            Self::BadCenter(lon, lat) => encode_error(out, &bad_pair(lon, lat)),
+        }
+    }
+}
+
+/// Redis's reply to a longitude / latitude pair off the map.
+pub(in crate::geo) fn bad_pair(lon: f64, lat: f64) -> String {
+    format!("ERR invalid longitude,latitude pair {lon:.6},{lat:.6}")
+}
+
+/// A centre's longitude and latitude, checked against the map.
+pub(in crate::geo) fn center(lon: &[u8], lat: &[u8]) -> Result<Anchor, GeoError> {
+    let lon = arg_f64(lon).ok_or("ERR value is not a valid float")?;
+    let lat = arg_f64(lat).ok_or("ERR value is not a valid float")?;
+    if kevy_geo::encode_score(lon, lat).is_none() {
+        return Err(GeoError::BadCenter(lon, lat));
+    }
+    Ok(Anchor::LonLat(lon, lat))
+}
+
+/// A radius, a width or a height: a number, and not negative.
+pub(in crate::geo) fn extent(b: &[u8], unparsed: &'static str) -> Result<f64, GeoError> {
+    arg_f64(b).ok_or(GeoError::Wire(unparsed))
+}
+
+pub(in crate::geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, GeoError> {
     parse_opts_at(args, 2)
 }
 
@@ -20,7 +69,7 @@ pub(in crate::geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts,
 pub(in crate::geo) fn parse_opts_at<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Opts, CmdError> {
+) -> Result<Opts, GeoError> {
     let mut state = OptsBuilder::default();
     let mut i = start;
     while i < args.len() {
@@ -39,7 +88,7 @@ pub(in crate::geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
     anchor: Anchor,
     radius_m: f64,
     unit: f64,
-) -> Result<LegacyRadiusParsed, CmdError> {
+) -> Result<LegacyRadiusParsed, GeoError> {
     let mut s = OptsBuilder {
         from: Some(anchor),
         shape: Some((Shape::Radius { r_m: radius_m }, unit)),
@@ -66,7 +115,7 @@ pub(in crate::geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
         };
     }
     if store_dst.is_some() && (s.with_coord || s.with_dist || s.with_hash) {
-        return Err(CmdError::Wire(
+        return Err(GeoError::Wire(
             "ERR STORE option in GEORADIUS is not compatible with WITHCOORD, WITHDIST and WITHHASH options",
         ));
     }
@@ -88,7 +137,7 @@ pub(super) struct OptsBuilder {
 }
 
 impl OptsBuilder {
-    fn finish(self) -> Result<Opts, CmdError> {
+    fn finish(self) -> Result<Opts, GeoError> {
         let from = self.from.ok_or("ERR syntax error: missing FROMMEMBER / FROMLONLAT")?;
         let (shape, unit) = self.shape.ok_or("ERR syntax error: missing BYRADIUS / BYBOX")?;
         Ok(Opts {
@@ -114,7 +163,7 @@ fn parse_one_opt<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     s: &mut OptsBuilder,
-) -> Result<usize, CmdError> {
+) -> Result<usize, GeoError> {
     match tok {
         b"FROMMEMBER" | b"FROMLONLAT" => parse_from(args, tok, i, &mut s.from),
         b"BYRADIUS" | b"BYBOX" => parse_shape(args, tok, i, &mut s.shape),
@@ -143,7 +192,7 @@ fn parse_one_opt<A: ArgvView + ?Sized>(
             s.storedist = true;
             Ok(1)
         }
-        _ => Err(CmdError::Wire("ERR syntax error")),
+        _ => Err(GeoError::Wire("ERR syntax error")),
     }
 }
 
@@ -152,17 +201,15 @@ fn parse_from<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     from: &mut Option<Anchor>,
-) -> Result<usize, CmdError> {
+) -> Result<usize, GeoError> {
     if tok == b"FROMMEMBER" {
         let m = args.get(i + 1).ok_or("ERR syntax error")?;
         *from = Some(Anchor::Member(m.to_vec()));
         return Ok(2);
     }
-    let lon = arg_f64(args.get(i + 1).ok_or("ERR syntax error")?)
-        .ok_or("ERR value is not a valid float")?;
-    let lat = arg_f64(args.get(i + 2).ok_or("ERR syntax error")?)
-        .ok_or("ERR value is not a valid float")?;
-    *from = Some(Anchor::LonLat(lon, lat));
+    let lon = args.get(i + 1).ok_or("ERR syntax error")?;
+    let lat = args.get(i + 2).ok_or("ERR syntax error")?;
+    *from = Some(center(lon, lat)?);
     Ok(3)
 }
 
@@ -171,19 +218,22 @@ fn parse_shape<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     shape: &mut Option<(Shape, f64)>,
-) -> Result<usize, CmdError> {
+) -> Result<usize, GeoError> {
     if tok == b"BYRADIUS" {
-        let r = arg_f64(args.get(i + 1).ok_or("ERR syntax error")?)
-            .ok_or("ERR value is not a valid float")?;
+        let r = extent(args.get(i + 1).ok_or("ERR syntax error")?, "ERR need numeric radius")?;
+        if r < 0.0 {
+            return Err(GeoError::Wire("ERR radius cannot be negative"));
+        }
         let u = parse_unit(args.get(i + 2).ok_or("ERR syntax error")?)
             .ok_or("ERR unsupported unit provided. please use M, KM, FT, MI")?;
         *shape = Some((Shape::Radius { r_m: r * u }, u));
         return Ok(3);
     }
-    let w = arg_f64(args.get(i + 1).ok_or("ERR syntax error")?)
-        .ok_or("ERR value is not a valid float")?;
-    let h = arg_f64(args.get(i + 2).ok_or("ERR syntax error")?)
-        .ok_or("ERR value is not a valid float")?;
+    let w = extent(args.get(i + 1).ok_or("ERR syntax error")?, "ERR need numeric width")?;
+    let h = extent(args.get(i + 2).ok_or("ERR syntax error")?, "ERR need numeric height")?;
+    if w < 0.0 || h < 0.0 {
+        return Err(GeoError::Wire("ERR height or width cannot be negative"));
+    }
     let u = parse_unit(args.get(i + 3).ok_or("ERR syntax error")?)
         .ok_or("ERR unsupported unit provided. please use M, KM, FT, MI")?;
     *shape = Some((Shape::Box { w_m: w * u, h_m: h * u }, u));
@@ -195,13 +245,13 @@ fn parse_count<A: ArgvView + ?Sized>(
     i: usize,
     count: &mut Option<usize>,
     any: &mut bool,
-) -> Result<usize, CmdError> {
+) -> Result<usize, GeoError> {
     let n: i64 = std::str::from_utf8(args.get(i + 1).ok_or("ERR syntax error")?)
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or("ERR value is not an integer or out of range")?;
     if n <= 0 {
-        return Err(CmdError::Wire("ERR COUNT can't be negative"));
+        return Err(GeoError::Wire("ERR COUNT can't be negative"));
     }
     *count = Some(n as usize);
     if let Some(next) = args.get(i + 2)

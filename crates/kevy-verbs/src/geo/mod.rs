@@ -24,7 +24,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-pub use store::{StoreSearchError, store_keys, store_search};
+pub use store::{BadCenter, StoreSearchError, store_keys, store_search};
 
 use kevy_geo::{decode_score, encode_base32_geohash, encode_score, haversine_meters};
 use kevy_resp::CmdError;
@@ -179,10 +179,7 @@ fn cmd_geoadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
         };
         let member = args[i + 2].to_vec();
         let Some(score) = encode_score(lon, lat) else {
-            return encode_error(
-                out,
-                &format!("ERR invalid longitude,latitude pair {lon:.6},{lat:.6}"),
-            );
+            return encode_error(out, &search::bad_pair(lon, lat));
         };
         pairs.push((score, member));
         i += 3;

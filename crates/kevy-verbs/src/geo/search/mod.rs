@@ -10,11 +10,13 @@
 
 mod parse;
 
-pub(super) use parse::{parse_legacy_radius, parse_opts, parse_opts_at};
+pub(super) use parse::{
+    GeoError, bad_pair, center, extent, parse_legacy_radius, parse_opts, parse_opts_at,
+};
 
 use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges};
 use kevy_resp::{
-    ArgvView, CmdError, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer,
 };
 use kevy_store::{ScoreBound, Store};
@@ -37,7 +39,7 @@ pub(crate) fn cmd_geosearch<A: ArgvView + ?Sized>(
     }
     let opts = match parse_opts(args) {
         Ok(o) => Opts { proto, ..o },
-        Err(msg) => return encode_error(out, msg.as_wire()),
+        Err(e) => return e.emit(out),
     };
     let key = args[1].to_vec();
     let hits = match run_search(store, &key, &opts) {
@@ -305,7 +307,7 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
 ) {
     let (src, opts) = match plan_geosearchstore(args) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg.as_wire()),
+        Err(e) => return e.emit(out),
     };
     let dst = args[1].to_vec();
     match search_pairs(store, &src, &opts) {
@@ -322,9 +324,9 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
 /// on ITS shard, not the source's (see `kevy_rt::Route::GeoStore`).
 pub(super) fn plan_geosearchstore<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<(Vec<u8>, Opts), CmdError> {
+) -> Result<(Vec<u8>, Opts), GeoError> {
     if args.len() < 5 {
-        return Err(CmdError::Wire("ERR wrong number of arguments for 'geosearchstore' command"));
+        return Err(GeoError::Wire("ERR wrong number of arguments for 'geosearchstore' command"));
     }
     let opts = parse_opts_at(args, 3)?;
     Ok((args[2].to_vec(), opts))

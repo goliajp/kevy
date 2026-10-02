@@ -5,16 +5,16 @@
 //! search core consumes, then either emit the GEOSEARCH-style reply
 //! or perform a STORE / STOREDIST write into a destination ZSet.
 
-use kevy_resp::{ArgvView, CmdError, RespVersion, encode_error, encode_integer};
+use kevy_resp::{ArgvView, RespVersion, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::Effect;
-use crate::args::{arg_f64, upper_verb};
+use crate::args::upper_verb;
 use crate::reply::store_err;
 
 use super::parse_unit;
 use super::search;
-use super::search::{Anchor, LegacyRadiusParsed, RadiusReply, SearchError};
+use super::search::{Anchor, GeoError, LegacyRadiusParsed, RadiusReply, SearchError};
 
 /// `GEORADIUS key lon lat radius unit [...]` — legacy.
 pub(super) fn cmd_georadius<A: ArgvView + ?Sized>(
@@ -45,23 +45,24 @@ pub(super) fn cmd_georadiusbymember<A: ArgvView + ?Sized>(
 pub(super) fn plan_radius<A: ArgvView + ?Sized>(
     args: &A,
     bymember: bool,
-) -> Result<(Vec<u8>, LegacyRadiusParsed), CmdError> {
+) -> Result<(Vec<u8>, LegacyRadiusParsed), GeoError> {
     let (anchor, radius_idx) = if bymember {
         if args.len() < 5 {
-            return Err(CmdError::Wire(
+            return Err(GeoError::Wire(
                 "ERR wrong number of arguments for 'georadiusbymember' command",
             ));
         }
         (Anchor::Member(args[2].to_vec()), 3)
     } else {
         if args.len() < 6 {
-            return Err(CmdError::Wire("ERR wrong number of arguments for 'georadius' command"));
+            return Err(GeoError::Wire("ERR wrong number of arguments for 'georadius' command"));
         }
-        let lon = arg_f64(&args[2]).ok_or("ERR value is not a valid float")?;
-        let lat = arg_f64(&args[3]).ok_or("ERR value is not a valid float")?;
-        (Anchor::LonLat(lon, lat), 4)
+        (search::center(&args[2], &args[3])?, 4)
     };
-    let radius = arg_f64(&args[radius_idx]).ok_or("ERR value is not a valid float")?;
+    let radius = search::extent(&args[radius_idx], "ERR need numeric radius")?;
+    if radius < 0.0 {
+        return Err(GeoError::Wire("ERR radius cannot be negative"));
+    }
     let unit = parse_unit(&args[radius_idx + 1])
         .ok_or("ERR unsupported unit provided. please use M, KM, FT, MI")?;
     let parsed = search::parse_legacy_radius(args, radius_idx + 2, anchor, radius * unit, unit)?;
@@ -72,14 +73,14 @@ pub(super) fn plan_radius<A: ArgvView + ?Sized>(
 fn run_radius(
     store: &mut Store,
     out: &mut Vec<u8>,
-    planned: Result<(Vec<u8>, LegacyRadiusParsed), CmdError>,
+    planned: Result<(Vec<u8>, LegacyRadiusParsed), GeoError>,
     read_only: bool,
     proto: RespVersion,
 ) -> Effect {
     let (key, mut parsed) = match planned {
         Ok(p) => p,
-        Err(msg) => {
-            encode_error(out, msg.as_wire());
+        Err(e) => {
+            e.emit(out);
             return Effect::Read;
         }
     };

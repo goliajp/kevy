@@ -17,7 +17,7 @@ use kevy_resp::{Argv, ArgvView, CmdError};
 use kevy_store::{Store, StoreError};
 
 use super::radius::{legacy_store_dst, plan_radius};
-use super::search::{SearchError, plan_geosearchstore, search_pairs};
+use super::search::{GeoError, SearchError, plan_geosearchstore, search_pairs};
 
 /// `(source, destination)` of a geo command that writes a destination
 /// key; `None` for every other shape, including the query-only forms.
@@ -96,9 +96,62 @@ pub enum StoreSearchError {
     /// assert_eq!(r, Err(StoreSearchError::Store(kevy_store::StoreError::WrongType)));
     /// ```
     Store(StoreError),
+    /// A `FROMLONLAT` / GEORADIUS centre off the map; its reply quotes the
+    /// pair, which [`StoreSearchError::to_wire`] carries.
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let mut store = kevy_store::Store::new();
+    /// let r = store_search(&mut store, &argv("GEOSEARCHSTORE dst src FROMLONLAT 200 38 BYRADIUS 1 km"));
+    /// assert_eq!(r.unwrap_err().to_wire(), "ERR invalid longitude,latitude pair 200.000000,38.000000");
+    /// ```
+    BadCenter(BadCenter),
+}
+
+/// A longitude / latitude pair off the map, as given.
+///
+/// ```
+/// use kevy_verbs::geo::{StoreSearchError, store_search};
+/// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+/// let r = store_search(&mut kevy_store::Store::new(), &argv("GEORADIUS src 0 90 1 km STORE dst"));
+/// assert!(matches!(r, Err(StoreSearchError::BadCenter(_))));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct BadCenter {
+    lon: f64,
+    lat: f64,
+}
+
+impl PartialEq for BadCenter {
+    fn eq(&self, o: &Self) -> bool {
+        self.lon.to_bits() == o.lon.to_bits() && self.lat.to_bits() == o.lat.to_bits()
+    }
+}
+
+impl Eq for BadCenter {}
+
+impl std::hash::Hash for BadCenter {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        (self.lon.to_bits(), self.lat.to_bits()).hash(h);
+    }
 }
 
 impl StoreSearchError {
+    /// The error reply the command answers, the pair quoted for a centre
+    /// off the map.
+    ///
+    /// ```
+    /// let e = kevy_verbs::geo::StoreSearchError::NoMember;
+    /// assert_eq!(e.to_wire(), "ERR could not decode requested zset member");
+    /// ```
+    pub fn to_wire(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::BadCenter(c) => super::search::bad_pair(c.lon, c.lat).into(),
+            _ => self.as_wire().into(),
+        }
+    }
+
     /// The error reply the command answers.
     ///
     /// ```
@@ -110,6 +163,8 @@ impl StoreSearchError {
             Self::Refused(e) => e.as_wire(),
             Self::NoMember => "ERR could not decode requested zset member",
             Self::Store(e) => e.as_wire(),
+            // the pair itself is in `to_wire`
+            Self::BadCenter(_) => "ERR invalid longitude,latitude pair",
         }
     }
 }
@@ -120,8 +175,8 @@ impl std::fmt::Display for StoreSearchError {
             Self::Store(e) => write!(f, "{e}"),
             // the wire text without its error code
             _ => {
-                let wire = self.as_wire();
-                f.write_str(wire.split_once(' ').map_or(wire, |(_, text)| text))
+                let wire = self.to_wire();
+                f.write_str(wire.split_once(' ').map_or(&*wire, |(_, text)| text))
             }
         }
     }
@@ -132,7 +187,7 @@ impl std::error::Error for StoreSearchError {
         match self {
             Self::Refused(e) => Some(e),
             Self::Store(e) => Some(e),
-            Self::NoMember => None,
+            Self::NoMember | Self::BadCenter(_) => None,
         }
     }
 }
@@ -167,9 +222,12 @@ pub fn store_search(
         b"GEORADIUS" => plan_radius(&args, false).map(|(src, p)| (src, p.opts)),
         b"GEORADIUSBYMEMBER" => plan_radius(&args, true).map(|(src, p)| (src, p.opts)),
         // only the three verbs above store
-        _ => Err(CmdError::Wire("ERR unknown command")),
+        _ => Err(GeoError::Wire("ERR unknown command")),
     };
-    let (src, opts) = planned.map_err(StoreSearchError::Refused)?;
+    let (src, opts) = planned.map_err(|e| match e {
+        GeoError::Wire(s) => StoreSearchError::Refused(CmdError::Wire(s)),
+        GeoError::BadCenter(lon, lat) => StoreSearchError::BadCenter(BadCenter { lon, lat }),
+    })?;
     search_pairs(store, &src, &opts).map_err(|e| match e {
         SearchError::NoMember => StoreSearchError::NoMember,
         SearchError::Store(e) => StoreSearchError::Store(e),
