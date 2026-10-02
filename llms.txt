@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (247 total)
+## Verbs (250 total)
 
 ### scan
 
@@ -108,6 +108,18 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `UNLINK key [key ...]` [write] — Delete one or more keys (alias of DEL in kevy's shard model).
   - complexity: O(N) keys, plus O(M) per collection-typed key — identical to DEL
   - compat: differs: UNLINK is an alias of DEL — the value is freed inline on the owning shard's reactor thread, not by a background thread, so it gives no latency benefit
+
+### hyperloglog
+
+- `PFADD key [element ...]` [write] — Add elements to a HyperLogLog, creating it if needed.
+  - complexity: O(1) per element
+  - compat: full
+- `PFCOUNT key [key ...]` [readonly] — Estimate the number of distinct elements in the union of HyperLogLogs.
+  - complexity: O(1) for one key with its estimate cached, O(N) keys otherwise
+  - compat: differs: with keys on different shards the union is estimated from copies gathered to one shard
+- `PFMERGE destkey [sourcekey ...]` [write] — Merge HyperLogLogs into a destination, which is merged in too.
+  - complexity: O(N) keys
+  - compat: differs: when the keys live on different shards the union is computed from copies and placed on the destination's shard, so the merge is not atomic with the reads
 
 ### string
 

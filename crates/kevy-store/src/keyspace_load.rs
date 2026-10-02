@@ -8,9 +8,31 @@ use crate::nostd_prelude::*;
 use alloc::sync::Arc;
 
 use crate::value::{SetData, Value, ZSetData};
-use crate::{SmallBytes, Store};
+use crate::{Entry, SmallBytes, Store};
 
 impl Store {
+    /// Replace `key`'s value with `value`, keeping the deadline the key
+    /// had to the nanosecond — none when it had none or did not exist.
+    /// For a value computed elsewhere from this key's own, as PFMERGE's
+    /// destination is.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// let mut s = kevy_store::Store::new();
+    /// s.set(b"k", b"a".to_vec(), Some(Duration::from_secs(100)), kevy_store::SetCondition::Always);
+    /// s.set(b"v", b"b".to_vec(), None, kevy_store::SetCondition::Always);
+    /// let (value, _) = s.clone_with_ttl(b"v").unwrap();
+    /// s.put_keep_ttl(b"k".to_vec(), value);
+    /// assert!(s.pttl(b"k") > 99_000);
+    /// assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"b"[..]));
+    /// ```
+    pub fn put_keep_ttl(&mut self, key: Vec<u8>, value: Value) {
+        let deadline =
+            self.live_entry(&key).and_then(|e| e.expire_at_ns.map(core::num::NonZeroU64::get));
+        self.remove_entry(&key);
+        self.insert_entry(SmallBytes::from_vec(key), Entry::new(value, deadline));
+    }
+
     /// Insert one already-typed `(key, value, ttl)` triple, e.g. straight out
     /// of another store's [`Self::snapshot_each`] — the redistribution step
     /// both reshard paths (embedded `shards` bring-up, server routing
