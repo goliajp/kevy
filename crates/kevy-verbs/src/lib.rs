@@ -48,6 +48,7 @@ mod record_group;
 mod record_read;
 pub mod reply;
 mod set;
+pub mod sort;
 #[cfg(feature = "streams-geo")]
 mod stream;
 mod stream_resp3;
@@ -324,6 +325,17 @@ pub fn exec<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> Option<Effect> {
+    exec_values(store, verb, args, out).or_else(|| exec_collections(store, verb, args, out))
+}
+
+/// Strings, bits, hashes, lists, SORT and sets — the commonest verbs
+/// first, as the chain is tried in order.
+fn exec_values<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    verb: &[u8],
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<Effect> {
     if let Some(e) = strings::exec(verb, store, args, out) {
         return Some(e);
     }
@@ -339,9 +351,20 @@ pub fn exec<A: ArgvView + ?Sized>(
     if let Some(e) = list::exec(verb, store, args, out) {
         return Some(e);
     }
-    if let Some(e) = set::exec(verb, store, args, out) {
+    if let Some(e) = sort::exec(verb, store, args, out) {
         return Some(e);
     }
+    set::exec(verb, store, args, out)
+}
+
+/// The multi-key reads and pops, sorted sets, key commands, geo and
+/// streams.
+fn exec_collections<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    verb: &[u8],
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<Effect> {
     if let Some(e) = multiread::exec(verb, store, args, out) {
         return Some(e);
     }

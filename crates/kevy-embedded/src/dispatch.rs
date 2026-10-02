@@ -36,6 +36,7 @@ mod read_across;
 mod set;
 mod shared;
 mod smove;
+mod sort_store;
 mod strings;
 #[cfg(feature = "index")]
 mod table;
@@ -204,6 +205,8 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "SINTERCARD",
     "SMISMEMBER",
     "SMOVE",
+    "SORT",
+    "SORT_RO",
     "STRLEN",
     // bitmap
     "BITCOUNT",

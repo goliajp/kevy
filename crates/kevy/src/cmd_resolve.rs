@@ -143,6 +143,10 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"RESET" => Route::Local,
         b"MSETNX" => Route::MSetNx,
         b"ZRANGESTORE" if args.len() >= 5 => Route::StoreFromCopies { first: 2, count: 1, dst: 1 },
+        // the destination is wherever the options put STORE
+        b"SORT" if let Some(dst) = kevy_verbs::sort::store_destination(args) => {
+            Route::StoreFromCopies { first: 1, count: 1, dst }
+        }
         b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF" => read_across_route(upper, args),
         b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
         b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),

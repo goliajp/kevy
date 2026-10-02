@@ -211,6 +211,8 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("SMEMBERS", 2),
     ("SMISMEMBER", -3),
     ("SMOVE", 4),
+    ("SORT", -2),
+    ("SORT_RO", -2),
     ("SPOP", -2),
     ("SRANDMEMBER", -2),
     ("SREM", -3),
