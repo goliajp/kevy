@@ -183,30 +183,58 @@ pub fn emit_zrange(
 ) {
     match res {
         Err(e) => store_err(out, e),
-        Ok(items) => match (scores, proto) {
-            (Scores::Omitted, _) => {
-                encode_array_len(out, items.len() as i64);
-                for (m, _) in &items {
-                    encode_bulk(out, m);
-                }
-            }
-            (Scores::Included, RespVersion::V2) => {
-                encode_array_len(out, (items.len() * 2) as i64);
-                for (m, sc) in &items {
-                    encode_bulk(out, m);
-                    encode_bulk(out, &fmt_score(*sc));
-                }
-            }
-            (Scores::Included, RespVersion::V3) => {
-                encode_array_len(out, items.len() as i64);
-                for (m, sc) in &items {
-                    encode_array_len(out, 2);
-                    encode_bulk(out, m);
-                    encode_double(out, *sc);
-                }
-            }
-        },
+        Ok(items) => emit_range(items.iter().map(|(m, s)| (m.as_slice(), *s)), scores, proto, out),
     }
+}
+
+/// [`emit_zrange`] for entries borrowed in place, as a range read walks
+/// them: the length is known before the first one.
+pub(crate) fn emit_range<'a>(
+    items: impl ExactSizeIterator<Item = (&'a [u8], f64)>,
+    scores: Scores,
+    proto: RespVersion,
+    out: &mut Vec<u8>,
+) {
+    let n = items.len() as i64;
+    match (scores, proto) {
+        (Scores::Omitted, _) => {
+            encode_array_len(out, n);
+            items.for_each(|(m, _)| encode_bulk(out, m));
+        }
+        (Scores::Included, RespVersion::V2) => {
+            encode_array_len(out, 2 * n);
+            for (m, sc) in items {
+                encode_bulk(out, m);
+                kevy_resp::encode_bulk_double(out, sc);
+            }
+        }
+        (Scores::Included, RespVersion::V3) => {
+            encode_array_len(out, n);
+            for (m, sc) in items {
+                encode_array_len(out, 2);
+                encode_bulk(out, m);
+                encode_double(out, sc);
+            }
+        }
+    }
+}
+
+/// `core::fmt::Write` straight into a reply buffer.
+struct Text<'a>(&'a mut Vec<u8>);
+
+impl core::fmt::Write for Text<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.0.extend_from_slice(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// A bulk string of `args`' text, written in place: a distance, a cursor.
+pub(crate) fn encode_bulk_fmt(out: &mut Vec<u8>, args: core::fmt::Arguments<'_>) {
+    // writing to a Vec cannot fail
+    kevy_resp::encode_bulk_with(out, |o| {
+        let _ = core::fmt::Write::write_fmt(&mut Text(o), args);
+    });
 }
 
 /// A score as Redis prints it (see [`kevy_resp::write_double`]).

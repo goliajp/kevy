@@ -169,25 +169,42 @@ impl Store {
     /// negative indexing; `[start, end]` inclusive. Returns empty
     /// `Vec` when key absent or range out of bounds.
     pub fn getrange(&mut self, key: &[u8], start: i64, end: i64) -> Result<Vec<u8>, StoreError> {
-        let bytes = match self.get(key)? {
-            Some(cow) => cow,
-            None => return Ok(Vec::new()),
+        Ok(self.getrange_borrowed(key, start, end)?.into_owned())
+    }
+
+    /// [`Self::getrange`] borrowed from the stored value where it can be
+    /// (an integer-encoded value is printed first, so its range is owned).
+    ///
+    /// `range_bounds`, not a clamp of its own. This function had one,
+    /// and it capped START at len-1 as well as END — so `GETRANGE k 99
+    /// 200` on a 24-byte value answered the last byte where Redis
+    /// answers nothing. Redis floors a negative start at zero and caps
+    /// only the end; a start past the last index makes the range empty.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.set_slice(b"k", b"hello", None, kevy_store::SetCondition::Always);
+    /// assert_eq!(&*s.getrange_borrowed(b"k", 1, 3)?, b"ell");
+    /// assert_eq!(&*s.getrange_borrowed(b"k", 99, 200)?, b"");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn getrange_borrowed(
+        &mut self,
+        key: &[u8],
+        start: i64,
+        end: i64,
+    ) -> Result<Cow<'_, [u8]>, StoreError> {
+        let Some(bytes) = self.get(key)? else { return Ok(Cow::Borrowed(&[])) };
+        let Some((s, e)) = range_bounds(start, end, bytes.len()) else {
+            return Ok(Cow::Borrowed(&[]));
         };
-        if bytes.is_empty() {
-            return Ok(Vec::new());
-        }
-        // `range_bounds`, not a clamp of its own. This function had
-        // one, and it capped START at len-1 as well as END — so
-        // `GETRANGE k 99 200` on a 24-byte value answered the last byte
-        // where Redis answers nothing. Redis floors a negative start at
-        // zero and caps only the end; a start past the last index makes
-        // the range empty. The three-way differential against a real
-        // valkey is what found it, after the wire-vs-facade one had
-        // agreed — both surfaces shared the mistake, so comparing them
-        // proved nothing about Redis.
-        Ok(match range_bounds(start, end, bytes.len()) {
-            None => Vec::new(),
-            Some((s, e)) => bytes[s..=e].to_vec(),
+        Ok(match bytes {
+            Cow::Borrowed(b) => Cow::Borrowed(&b[s..=e]),
+            Cow::Owned(mut v) => {
+                v.truncate(e + 1);
+                v.drain(..s);
+                Cow::Owned(v)
+            }
         })
     }
 

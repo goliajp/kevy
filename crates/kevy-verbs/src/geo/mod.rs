@@ -344,7 +344,7 @@ fn cmd_geodist<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<
         Err(e) => return store_err(out, e),
     };
     let d = haversine_meters(p1.0, p1.1, p2.0, p2.1) / unit;
-    encode_bulk(out, format!("{d:.4}").as_bytes());
+    crate::reply::encode_bulk_fmt(out, format_args!("{d:.4}"));
 }
 
 fn score_to_point(

@@ -139,6 +139,20 @@ impl Inner {
         lo
     }
 
+    /// [`Self::partition`] for a predicate on whole keys.
+    pub(super) fn partition_keys(&self, pred: &impl Fn(u64, &[u8]) -> bool) -> usize {
+        let (mut lo, mut hi) = (0, self.len - 1);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if pred(self.seps[mid], self.sep_members[mid].as_slice()) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
     /// Put `kid` holding `count` entries right after child `i`, `sep`
     /// between them. The node must have room.
     pub(super) fn insert_after(&mut self, i: usize, sep: Sep, kid: Node, count: usize) {

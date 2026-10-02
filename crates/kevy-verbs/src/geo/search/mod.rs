@@ -285,7 +285,7 @@ fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
         encode_array_len(out, 1 + extras);
         encode_bulk(out, &h.member);
         if opts.with_dist {
-            encode_bulk(out, format!("{:.4}", h.dist_m / opts.unit).as_bytes());
+            crate::reply::encode_bulk_fmt(out, format_args!("{:.4}", h.dist_m / opts.unit));
         }
         if opts.with_hash {
             encode_integer(out, h.score as i64);
@@ -305,7 +305,5 @@ pub(super) fn emit_coord(out: &mut Vec<u8>, v: f64, proto: RespVersion) {
     if proto == RespVersion::V3 {
         return encode_double(out, v);
     }
-    let mut text = Vec::with_capacity(24);
-    kevy_resp::write_double(&mut text, v);
-    encode_bulk(out, &text);
+    kevy_resp::encode_bulk_double(out, v);
 }
