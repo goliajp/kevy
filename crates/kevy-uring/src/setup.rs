@@ -16,8 +16,8 @@ use std::io;
 use crate::completion::Completion;
 use crate::ffi::{
     self, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES, IORING_SETUP_COOP_TASKRUN,
-    IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_SQ_AFF, IORING_SETUP_SQPOLL, MAP_POPULATE, MAP_SHARED,
-    PROT_READ, PROT_WRITE, SYS_IO_URING_SETUP,
+    IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_SQ_AFF, IORING_SETUP_SQPOLL,
+    IORING_SETUP_TASKRUN_FLAG, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE, SYS_IO_URING_SETUP,
 };
 use crate::layout::{IoUringParams, IoUringSqe};
 use crate::ring::IoUring;
@@ -83,8 +83,9 @@ impl IoUring {
     ///
     /// For the non-SQPOLL path (the default kevy reactor) tries
     /// `IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN` first
-    /// (Linux 6.0+, +3–5% measured) and falls back
-    /// to a plain setup if the kernel rejects them (EINVAL). The fallback
+    /// (Linux 6.0+, +3–5% measured), with `IORING_SETUP_TASKRUN_FLAG` so an
+    /// idle loop enters only when completion work waits, and drops flags
+    /// tier by tier if the kernel rejects them (EINVAL). The fallback
     /// keeps Linux 5.13+ supported with no hard version check.
     ///
     /// **Not enabled**: `IORING_SETUP_DEFER_TASKRUN` (Linux 6.1+) — it
@@ -108,7 +109,11 @@ impl IoUring {
         let modern_flag_tiers: &[u32] = if sqpoll.is_some() {
             &[0]
         } else {
-            &[IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN, 0]
+            &[
+                IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN | IORING_SETUP_TASKRUN_FLAG,
+                IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN,
+                0,
+            ]
         };
 
         for &modern in modern_flag_tiers {

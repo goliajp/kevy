@@ -8,7 +8,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use std::io;
 
 use crate::completion::Completion;
-use crate::enter_policy::{dropped_error, dropped_since, enter_flags_for, may_skip_enter};
+use crate::enter_policy::{
+    dropped_error, dropped_since, empty_iteration_enters, enter_flags_for, may_skip_enter,
+};
 use crate::ffi::{self, IORING_ENTER_SQ_WAKEUP, IORING_SQ_NEED_WAKEUP, SYS_IO_URING_ENTER};
 use crate::layout::IoUringSqe;
 
@@ -88,6 +90,9 @@ pub struct IoUring {
     /// forced enter every N iters still flushes deferred task_work so
     /// completions don't stall.
     iters_since_enter: u32,
+    /// Set up with `IORING_SETUP_TASKRUN_FLAG`: an empty iteration enters
+    /// only when the kernel flags pending completion work.
+    taskrun_flag: bool,
 }
 
 /// Maximum empty reactor iterations between forced `io_uring_enter`
@@ -192,6 +197,7 @@ impl IoUring {
             last_dropped: 0,
             enter_ring: None,
             iters_since_enter: 0,
+            taskrun_flag: p.flags & crate::ffi::IORING_SETUP_TASKRUN_FLAG != 0,
         };
         // Best-effort: register the ring's own fd into the calling thread's
         // io_uring registered-rings table (Linux 5.18+). On success, subsequent
@@ -289,11 +295,12 @@ impl IoUring {
         let overflowed = self.cq_overflowed();
         if may_skip_enter(overflowed, to_submit, wait_nr, self.sq_flags.is_some()) {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
-            if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
+            let pending = self.taskrun_flag.then(|| self.taskrun_pending());
+            if !empty_iteration_enters(self.iters_since_enter, pending, ENTER_SKIP_THRESHOLD) {
                 return Ok(0);
             }
-            // Reached the threshold — fall through to the syscall path
-            // below so task_work flushes. Counter resets after syscall.
+            // Work waits or the bound is reached — fall through to the
+            // syscall path so task_work flushes. Counter resets after it.
         }
 
         let mut enter_flags = enter_flags_for(wait_nr, overflowed);
@@ -359,6 +366,15 @@ impl IoUring {
     ///
     /// Relaxed: this is a hint the kernel republishes, and the enter it
     /// triggers is what actually orders anything.
+    /// The kernel has completion work queued for this ring
+    /// (`IORING_SQ_TASKRUN`, raised only under `IORING_SETUP_TASKRUN_FLAG`).
+    fn taskrun_pending(&self) -> bool {
+        // SAFETY: `flags_word` points inside the SQ mapping, which lives
+        // as long as this ring.
+        let flags = unsafe { (*self.flags_word).load(Ordering::Acquire) };
+        flags & crate::ffi::IORING_SQ_TASKRUN != 0
+    }
+
     fn cq_overflowed(&self) -> bool {
         // SAFETY: `flags_word` points inside the SQ mapping, which lives
         // as long as this ring.
