@@ -112,7 +112,7 @@ PAGES[""] = {
                 },
                 {
                     "label": 'どこでも',
-                    "code": '# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;\n\n# a browser tab — 639 KB, persists to OPFS\nconst db = await open({ persist: { name: "app" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);',
+                    "code": '# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;\n\n# a browser tab — 667 KB, persists to OPFS\nconst db = await open({ persist: { name: "app" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);',
                     "note": '4 つの場所すべてで、同じエンジン、同じコマンドです。',
                     "go": 'kevy を組み込む',
                     "href": 'use/embedded/',
@@ -413,7 +413,7 @@ PAGES["choose"] = {
                 ["1 つのプログラムがデータを所有する", "組み込み",
                  "ソケットも、2 つ目のプロセスも、シリアライズも要りません。ラウンドトリップではなく、関数呼び出しです。"],
                 ["データはユーザーの端末のもの", "ブラウザ",
-                 "639 KB の WebAssembly。本物の TTL、pub/sub、ストリームがあり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。"],
+                 "667 KB の WebAssembly。本物の TTL、pub/sub、ストリームがあり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。"],
                 ["リクエストごとに、エッジで動く", "エッジ",
                  "暖機するものも、張りにいく接続もありません。ストアは、コードと同じ isolate の中にあります。"],
                 ["OS もヒープもないデバイス", "ベアメタル",
@@ -1240,7 +1240,7 @@ PAGES["use/embedded"] = {
             "h1": "ストアを、<br>そのものの中へ",
             "lede": (
                 "サーバーもソケットもネットワークもありません。エンジンは、呼び出せる "
-                "struct であり、639 KB の WebAssembly モジュールであり、OS のない"
+                "struct であり、667 KB の WebAssembly モジュールであり、OS のない"
                 "チップの上の no_std ライブラリです——<b>そして 3 つとも、同じ"
                 "コマンドを持つ、同じエンジンです。</b>"
             ),
@@ -1300,7 +1300,7 @@ assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
         {
             "t": "recipe",
             "h2": "ブラウザのタブで",
-            "goal": "gzip 後 639 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。",
+            "goal": "gzip 後 667 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。",
             "cost_t": "コストと制約",
             "items": [
                 {
@@ -1445,8 +1445,8 @@ PAGES["benchmarks"] = {
             "intro": "タブに実際に配るもの。",
             "head": ["", "サイズ", ""],
             "rows": [
-                ["kevy.wasm", "1865 KB", "エンジン本体、非圧縮"],
-                ["gzip 後", "639 KB", "回線を流れる量"],
+                ["kevy.wasm", "1955 KB", "エンジン本体、非圧縮"],
+                ["gzip 後", "667 KB", "回線を流れる量"],
                 ["コールドスタート", "&lt; 20 ms", "コンパイルとインスタンス化、キャッシュが温まった状態"],
             ],
             "note": (
