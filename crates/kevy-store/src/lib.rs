@@ -158,9 +158,7 @@ mod tier_state;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 mod tier_stats;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use segrows::SealedRows;
-#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-pub use segrows_error::SegRowsError;
+pub use {segrows::SealedRows, segrows_error::SegRowsError};
 
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub use kevy_vlog::CompressionStats;
@@ -174,6 +172,7 @@ mod util;
 mod value;
 mod value_cold;
 mod value_enum;
+mod zindex;
 mod zset;
 mod zset_algebra;
 mod zset_lex;
