@@ -30,6 +30,17 @@ fn every_store_error_has_its_wire_line_and_its_message() {
         (StoreError::NoSuchKey, "ERR no such key", "no such key"),
         (StoreError::NotFloat, "ERR value is not a valid float", "value is not a valid float"),
         (
+            StoreError::IncrNotFinite,
+            "ERR increment would produce NaN or Infinity",
+            "increment would produce NaN or Infinity",
+        ),
+        (StoreError::ValueNotFinite, "ERR value is NaN or Infinity", "value is NaN or Infinity"),
+        (
+            StoreError::HashValueNotFloat,
+            "ERR hash value is not a float",
+            "hash value is not a float",
+        ),
+        (
             StoreError::ScoreIsNan,
             "ERR resulting score is not a number (NaN)",
             "resulting score is not a number (NaN)",

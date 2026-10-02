@@ -234,16 +234,3 @@ pub fn fmt_score(s: f64) -> Vec<u8> {
     kevy_resp::write_double(&mut out, s);
     out
 }
-
-/// What HINCRBYFLOAT answers: integral values without a decimal point,
-/// others in plain decimal. Redis prints this one from a long double, so
-/// it is not [`fmt_score`].
-pub(crate) fn fmt_incr_float(v: f64) -> Vec<u8> {
-    // exact comparison on purpose: an epsilon would change the wire shape
-    #[allow(clippy::float_cmp)]
-    let is_integer_valued = v == v.trunc();
-    if is_integer_valued && v.abs() < 1e17 {
-        return (v as i64).to_string().into_bytes();
-    }
-    format!("{v}").into_bytes()
-}

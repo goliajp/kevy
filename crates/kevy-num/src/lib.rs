@@ -15,9 +15,12 @@
 
 extern crate alloc;
 
+mod big;
 mod dtoa;
+mod ext;
 mod round;
 mod scan;
 
 pub use dtoa::write_grisu2;
+pub use ext::LongDouble;
 pub use scan::{Scanned, parse_exact, strtod};

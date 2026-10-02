@@ -5,10 +5,9 @@ use kevy_resp::{
 };
 use kevy_store::Store;
 
-use crate::args::{arg_f64, arg_i64, rest_borrowed, scan_match};
+use crate::args::{arg_i64, rest_borrowed, scan_match};
 use crate::reply::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, scan_page, store_err,
-    wrong_args,
+    ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, scan_page, store_err, wrong_args,
 };
 use crate::{Effect, changed, hash_ttl};
 
@@ -106,13 +105,14 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"HINCRBYFLOAT" => {
             if args.len() != 4 {
                 wrong_args(out, "hincrbyfloat");
-            } else if let Some(d) = arg_f64(&args[3]) {
-                match store.hincrbyfloat(&args[1], &args[2], d) {
-                    Ok(v) => encode_bulk(out, &crate::reply::fmt_incr_float(v)),
-                    Err(e) => store_err(out, e),
+                return Some(Effect::Unchanged);
+            }
+            match store.hincrbyfloat_text(&args[1], &args[2], &args[3]) {
+                Ok(v) => encode_bulk(out, &v),
+                Err(e) => {
+                    store_err(out, e);
+                    return Some(Effect::Unchanged);
                 }
-            } else {
-                encode_error(out, ERR_NOT_FLOAT);
             }
             Effect::Write
         }
