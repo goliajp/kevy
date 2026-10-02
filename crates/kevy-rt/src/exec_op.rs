@@ -69,8 +69,14 @@ impl<C: Commands> Shard<C> {
                 Part::Int(self.store.exists(&key_refs) as i64)
             }
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
-            Op::Flush => {
-                self.store.flushall();
+            Op::Flush(lazy) => {
+                if lazy {
+                    // freeing a large keyspace is the slow part: off the reactor
+                    let old = self.store.flushall_detached();
+                    std::thread::spawn(move || drop(old));
+                } else {
+                    self.store.flushall();
+                }
                 // Derived structures (indexes, views) reset with the
                 // keyspace — same hook on the replica apply path.
                 self.commands.on_flush(&mut self.store);

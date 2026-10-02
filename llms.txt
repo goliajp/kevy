@@ -651,12 +651,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `DEBUG SLEEP seconds | subcommand [args ...]` [readonly,admin] — Debug subcommands; SLEEP blocks the shard, other subcommands are tolerated as OK.
   - complexity: SLEEP: parks the ANSWERING shard's reactor thread for the duration (other shards keep serving). Everything else: O(1)
   - compat: differs: SLEEP is the only subcommand with an effect and it blocks one shard, not the server; every other subcommand is accepted and answered OK without doing anything
-- `FLUSHALL` [write] — Delete every key on every shard.
-  - complexity: O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump
-  - compat: differs: ASYNC / SYNC are accepted and ignored (the flush is always synchronous per shard), and it bumps the CDC feed generation, so live FEED cursors get a resync error
-- `FLUSHDB` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
+- `FLUSHALL [ASYNC | SYNC]` [write] — Delete every key on every shard.
+  - complexity: O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump. ASYNC: O(S) on the shards, the old keyspace freed on a thread of its own
+  - compat: differs: it bumps the CDC feed generation, so live FEED cursors get a resync error; the bare form is synchronous, as Redis's is with lazyfree-lazy-user-flush off, its default
+- `FLUSHDB [ASYNC | SYNC]` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
   - complexity: O(N + S) — identical to FLUSHALL
-  - compat: differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL; ASYNC / SYNC are ignored
+  - compat: differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL
 - `INFO [section]` [readonly] — Report server statistics and status sections as text.
   - complexity: O(1) in the keyspace — it never walks it; O(S) to sum the per-shard gauges
   - compat: differs: 8 sections only (server, clients, memory, persistence, stats, replication, cluster, keyspace) — no commandstats / latencystats / errorstats / cpu; reports redis_version 7.4.0 for client sniffing plus a kevy_version line, and the values are up to one tick stale

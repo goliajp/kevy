@@ -6194,16 +6194,16 @@ $6
 server
 $6
 syntax
-$8
-FLUSHALL
+$23
+FLUSHALL [ASYNC | SYNC]
 $10
 complexity
-$88
-O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump
+$162
+O(S) fan-out; per shard O(N/S) clear plus WATCH invalidation plus a feed-generation bump. ASYNC: O(S) on the shards, the old keyspace freed on a thread of its own
 $6
 compat
-$169
-differs: ASYNC / SYNC are accepted and ignored (the flush is always synchronous per shard), and it bumps the CDC feed generation, so live FEED cursors get a resync error
+$174
+differs: it bumps the CDC feed generation, so live FEED cursors get a resync error; the bare form is synchronous, as Redis's is with lazyfree-lazy-user-flush off, its default
 $5
 flags
 *1
@@ -6226,16 +6226,16 @@ $6
 server
 $6
 syntax
-$7
-FLUSHDB
+$22
+FLUSHDB [ASYNC | SYNC]
 $10
 complexity
 $34
 O(N + S) — identical to FLUSHALL
 $6
 compat
-$88
-differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL; ASYNC / SYNC are ignored
+$62
+differs: kevy is single-DB, so FLUSHDB is an alias of FLUSHALL
 $5
 flags
 *1
