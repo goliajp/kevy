@@ -113,10 +113,14 @@ impl<C: Commands> Shard<C> {
             Route::ReplWait { .. } | Route::ReplBarrier { .. } => {
                 gather_error("ERR internal: repl-wait route hit multi builder")
             }
-            Route::ClientList => (
-                (0..self.nshards).map(|s| (s, Op::ClientList)).collect(),
-                Agg::ClientList { text: Vec::new() },
-            ),
+            Route::ClientList => match crate::client_ops::ClientListFilter::parse(args) {
+                Ok(filter) => (
+                    (0..self.nshards).map(|s| (s, Op::ClientList(filter.clone()))).collect(),
+                    Agg::ClientList { text: Vec::new() },
+                ),
+                // the command layer routes only the forms that parse
+                Err(_) => gather_error("ERR syntax error"),
+            },
             Route::ClientKill => match crate::client_ops::ClientKillFilter::parse(args) {
                 Some((filter, reply)) => (
                     (0..self.nshards).map(|s| (s, Op::ClientKill(filter.clone()))).collect(),

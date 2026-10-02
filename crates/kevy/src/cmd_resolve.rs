@@ -315,15 +315,15 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
     }
 }
 
-/// CLIENT subcommand routing. `LIST` (bare form) and a well-formed
-/// `KILL` fan out to every shard — the conn tables are per-shard.
-/// Everything else stays local: SETNAME / GETNAME / ID / INFO are
-/// intercepted at the reactor, and malformed KILL / filtered LIST
-/// shapes fall through to the dispatch handler's error replies.
+/// CLIENT subcommand routing. A well-formed `LIST` and `KILL` fan out to
+/// every shard — the conn tables are per-shard. Everything else stays
+/// local: SETNAME / GETNAME / ID / INFO are intercepted at the reactor,
+/// and malformed KILL / LIST shapes fall through to the dispatch
+/// handler's error replies.
 fn client_route<A: ArgvView + ?Sized>(args: &A) -> Route {
     let Some(sub) = args.get(1) else { return Route::Local };
     match sub.to_ascii_uppercase().as_slice() {
-        b"LIST" if args.len() == 2 => Route::ClientList,
+        b"LIST" if kevy_rt::ClientListFilter::parse(args).is_ok() => Route::ClientList,
         b"KILL" if kevy_rt::ClientKillFilter::parse(args).is_some() => Route::ClientKill,
         _ => Route::Local,
     }

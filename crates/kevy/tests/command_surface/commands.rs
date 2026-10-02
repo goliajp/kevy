@@ -128,3 +128,19 @@ fn set_options_and_flush() {
         (&r_dbsize0, b":0\r\n"),
     ]);
 }
+
+/// SHUTDOWN's refusals, as Redis words them; none of them stops the server.
+#[test]
+fn shutdown_refusals_leave_the_server_up() {
+    let syntax: &[u8] = b"-ERR syntax error\r\n";
+    let steps: Vec<(Vec<u8>, &[u8])> = vec![
+        (req(&[b"SHUTDOWN", b"ABORT"]), b"-ERR No shutdown in progress.\r\n"),
+        (req(&[b"SHUTDOWN", b"abort", b"ABORT"]), b"-ERR No shutdown in progress.\r\n"),
+        (req(&[b"SHUTDOWN", b"NOSAVE", b"SAVE"]), syntax),
+        (req(&[b"SHUTDOWN", b"ABORT", b"NOW"]), syntax),
+        (req(&[b"SHUTDOWN", b"NOW", b"FORCE", b"FOO"]), syntax),
+        (req(&[b"PING"]), b"+PONG\r\n"),
+    ];
+    let steps: Vec<(&[u8], &[u8])> = steps.iter().map(|(r, w)| (r.as_slice(), *w)).collect();
+    exchange(&steps);
+}

@@ -253,7 +253,7 @@ pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
 pub(crate) const CLIENT_INPUT_HARD_LIMIT: usize = 1024 * 1024 * 1024;
 
 pub use blocked::{BlockHint, BlockKind};
-pub use client_ops::{ClientKillFilter, KillReply};
+pub use client_ops::{ClientKillFilter, ClientListFilter, KillReply};
 pub use cluster::{relayed_client, shard_slot_range};
 pub use exec_geostore::GeoHits;
 pub use exec_slowlog::SlowlogSub;

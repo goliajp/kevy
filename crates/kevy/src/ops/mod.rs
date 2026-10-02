@@ -206,24 +206,33 @@ fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
 // ───────────── SHUTDOWN ─────────────
 
 fn cmd_shutdown<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
-    // SHUTDOWN [NOSAVE | SAVE] — a successful shutdown never sends a
-    // reply: the client observes the connection closing as the process
-    // drains and exits (Redis behavior). The command trips the same
-    // stop flag the SIGTERM handler uses, so every shard leaves its
-    // reactor loop and runs the full drain: land in-flight persist
-    // jobs, force-fsync the AOF tail, write the feed marker. `SAVE`
-    // additionally requests one final snapshot per shard before the
-    // drain; `NOSAVE` (and the bare form) skip the snapshot but keep
-    // the AOF durable.
-    if args.len() > 2 {
+    // SHUTDOWN [NOSAVE | SAVE] [NOW] [FORCE] [ABORT] — a successful
+    // shutdown never sends a reply: the client observes the connection
+    // closing as the process drains and exits (Redis behavior). The
+    // command trips the same stop flag the SIGTERM handler uses, so every
+    // shard leaves its reactor loop and runs the full drain: land in-flight
+    // persist jobs, force-fsync the AOF tail, write the feed marker. `SAVE`
+    // additionally requests one final snapshot per shard before the drain.
+    // Nothing here waits for replicas, so NOW changes nothing and no
+    // shutdown is ever pending for ABORT to cancel; and the snapshot is
+    // taken while the process drains, so a failed one cannot stop it —
+    // every shutdown is a FORCE one.
+    let (mut save, mut nosave, mut abort, mut other) = (false, false, false, false);
+    for i in 1..args.len() {
+        match args[i].to_ascii_uppercase().as_slice() {
+            b"SAVE" => save = true,
+            b"NOSAVE" => nosave = true,
+            b"ABORT" => abort = true,
+            b"NOW" | b"FORCE" => other = true,
+            _ => return encode_error(out, "ERR syntax error"),
+        }
+    }
+    if (abort && (save || nosave || other)) || (save && nosave) {
         return encode_error(out, "ERR syntax error");
     }
-    let save = match args.get(1).map(<[u8]>::to_ascii_uppercase).as_deref() {
-        None => false,
-        Some(b"NOSAVE") => false,
-        Some(b"SAVE") => true,
-        Some(_) => return encode_error(out, "ERR syntax error"),
-    };
+    if abort {
+        return encode_error(out, "ERR No shutdown in progress.");
+    }
     if !ctx.state.request_shutdown(save) {
         // No registered runtime stop flag (embedded / bare-dispatch
         // contexts): keep the immediate-exit contract.

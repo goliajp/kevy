@@ -40,18 +40,13 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>, prot
                 wrong_args(out, "client|setname");
             }
         }
-        // LIST: the bare form fans out per shard on a running server
+        // LIST: a well-formed one fans out per shard on a running server
         // and never reaches here; a runtime-less dispatch has no conn
-        // table, so the truthful answer is an empty list. Filtered
-        // forms (TYPE / ID …) are not supported — explicit error, not
-        // a silently unfiltered table.
-        b"LIST" => {
-            if args.len() == 2 {
-                emit_client_text(out, &[], proto);
-            } else {
-                encode_error(out, "ERR syntax error");
-            }
-        }
+        // table, so the truthful answer is an empty list
+        b"LIST" => match kevy_rt::ClientListFilter::parse(args) {
+            Ok(_) => emit_client_text(out, &[], proto),
+            Err(e) => encode_error(out, &e),
+        },
         // KILL: well-formed selectors fan out per shard on a running
         // server; here they can only mean a runtime-less dispatch, so
         // zero conns match. Unsupported shapes error explicitly.
@@ -139,9 +134,11 @@ mod tests {
     }
 
     #[test]
-    fn filtered_list_is_a_syntax_error() {
-        let out = run(&[b"LIST", b"TYPE", b"normal"]);
-        assert!(out.starts_with(b"-ERR"));
+    fn list_filters_are_read_as_redis_reads_them() {
+        assert_eq!(run(&[b"LIST", b"TYPE", b"normal"]), b"$0\r\n\r\n");
+        assert_eq!(run(&[b"LIST", b"TYPE", b"foo"]), b"-ERR Unknown client type 'foo'\r\n");
+        assert_eq!(run(&[b"LIST", b"ID", b"1", b"x"]), b"-ERR Invalid client ID\r\n");
+        assert_eq!(run(&[b"LIST", b"TYPE", b"normal", b"ID", b"1"]), b"-ERR syntax error\r\n");
     }
 
     #[test]
