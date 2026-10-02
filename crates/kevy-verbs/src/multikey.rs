@@ -11,6 +11,7 @@ use kevy_store::{BitOp, ZAggregate};
 /// A parsed `VERB dst numkeys key… [WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]`:
 /// the destination is argument 1, the keys arguments `3..3 + numkeys`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ZStoreArgs {
     /// How many source keys follow the count.
     pub numkeys: usize,
@@ -20,22 +21,35 @@ pub struct ZStoreArgs {
     pub aggregate: ZAggregate,
 }
 
-/// `ZINTERSTORE` / `ZUNIONSTORE`, and `ZDIFFSTORE` when `diff_form` (it
-/// takes neither WEIGHTS nor AGGREGATE).
+/// `ZINTERSTORE` / `ZUNIONSTORE`.
 ///
 /// ```
 /// use kevy_resp::Argv;
 /// use kevy_verbs::multikey::parse_zstore;
 /// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
-/// let z = parse_zstore(&a(&["ZUNIONSTORE", "d", "2", "a", "b", "WEIGHTS", "1", "2"]), false)?;
+/// let z = parse_zstore(&a(&["ZUNIONSTORE", "d", "2", "a", "b", "WEIGHTS", "1", "2"]))?;
 /// assert_eq!((z.numkeys, z.weights), (2, Some(vec![1.0, 2.0])));
-/// assert!(parse_zstore(&a(&["ZDIFFSTORE", "d", "1", "a", "WEIGHTS", "1"]), true).is_err());
 /// # Ok::<(), kevy_resp::CmdError>(())
 /// ```
-pub fn parse_zstore<A: ArgvView + ?Sized>(
-    args: &A,
-    diff_form: bool,
-) -> Result<ZStoreArgs, CmdError> {
+pub fn parse_zstore<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    zstore(args, false)
+}
+
+/// `ZDIFFSTORE`: the same shape, but neither WEIGHTS nor AGGREGATE.
+///
+/// ```
+/// use kevy_resp::Argv;
+/// use kevy_verbs::multikey::parse_zdiffstore;
+/// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
+/// assert_eq!(parse_zdiffstore(&a(&["ZDIFFSTORE", "d", "2", "a", "b"]))?.numkeys, 2);
+/// assert!(parse_zdiffstore(&a(&["ZDIFFSTORE", "d", "1", "a", "WEIGHTS", "1"])).is_err());
+/// # Ok::<(), kevy_resp::CmdError>(())
+/// ```
+pub fn parse_zdiffstore<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    zstore(args, true)
+}
+
+fn zstore<A: ArgvView + ?Sized>(args: &A, diff_form: bool) -> Result<ZStoreArgs, CmdError> {
     if args.len() < 4 {
         return Err(CmdError::Wire("ERR wrong number of arguments"));
     }

@@ -309,7 +309,8 @@ fn parse_zsetstore_args<A: ArgvView + ?Sized>(
     args: &A,
     diff_form: bool,
 ) -> Result<ZStoreParsed, CmdError> {
-    let z = kevy_verbs::multikey::parse_zstore(args, diff_form)?;
+    use kevy_verbs::multikey::{parse_zdiffstore, parse_zstore};
+    let z = if diff_form { parse_zdiffstore(args)? } else { parse_zstore(args)? };
     let keys: Vec<Vec<u8>> = (3..3 + z.numkeys).map(|i| args[i].to_vec()).collect();
     Ok((args[1].to_vec(), keys, z.weights, z.aggregate))
 }
