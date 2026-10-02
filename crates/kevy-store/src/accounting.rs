@@ -17,6 +17,16 @@ impl Store {
     /// then updates `used_memory` by the weight swap and by whatever the
     /// keyspace table grew to make room.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, entry: Entry) -> Option<Entry> {
+        self.insert_entry_at(key, entry).1
+    }
+
+    /// [`Self::insert_entry`], also returning the slot the entry went to:
+    /// valid until the table next inserts or removes.
+    pub(crate) fn insert_entry_at(
+        &mut self,
+        key: SmallBytes,
+        entry: Entry,
+    ) -> (usize, Option<Entry>) {
         // New-key event capture: the owned key copy is only paid when
         // the capture flag is on (server with `n` notifications).
         let new_key_copy =
@@ -57,12 +67,15 @@ impl Store {
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
         self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
         self.update_peak();
-        if prev.is_none()
-            && let Some(k) = new_key_copy
-        {
+        self.note_new_key(prev.is_none(), new_key_copy);
+        (slot, prev)
+    }
+
+    /// Queue the new-key event for a key just created, when one is wanted.
+    fn note_new_key(&mut self, created: bool, copy: Option<Vec<u8>>) {
+        if created && let Some(k) = copy {
             self.notify_events.push((crate::notify::KeyspaceEvent::New, k));
         }
-        prev
     }
 
     /// Record a value's weight, and the access clock when one runs, in the
@@ -113,8 +126,17 @@ impl Store {
         if delta == 0 {
             return;
         }
-        if let Some(slot) = self.map.find_slot(key) {
-            debug_assert!(self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value)), "{key:?}");
+        let slot = self.map.find_slot(key);
+        self.account_delta_at(slot, delta);
+    }
+
+    /// [`Self::account_delta`] for the entry at `slot`, already found.
+    pub(crate) fn account_delta_at(&mut self, slot: Option<usize>, delta: i64) {
+        if delta == 0 {
+            return;
+        }
+        if let Some(slot) = slot {
+            debug_assert!(self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value)));
             self.keep_words();
             if let Some(word) = self.map.word_mut(slot) {
                 shift(word, delta);
@@ -161,9 +183,13 @@ impl Store {
     }
 
     fn reweigh(&mut self, key: &[u8], old: Option<u64>) {
-        let Some(slot) = self.map.find_slot(key) else {
-            return;
-        };
+        if let Some(slot) = self.map.find_slot(key) {
+            self.reweigh_at(slot, old);
+        }
+    }
+
+    /// [`Self::reweigh_entry`] for the entry at `slot`, already found.
+    pub(crate) fn reweigh_at(&mut self, slot: usize, old: Option<u64>) {
         let is_kept = self.map.slot(slot).is_some_and(|(_, e)| kept(&e.value));
         if is_kept {
             self.keep_words();
@@ -271,6 +297,14 @@ impl Store {
     /// Read-modify commands (INCR/APPEND/…) get the entry once and mutate in
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
+        let slot = self.live_slot(key)?;
+        self.map.entry_at_mut(key, slot)
+    }
+
+    /// The slot of `key`'s live entry — an expired one is dropped — with
+    /// its access clock touched: one probe for a command that then works
+    /// on the entry through the slot.
+    pub(crate) fn live_slot(&mut self, key: &[u8]) -> Option<usize> {
         let slot = self.map.find_slot(key)?;
         if self.slot_expired(slot) {
             self.drop_expired(key);
@@ -279,7 +313,7 @@ impl Store {
         if self.clock_on() {
             self.touch_slot(slot);
         }
-        self.map.entry_at_mut(key, slot)
+        Some(slot)
     }
 
     /// [`Self::live_entry_mut`] with the entry's side word, for a write that

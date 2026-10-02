@@ -19,7 +19,7 @@ use alloc::sync::Arc;
 /// does not fit. Returns whether the promotion happened, which is the only
 /// thing the caller does differently.
 ///
-/// Split from `list_push_one` for the 50-line rule. `slot` must be a
+/// Split from `list_push_at` for the 50-line rule. `slot` must be a
 /// `Value::SmallListInline`; the caller checks, and the `else` here pushes
 /// nothing rather than asserting, because a wrong caller should not be a
 /// panic in the write path.
@@ -98,20 +98,6 @@ impl Store {
         }
     }
 
-    /// A.8: read the key's list slot for LPUSH/RPUSH. `WrongType` on
-    /// non-list. Returns `None` when key is absent — caller creates.
-    fn list_value_for_push(&mut self, key: &[u8]) -> Result<Option<&mut Value>, StoreError> {
-        match self.live_entry_mut(key) {
-            None => Ok(None),
-            Some(e) => match &e.value {
-                Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => {
-                    Ok(Some(&mut e.value))
-                }
-                _ => Err(StoreError::WrongType),
-            },
-        }
-    }
-
     /// Remove `key` if it now holds an empty list (any encoding).
     fn drop_if_empty_list(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
@@ -138,43 +124,59 @@ impl Store {
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
     pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
-        if values.is_empty() {
-            return Ok(self.list_len(key));
-        }
-        let mut delta: i64 = 0;
-        for v in values {
-            delta += self.list_push_one(key, v, /* front= */ true)?;
-        }
-        self.account_delta(key, delta);
-        Ok(self.list_len(key))
+        self.list_push(key, values, true)
     }
 
     /// `RPUSH` — append each value; returns the new length.
     pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> Result<usize, StoreError> {
-        if values.is_empty() {
-            return Ok(self.list_len(key));
-        }
-        let mut delta: i64 = 0;
-        for v in values {
-            delta += self.list_push_one(key, v, /* front= */ false)?;
-        }
-        self.account_delta(key, delta);
-        Ok(self.list_len(key))
+        self.list_push(key, values, false)
     }
 
-    /// Push one element, applying the encoding-switch. Returns the
-    /// per-element weight delta (zero for inline / reweighed cases,
-    /// list_item_weight for heap). `front=true` for LPUSH.
-    fn list_push_one(&mut self, key: &[u8], v: &[u8], front: bool) -> Result<i64, StoreError> {
-        if self.list_value_for_push(key)?.is_none() {
-            return Ok(self.list_push_create(key, v));
+    /// The push loop: one probe for the whole command, every value then
+    /// reaching the list through its slot, which no push can move.
+    fn list_push(
+        &mut self,
+        key: &[u8],
+        values: &[&[u8]],
+        front: bool,
+    ) -> Result<usize, StoreError> {
+        let Some((first, rest)) = values.split_first() else {
+            return Ok(self.list_len(key));
+        };
+        let (slot, todo) = match self.live_slot(key) {
+            Some(slot) => (slot, values),
+            None => (self.list_push_create(key, first), rest),
+        };
+        let mut delta: i64 = 0;
+        for v in todo {
+            delta += self.list_push_at(key, slot, v, front)?;
         }
-        let slot = self.list_value_for_push(key)?.expect("present and a list");
+        self.account_delta_at(Some(slot), delta);
+        Ok(match self.map.slot(slot).map(|(_, e)| &e.value) {
+            Some(Value::List(l)) => l.len(),
+            Some(Value::SegList(l)) => l.len(),
+            Some(Value::SmallListInline(l)) => l.len(),
+            _ => 0,
+        })
+    }
+
+    /// Push one element into the entry at `at`, applying the
+    /// encoding-switch. Returns the per-element weight delta (zero for
+    /// inline / reweighed cases, list_item_weight for heap). A value of
+    /// another type is refused before anything changes.
+    fn list_push_at(
+        &mut self,
+        key: &[u8],
+        at: usize,
+        v: &[u8],
+        front: bool,
+    ) -> Result<i64, StoreError> {
+        let slot = &mut self.map.entry_at_mut(key, at).expect("the slot live_slot found").value;
         if matches!(slot, Value::SmallListInline(_)) {
             // Promotion reweighs from scratch, so the caller's delta for
             // THIS pair is 0 either way — the new weight already has it.
             if push_inline(slot, v, front) {
-                self.reweigh_entry(key);
+                self.reweigh_at(at, None);
             }
             return Ok(0);
         }
@@ -205,29 +207,23 @@ impl Store {
             _ => return Err(StoreError::WrongType),
         };
         if reweigh {
-            self.reweigh_entry(key);
+            self.reweigh_at(at, None);
         }
         Ok(0)
     }
 
-    /// Create a fresh entry holding one element. Inline if it fits,
-    /// else heap.
-    fn list_push_create(&mut self, key: &[u8], v: &[u8]) -> i64 {
-        if let Some(inline) = SmallListData::with_one(v) {
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::SmallListInline(inline), None),
-            );
-            0
-        } else {
-            let mut d = alloc::collections::VecDeque::with_capacity(1);
-            d.push_back(v.to_vec());
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::List(Arc::new(d)), None),
-            );
-            0
-        }
+    /// Create a fresh entry holding one element, inline if it fits, else
+    /// heap; its slot.
+    fn list_push_create(&mut self, key: &[u8], v: &[u8]) -> usize {
+        let value = match SmallListData::with_one(v) {
+            Some(inline) => Value::SmallListInline(inline),
+            None => {
+                let mut d = alloc::collections::VecDeque::with_capacity(1);
+                d.push_back(v.to_vec());
+                Value::List(Arc::new(d))
+            }
+        };
+        self.insert_entry_at(SmallBytes::from_slice(key), Entry::new(value, None)).0
     }
 
     /// `LPOP`/`RPOP` shared body — pop up to `count` from one end.
