@@ -52,7 +52,7 @@ fn apply_view<A: kevy_resp::ArgvView + ?Sized>(store: &mut Store, args: &A) {
         if kevy_verbs::aof::apply_internal(store, args, &mut out) {
             return;
         }
-        if kevy_verbs::verb(verb).is_some_and(|v| v.write) {
+        if kevy_verbs::replayed(verb) {
             let _ = kevy_verbs::exec(store, verb, args, &mut out);
         }
     });
@@ -72,7 +72,7 @@ pub(crate) fn replay_verbs() -> Vec<&'static str> {
     let internal = [kevy_resp::ops_table::CONSUMER_SEEN, kevy_resp::ops_table::PENDING];
     kevy_verbs::VERBS
         .iter()
-        .filter(|v| v.write)
+        .filter(|v| kevy_verbs::replayed(v.name.as_bytes()))
         .map(|v| v.name)
         .chain(internal)
         .filter(|name| serves_family(name.as_bytes()))

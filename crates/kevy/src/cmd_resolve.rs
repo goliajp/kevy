@@ -143,6 +143,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"RESET" => Route::Local,
         b"MSETNX" => Route::MSetNx,
         b"ZRANGESTORE" if args.len() >= 5 => Route::StoreFromCopies { first: 2, count: 1, dst: 1 },
+        // the destination is merged into too
+        b"PFMERGE" if args.len() >= 2 => {
+            Route::StoreFromCopies { first: 1, count: args.len() - 1, dst: 1 }
+        }
+        b"PFCOUNT" if args.len() >= 3 => Route::ReadAcross { first: 1, count: args.len() - 1 },
         // the destination is wherever the options put STORE
         b"SORT" if let Some(dst) = kevy_verbs::sort::store_destination(args) => {
             Route::StoreFromCopies { first: 1, count: 1, dst }

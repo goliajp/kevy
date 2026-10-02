@@ -512,6 +512,29 @@ check SORT srtstr
 check SORT_RO srt LIMIT 0 3
 check SORT_RO srt STORE x
 check SORT
+check PFADD hll1
+check GET hll1
+check PFADD hll1 a b c
+check PFADD hll1 a
+check GET hll1
+check PFCOUNT hll1
+check GET hll1
+check PFADD hll2 x y z a
+check PFCOUNT hll1 hll2
+check PFCOUNT hll1 hllnone
+check PFMERGE hllm hll1 hll2
+check GET hllm
+check PFCOUNT hllm
+check PFMERGE hllm2
+check EXISTS hllm2
+check SET hllbad abc
+check PFADD hllbad a
+check PFCOUNT hllbad
+check PFMERGE hllbad hll1
+check RPUSH hlllist a
+check PFADD hlllist a
+check PFCOUNT
+check PFADD
 check BITFIELD bf1 OVERFLOW BAD
 check BITFIELD bf1 GET u8
 check BITFIELD bf1 BAD u8 0

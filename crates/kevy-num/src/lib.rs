@@ -20,7 +20,9 @@ mod dtoa;
 mod ext;
 mod round;
 mod scan;
+mod sqrt;
 
 pub use dtoa::write_grisu2;
 pub use ext::LongDouble;
 pub use scan::{Scanned, parse_exact, strtod};
+pub use sqrt::sqrt;

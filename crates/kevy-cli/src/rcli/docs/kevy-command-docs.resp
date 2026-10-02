@@ -1,4 +1,4 @@
-*494
+*500
 $4
 KEYS
 *14
@@ -346,6 +346,102 @@ $6
 compat
 $85
 differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+$5
+flags
+*1
+$5
+write
+$5
+PFADD
+*14
+$7
+summary
+$53
+Add elements to a HyperLogLog, creating it if needed.
+$5
+since
+$5
+7.6.0
+$5
+group
+$11
+hyperloglog
+$6
+syntax
+$23
+PFADD key [element ...]
+$10
+complexity
+$16
+O(1) per element
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$7
+PFCOUNT
+*14
+$7
+summary
+$70
+Estimate the number of distinct elements in the union of HyperLogLogs.
+$5
+since
+$5
+7.6.0
+$5
+group
+$11
+hyperloglog
+$6
+syntax
+$21
+PFCOUNT key [key ...]
+$10
+complexity
+$62
+O(1) for one key with its estimate cached, O(N) keys otherwise
+$6
+compat
+$95
+differs: with keys on different shards the union is estimated from copies gathered to one shard
+$5
+flags
+*1
+$8
+readonly
+$7
+PFMERGE
+*14
+$7
+summary
+$62
+Merge HyperLogLogs into a destination, which is merged in too.
+$5
+since
+$5
+7.6.0
+$5
+group
+$11
+hyperloglog
+$6
+syntax
+$31
+PFMERGE destkey [sourcekey ...]
+$10
+complexity
+$9
+O(N) keys
+$6
+compat
+$162
+differs: when the keys live on different shards the union is computed from copies and placed on the destination's shard, so the merge is not atomic with the reads
 $5
 flags
 *1

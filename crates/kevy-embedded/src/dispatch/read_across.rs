@@ -20,7 +20,12 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
         super::sort_store::sort_store(s, argv, out);
         return true;
     }
-    if !matches!(up, b"LCS" | b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF") {
+    if up == b"PFMERGE" && argv.len() >= 2 {
+        super::sort_store::pfmerge(s, argv, out);
+        return true;
+    }
+    let several = up == b"PFCOUNT" && argv.len() >= 3;
+    if !several && !matches!(up, b"LCS" | b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF") {
         return false;
     }
     let args = Args::new(argv);
@@ -28,6 +33,7 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     let keys = match up {
         _ if argv.len() < 3 => 0..0,
         b"LCS" => 1..3,
+        b"PFCOUNT" => 1..argv.len(),
         b"SINTERCARD" => parse_zintercard(&args).map_or(0..0, |(n, _)| 2..2 + n),
         b"ZDIFF" => parse_zdiff(&args).map_or(0..0, |p| 2..2 + p.numkeys),
         _ => parse_zcombine(&args).map_or(0..0, |p| 2..2 + p.numkeys),

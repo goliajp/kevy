@@ -380,11 +380,11 @@ impl Commands for KevyCommands {
     }
 
     fn placed_event<A: ArgvView + ?Sized>(&self, args: &A) -> Vec<u8> {
-        let name = args.first().unwrap_or_default();
-        if name.eq_ignore_ascii_case(b"SORT") {
-            return b"sortstore".to_vec();
-        }
-        name.to_ascii_lowercase()
+        cmd::placed_event(args.first().unwrap_or_default())
+    }
+
+    fn placed_keeps_ttl<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
+        args.first().is_some_and(|n| n.eq_ignore_ascii_case(b"PFMERGE"))
     }
 
     fn txn_kind<A: ArgvView + ?Sized>(&self, args: &A) -> TxnKind {

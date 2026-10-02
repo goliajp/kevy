@@ -50,6 +50,11 @@ pub trait Commands: Clone + Send + 'static {
         args.first().map(<[u8]>::to_ascii_lowercase).unwrap_or_default()
     }
 
+    #[doc = include_str!("commands_docs/placed_keeps_ttl.md")]
+    fn placed_keeps_ttl<A: ArgvView + ?Sized>(&self, _args: &A) -> bool {
+        false
+    }
+
     #[doc = include_str!("commands_docs/hello_reply.md")]
     fn hello_reply<A: ArgvView + ?Sized>(
         &self,
