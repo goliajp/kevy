@@ -1,4 +1,4 @@
-*418
+*426
 $4
 KEYS
 *14
@@ -3272,6 +3272,70 @@ flags
 $5
 write
 $7
+ZMSCORE
+*14
+$7
+summary
+$37
+Return the scores of several members.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$31
+ZMSCORE key member [member ...]
+$10
+complexity
+$35
+O(M) — one hash lookup per member
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$7
+ZPOPMAX
+*14
+$7
+summary
+$48
+Pop up to count members with the highest scores.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$19
+ZPOPMAX key [count]
+$10
+complexity
+$10
+O(M log N)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$7
 ZPOPMIN
 *14
 $7
@@ -3401,6 +3465,38 @@ flags
 *1
 $8
 readonly
+$11
+ZRANDMEMBER
+*14
+$7
+summary
+$94
+Return random members, distinct for a positive count and possibly repeated for a negative one.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$36
+ZRANDMEMBER key [count [WITHSCORES]]
+$10
+complexity
+$44
+O(M log N) — each pick is one rank descent
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $5
 ZRANK
 *14
@@ -3418,16 +3514,16 @@ $4
 zset
 $6
 syntax
-$16
-ZRANK key member
+$28
+ZRANK key member [WITHSCORE]
 $10
 complexity
 $101
 O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
 $6
 compat
-$56
-differs: the Redis 7.2 WITHSCORE option is not supported
+$4
+full
 $5
 flags
 *1
@@ -3552,6 +3648,38 @@ $10
 complexity
 $84
 O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$8
+ZREVRANK
+*14
+$7
+summary
+$55
+Return a member's rank, ordered from the highest score.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$31
+ZREVRANK key member [WITHSCORE]
+$10
+complexity
+$8
+O(log N)
 $6
 compat
 $4

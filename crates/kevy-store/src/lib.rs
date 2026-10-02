@@ -178,6 +178,7 @@ mod value_cold;
 mod value_enum;
 mod zset;
 mod zset_algebra;
+mod zset_pick;
 mod zset_range;
 pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};

@@ -331,6 +331,9 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZPOPMIN",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
+    op("ZPOPMAX",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
+    op("ZMSCORE",      RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZRANDMEMBER",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGE",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGEBYSCORE", RD, NG,  None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZRANK",        RD, NG,   None,            None,    SERVER | ESTORE),
@@ -339,6 +342,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZREMRANGEBYSCORE", WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
     op("ZREVRANGE",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREVRANGEBYSCORE", RD, NG, None,          None,    SERVER | ESTORE),
+    op("ZREVRANK",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCORE",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     // ---- streams (embedded replay with its streams-geo feature) --------

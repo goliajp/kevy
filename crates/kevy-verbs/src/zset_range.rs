@@ -38,7 +38,6 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             by_score(store, args, out, v2, true);
             Effect::Read
         }
-        b"ZPOPMIN" => zpopmin(store, args, out),
         b"ZPOPMIN.BELOW" => zpopmin_below(store, args, out),
         b"BZPOPMIN" => bzpopmin(store, args, out),
         b"ZSCAN" => {
@@ -206,7 +205,7 @@ fn pop_count<A: ArgvView + ?Sized>(args: &A, i: usize, out: &mut Vec<u8>) -> Opt
         return Some(1);
     }
     let Some(c) = arg_i64(&args[i]) else {
-        encode_error(out, ERR_NOT_INT);
+        encode_error(out, "ERR value is out of range, must be positive");
         return None;
     };
     if c < 0 {
@@ -232,18 +231,6 @@ fn popped(res: Result<Vec<(Vec<u8>, f64)>, StoreError>, out: &mut Vec<u8>) -> Ef
             changed(!items.is_empty())
         }
     }
-}
-
-/// `ZPOPMIN key [count]`.
-fn zpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
-    if args.len() < 2 || args.len() > 3 {
-        wrong_args(out, "zpopmin");
-        return Effect::Unchanged;
-    }
-    let Some(count) = pop_count(args, 2, out) else {
-        return Effect::Unchanged;
-    };
-    popped(store.zpopmin(&args[1], count), out)
 }
 
 /// `ZPOPMIN.BELOW key below [count]` — pop the lowest members scored

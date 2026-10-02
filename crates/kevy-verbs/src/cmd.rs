@@ -17,4 +17,5 @@ pub use crate::stream::xreadgroup_refusal;
 pub use crate::stream_resp3::stream_resp3;
 pub use crate::strings::set;
 pub use crate::zset::parse_zadd_flags;
+pub use crate::zset_pick::{zmscore, zpopmax, zpopmin, zrandmember, zrank, zrevrank};
 pub use crate::zset_range::{zrange, zrangebyscore};
