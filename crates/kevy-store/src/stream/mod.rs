@@ -265,6 +265,7 @@ mod nodes;
 mod pending;
 mod restore;
 mod store;
+mod trim_refs;
 pub use claim::{AutoclaimResult, XClaimOpts};
 pub use group::{ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};
 pub use load::{LoadedGroup, LoadedPelEntry};
@@ -272,6 +273,7 @@ pub use modes::{AckMode, ClaimMode, MissingStream};
 pub use nodes::{APPROX_TRIM_LIMIT, TrimMode, TrimTo};
 pub use pending::{PendingExtended, PendingExtendedRow, PendingSummary};
 pub use store::{EntryBatch, GroupBatch};
+pub use trim_refs::{TrimRefs, Trimmed};
 
 /// Snapshot-loader payload: one stream entry decoded into primitive
 /// tuples `(ms, seq, [(field, value), ...])`. The persist crate emits

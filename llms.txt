@@ -531,9 +531,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
   - complexity: O(A log P)
   - compat: full
-- `XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+- `XADD key [NOMKSTREAM] [KEEPREF | DELREF | ACKED] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
   - complexity: O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
-  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit). With DELREF or ACKED it goes entry by entry, as Redis 8.10 does. Redis 8.10's IDMP / IDMPAUTO options are not parsed
 - `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
   - complexity: O(log P + COUNT log N): at most COUNT x 10 pending entries are looked at per call
   - compat: full
@@ -570,9 +570,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
   - complexity: O(log N)
   - compat: full
-- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]` [write] — Trim a stream by length or minimum ID.
-  - complexity: O(R log N + N*F) for R evicted entries
-  - compat: differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
+- `XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count] [KEEPREF | DELREF | ACKED]` [write] — Trim a stream by length or minimum ID.
+  - complexity: O(R log N + N*F) for R evicted entries; DELREF adds O(R log P) per group, ACKED O(G log P) per entry looked at
+  - compat: differs: answers as valkey 9.1 does, an approximate '~' KEEPREF trim removing only whole nodes as XADD's does; with DELREF or ACKED it goes entry by entry, as Redis 8.10 does
 
 ### geo
 

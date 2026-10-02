@@ -176,3 +176,5 @@ pub(super) fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
 mod tests;
 #[cfg(test)]
 mod tests_info;
+#[cfg(test)]
+mod tests_trim_record;
