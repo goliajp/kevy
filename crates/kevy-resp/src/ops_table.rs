@@ -201,6 +201,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("BITPOS",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETBIT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SETBIT",       WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
+    op("BITFIELD",     WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
+    op("BITFIELD_RO",  RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- hashes -------------------------------------------------------
     op("HDEL",         WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("HEXISTS",      RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
@@ -262,6 +264,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SINTER",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SINTERSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SISMEMBER",    RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
+    op("SMISMEMBER",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("SMEMBERS",     RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("SPOP",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
     op("SRANDMEMBER",  RD, NG,   None,            None,    SERVER | ESTORE),
@@ -399,6 +402,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("PEXPIRE",      WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | REPLAY),
     op("PEXPIREAT",    WR, NG,   None,            None,    SERVER | ESTORE | REPLAY | REWRITE),
     op("PTTL",         RD, NG,   None,            None,    SERVER),
+    op("EXPIRETIME",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("PEXPIRETIME",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("RANDOMKEY",    RD, NG,   None,            None,    SERVER | ESTORE),
     // The server runs RENAME/RENAMENX at the runtime Op level
     // (Route::Rename), which records the move itself.

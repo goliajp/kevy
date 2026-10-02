@@ -47,6 +47,7 @@ impl<C: Commands> Shard<C> {
             (true, TxnKind::Watch) => self
                 .immediate_reply(conn_id, b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec()),
             (true, TxnKind::Other) => self.queue_in_multi(conn_id, args),
+            (_, TxnKind::Reset) => self.do_reset(conn_id),
             // (false, Other | Watch) dispatched on the early path above.
             (false, TxnKind::Other | TxnKind::Watch) => {}
         }

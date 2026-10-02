@@ -77,16 +77,10 @@ pub(crate) type SideMap<K, V> = kevy_map::KevyMap<K, V>;
 mod accounting;
 #[cfg(feature = "std")]
 mod bio_drop;
-
-/// Without `std` there is no bio thread (`bio_drop` module is compiled
-/// out) — displaced heavy values drop inline on the caller.
 #[cfg(not(feature = "std"))]
-impl Store {
-    #[inline]
-    pub(crate) fn maybe_offload_drop(&mut self, old: Value) {
-        drop(old);
-    }
-}
+#[path = "bio_drop_inline.rs"]
+mod bio_drop;
+mod bitfield;
 mod bitmap;
 mod clock;
 mod cond;
@@ -184,6 +178,7 @@ mod zset_range;
 pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
+pub use bitfield::{BitFieldOp, BitType, Overflow};
 pub use stream::{
     APPROX_TRIM_LIMIT, AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState,
     EntryBatch, GroupBatch, GroupCreateMode, LoadedGroup, LoadedPelEntry, LoadedStreamEntry,

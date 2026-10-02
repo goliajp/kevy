@@ -1,4 +1,4 @@
-*476
+*490
 $4
 KEYS
 *14
@@ -154,6 +154,38 @@ $6
 compat
 $109
 differs: the multi-key form is gathered per shard, so the count is not a point-in-time snapshot across shards
+$5
+flags
+*1
+$8
+readonly
+$10
+EXPIRETIME
+*14
+$7
+summary
+$71
+Return a key's absolute expiry in Unix seconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$7
+generic
+$6
+syntax
+$14
+EXPIRETIME key
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$4
+full
 $5
 flags
 *1
@@ -319,6 +351,38 @@ flags
 *1
 $5
 write
+$11
+PEXPIRETIME
+*14
+$7
+summary
+$76
+Return a key's absolute expiry in Unix milliseconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$7
+generic
+$6
+syntax
+$15
+PEXPIRETIME key
+$10
+complexity
+$116
+O(1) — the deadline is kept on the monotonic clock and read back through the wall clock to the nearest millisecond
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 PTTL
 *14
@@ -767,6 +831,70 @@ flags
 *1
 $5
 write
+$8
+BITFIELD
+*14
+$7
+summary
+$81
+Read, write and increment integers of 1 to 64 bits at any bit offset of a string.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$151
+BITFIELD key [GET encoding offset | [OVERFLOW WRAP|SAT|FAIL] SET encoding offset value | [OVERFLOW WRAP|SAT|FAIL] INCRBY encoding offset increment ...]
+$10
+complexity
+$48
+O(N) — the string is copied once for any write
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$11
+BITFIELD_RO
+*14
+$7
+summary
+$23
+BITFIELD with GET only.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$41
+BITFIELD_RO key [GET encoding offset ...]
+$10
+complexity
+$15
+O(N) operations
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $8
 GETRANGE
 *14
@@ -3232,6 +3360,38 @@ $10
 complexity
 $12
 O(N) members
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$10
+SMISMEMBER
+*14
+$7
+summary
+$58
+Check whether each of several values is a member of a set.
+$5
+since
+$5
+7.6.0
+$5
+group
+$3
+set
+$6
+syntax
+$34
+SMISMEMBER key member [member ...]
+$10
+complexity
+$18
+O(N) members asked
 $6
 compat
 $4
@@ -6193,6 +6353,38 @@ $5
 write
 $5
 admin
+$5
+RESET
+*14
+$7
+summary
+$96
+Return the connection to its initial state: no transaction, WATCH, subscriptions or name, RESP2.
+$5
+since
+$5
+7.6.0
+$5
+group
+$10
+connection
+$6
+syntax
+$5
+RESET
+$10
+complexity
+$41
+O(S) — S the connection's subscriptions
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 ROLE
 *14
@@ -6531,6 +6723,38 @@ $8
 readonly
 $6
 pubsub
+$6
+PUBSUB
+*14
+$7
+summary
+$77
+Inspect the pub/sub state: active channels, subscriber counts, pattern count.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+pubsub
+$6
+syntax
+$123
+PUBSUB CHANNELS [pattern] | NUMSUB [channel ...] | NUMPAT | SHARDCHANNELS [pattern] | SHARDNUMSUB [shardchannel ...] | HELP
+$10
+complexity
+$74
+O(N) — N the active channels for CHANNELS, the channels asked for NUMSUB
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $12
 PUNSUBSCRIBE
 *14

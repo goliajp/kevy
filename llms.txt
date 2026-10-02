@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (238 total)
+## Verbs (245 total)
 
 ### scan
 
@@ -57,6 +57,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `EXISTS key [key ...]` [readonly] — Count how many of the given keys exist.
   - complexity: O(N) keys, one O(1) probe each
   - compat: differs: the multi-key form is gathered per shard, so the count is not a point-in-time snapshot across shards
+- `EXPIRETIME key` [readonly] — Return a key's absolute expiry in Unix seconds (-1 no TTL, -2 missing).
+  - complexity: O(1)
+  - compat: full
 - `EXPIRE key seconds` [write] — Set a key's TTL in seconds (non-positive TTL deletes the key).
   - complexity: O(1)
   - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3, so EXPIRE key seconds NX is a wrong-arity error
@@ -72,6 +75,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `PEXPIREAT key unix-time-milliseconds` [write] — Set a key's expiry as an absolute Unix timestamp in milliseconds.
   - complexity: O(1)
   - compat: differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3
+- `PEXPIRETIME key` [readonly] — Return a key's absolute expiry in Unix milliseconds (-1 no TTL, -2 missing).
+  - complexity: O(1) — the deadline is kept on the monotonic clock and read back through the wall clock to the nearest millisecond
+  - compat: full
 - `PTTL key` [readonly] — Return a key's remaining TTL in milliseconds (-1 no TTL, -2 missing).
   - complexity: O(1)
   - compat: full
@@ -117,6 +123,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `GETEX key [EX seconds | PX milliseconds]` [write] — Read a key and set its expiry in the same call.
   - complexity: O(1)
   - compat: differs: EXAT / PXAT / PERSIST are not accepted, and an expiry of zero or less is refused rather than applied
+- `BITFIELD key [GET encoding offset | [OVERFLOW WRAP|SAT|FAIL] SET encoding offset value | [OVERFLOW WRAP|SAT|FAIL] INCRBY encoding offset increment ...]` [write] — Read, write and increment integers of 1 to 64 bits at any bit offset of a string.
+  - complexity: O(N) — the string is copied once for any write
+  - compat: full
+- `BITFIELD_RO key [GET encoding offset ...]` [readonly] — BITFIELD with GET only.
+  - complexity: O(N) operations
+  - compat: full
 - `GETRANGE key start end` [readonly] — Return a byte range of a string value.
   - complexity: O(M) over the returned bytes
   - compat: full
@@ -357,6 +369,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SMEMBERS key` [readonly] — Return all members of a set.
   - complexity: O(N) members
   - compat: full
+- `SMISMEMBER key member [member ...]` [readonly] — Check whether each of several values is a member of a set.
+  - complexity: O(N) members asked
+  - compat: full
 - `SMOVE source destination member` [write] — Move a member from one set to another.
   - complexity: O(1)
   - compat: differs: when the two keys live on different shards the member is removed from one and then added to the other, so the move is not atomic; co-locate the keys with a {hashtag} for Redis's atomic form
@@ -582,6 +597,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SELECT index` [readonly] — Select the logical database; kevy is single-DB and only accepts index 0.
   - complexity: O(1)
   - compat: differs: kevy is single-DB — SELECT 0 replies OK and any other index is an error
+- `RESET` [readonly] — Return the connection to its initial state: no transaction, WATCH, subscriptions or name, RESP2.
+  - complexity: O(S) — S the connection's subscriptions
+  - compat: full
 
 ### server
 
@@ -683,6 +701,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `PUBLISH channel message` [readonly,pubsub] — Post a message to a channel; returns the receiver count.
   - complexity: O(1) channel lookup + O(P) — a linear walk of the registered patterns with one glob match each, even when none match. Delivery fans out only to the shards holding a subscriber
+  - compat: full
+- `PUBSUB CHANNELS [pattern] | NUMSUB [channel ...] | NUMPAT | SHARDCHANNELS [pattern] | SHARDNUMSUB [shardchannel ...] | HELP` [readonly] — Inspect the pub/sub state: active channels, subscriber counts, pattern count.
+  - complexity: O(N) — N the active channels for CHANNELS, the channels asked for NUMSUB
   - compat: full
 - `PUNSUBSCRIBE [pattern [pattern ...]]` [readonly,pubsub] — Unsubscribe from patterns (all patterns when none given).
   - complexity: O(p * P)

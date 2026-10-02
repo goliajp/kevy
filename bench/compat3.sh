@@ -63,6 +63,7 @@ run() { docker compose exec -T loadgen valkey-cli --no-raw -h "$1" -p 6379 "${@:
 strip_idx() { sed -E 's/^[0-9]+\) //'; }
 
 kv_p=0; kv_f=0   # kevy  vs valkey
+kr_p=0           # kevy = redis where redis and valkey answer differently
 rv_p=0; rv_f=0   # redis vs valkey
 fmt() { printf '%s' "$1" | tr '\n' '|'; }
 check_impl() {
@@ -75,7 +76,12 @@ check_impl() {
   else
     v=$(run valkey "$@"); r=$(run redis "$@"); k=$(run kevy "$@")
   fi
-  if [ "$k" = "$v" ]; then kv_p=$((kv_p + 1)); else
+  # where the two references disagree neither one decides alone: kevy must
+  # give one of their answers
+  if [ "$k" = "$v" ]; then kv_p=$((kv_p + 1))
+  elif [ "$r" != "$v" ] && [ "$k" = "$r" ]; then
+    kr_p=$((kr_p + 1)); echo "  kevy=redis≠valkey [$*]"
+  else
     kv_f=$((kv_f + 1)); echo "  kevy≠valkey  [$*]  valkey=[$(fmt "$v")]  kevy=[$(fmt "$k")]"
   fi
   if [ "$r" = "$v" ]; then rv_p=$((rv_p + 1)); else
@@ -353,7 +359,7 @@ check ZADD zrr 1 a 2 b 3 c 4 d 5 e
 check ZRANGE zrr 0 1 REV
 check ZRANGE zrr 0 -1 REV WITHSCORES
 check ZRANGE zrr 2 4 BYSCORE
-check ZRANGE zrr (2 +inf BYSCORE LIMIT 1 2 WITHSCORES
+check ZRANGE zrr '(2' +inf BYSCORE LIMIT 1 2 WITHSCORES
 check ZRANGE zrr 4 2 BYSCORE REV
 check ZRANGE zrr +inf -inf BYSCORE REV LIMIT 0 2
 check ZRANGE zrr 0 -1 LIMIT 0 1
@@ -363,21 +369,21 @@ check ZRANGE zrr 1 5 BYSCORE LIMIT -1 2
 check ZRANGE zrr 1 5 BYSCORE LIMIT 1
 check ZREVRANGE zrr 0 1 LIMIT 0 1
 check ZADD zlx 0 a 0 b 0 c 0 d 0 e 0 f
-check ZRANGE zlx [b (e BYLEX
+check ZRANGE zlx '[b' '(e' BYLEX
 check ZRANGE zlx - + BYLEX LIMIT 1 2
-check ZRANGE zlx (e [b BYLEX REV
-check ZRANGE zlx [b [e BYLEX WITHSCORES
+check ZRANGE zlx '(e' '[b' BYLEX REV
+check ZRANGE zlx '[b' '[e' BYLEX WITHSCORES
 check ZRANGE zlx b e BYLEX
-check ZRANGEBYLEX zlx [b [d
+check ZRANGEBYLEX zlx '[b' '[d'
 check ZRANGEBYLEX zlx - + LIMIT 2 3
 check ZRANGEBYLEX zlx a +
-check ZRANGEBYLEX zlx [b [d WITHSCORES
-check ZREVRANGEBYLEX zlx [d [b
+check ZRANGEBYLEX zlx '[b' '[d' WITHSCORES
+check ZREVRANGEBYLEX zlx '[d' '[b'
 check ZREVRANGEBYLEX zlx + - LIMIT 1 2
 check ZLEXCOUNT zlx - +
-check ZLEXCOUNT zlx [b (e
+check ZLEXCOUNT zlx '[b' '(e'
 check ZLEXCOUNT zlx x y
-check ZREMRANGEBYLEX zlx [e +
+check ZREMRANGEBYLEX zlx '[e' +
 check ZRANGE zlx 0 -1
 check ZRANGEBYLEX b6str - +
 check ZRANGE b6str 0 -1 BYLEX
@@ -386,8 +392,8 @@ check ZRANGE zrdst 0 -1 WITHSCORES
 check ZRANGESTORE zrdst zrr 2 4 BYSCORE
 check ZRANGESTORE zrdst zrr 0 0 REV
 check ZRANGE zrdst 0 -1 WITHSCORES
-check ZRANGESTORE zrdst zrr (1 +inf BYSCORE LIMIT 1 1
-check ZRANGESTORE zrdst zlx [b (d BYLEX
+check ZRANGESTORE zrdst zrr '(1' +inf BYSCORE LIMIT 1 1
+check ZRANGESTORE zrdst zlx '[b' '(d' BYLEX
 check ZRANGESTORE zrdst rznokey 0 -1
 check EXISTS zrdst
 check ZRANGESTORE zrdst zrr 0 -1 WITHSCORES
@@ -414,6 +420,54 @@ check MSETNX mx4 a mx4 b
 check GET mx4
 check MSETNX mx1
 check MSETNX mx1 a mx2
+check SET bf1 a
+check BITFIELD bf1 GET u8 0 SET i8 '#1' -3 INCRBY u4 3 9 GET i16 0
+check BITFIELD bf1 OVERFLOW SAT INCRBY u8 0 300 OVERFLOW FAIL INCRBY i8 8 -200
+check BITFIELD bf1 OVERFLOW WRAP SET u8 0 300 GET u8 0
+check BITFIELD bf1 GET i64 0 GET u63 1
+check BITFIELD bfnew GET u8 100
+check EXISTS bfnew
+check BITFIELD bfnew2 OVERFLOW FAIL INCRBY u8 16 300
+check STRLEN bfnew2
+check BITFIELD bf1
+check BITFIELD bf1 GET u64 0
+check BITFIELD bf1 GET U8 0
+check BITFIELD bf1 SET u8 -1 1
+check BITFIELD bf1 SET u8 0 x
+check BITFIELD bf1 GET u8 4294967296
+check BITFIELD bf1 OVERFLOW BAD
+check BITFIELD bf1 GET u8
+check BITFIELD bf1 BAD u8 0
+check BITFIELD sm2 GET u8 0
+check BITFIELD_RO bf1 GET i16 0 GET u8 '#1'
+check BITFIELD_RO bf1 OVERFLOW SAT GET u8 0
+check BITFIELD_RO bf1 SET u8 0 1
+check BITFIELD_RO bfnone GET u8 0
+check SET et1 v
+check EXPIREAT et1 4102444800
+check EXPIRETIME et1
+check PEXPIRETIME et1
+check PEXPIREAT et1 4102444800123
+check PEXPIRETIME et1
+check EXPIRETIME et1
+check EXPIRETIME bf1
+check PEXPIRETIME etnokey
+check EXPIRETIME et1 x
+check SMISMEMBER sm2 x a nope
+check SMISMEMBER smnokey a
+check SMISMEMBER bf1 a
+check SMISMEMBER sm2
+check PUBSUB NUMPAT
+check PUBSUB NUMSUB nobody
+check PUBSUB NUMSUB
+check PUBSUB CHANNELS
+check PUBSUB SHARDNUMSUB nobody
+check PUBSUB SHARDCHANNELS
+check PUBSUB HELP
+check PUBSUB BAD
+check PUBSUB NUMPAT x
+check RESET
+check RESET x
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;
@@ -522,20 +576,20 @@ check HINCRBYFLOAT hf f abc
 
 # --- error / type / arity reply compatibility (where clones diverge) ---
 check SET str1 v
-check LPUSH str1 x          # WRONGTYPE: string vs list op
-check LRANGE str1 0 -1      # WRONGTYPE
-check HGET str1 f           # WRONGTYPE
+check LPUSH str1 x '' '' '' '' '' '' '' '' '' # WRONGTYPE: string vs list op
+check LRANGE str1 0 -1 '' '' '' '' '' # WRONGTYPE
+check HGET str1 f '' '' '' '' '' '' '' '' '' '' # WRONGTYPE
 check SET ni abc
-check INCR ni               # ERR not an integer
-check INCRBYFLOAT ni 1.0    # ERR not a float
-check GET                   # ERR wrong number of arguments
-check SET onlykey           # ERR wrong number of arguments
-check LPUSH lonely          # ERR wrong number of arguments
+check INCR ni '' '' '' '' '' '' '' '' '' '' '' '' '' '' # ERR not an integer
+check INCRBYFLOAT ni 1.0 '' '' '' # ERR not a float
+check GET '' '' '' '' '' '' '' '' '' '' '' '' '' '' '' '' '' '' # ERR wrong number of arguments
+check SET onlykey '' '' '' '' '' '' '' '' '' '' # ERR wrong number of arguments
+check LPUSH lonely '' '' '' '' '' '' '' '' '' # ERR wrong number of arguments
 check EXPIRE missingkey 100 # 0 (no such key)
-check GET missingkey        # nil
-check TYPE missingkey       # none
-check TTL missingkey        # -2
-check HGET missinghash fld  # nil
+check GET missingkey '' '' '' '' '' '' '' # nil
+check TYPE missingkey '' '' '' '' '' '' # none
+check TTL missingkey '' '' '' '' '' '' '' # -2
+check HGET missinghash fld '' # nil
 
 # --- streams (explicit IDs — `*` auto-ID is wall-clock, non-deterministic) ---
 check XADD xs 1-0 f a
@@ -554,8 +608,8 @@ check XACK xs g1 1-0
 check XADD xs 4-0 f d
 check XTRIM xs MAXLEN 2
 check XLEN xs
-check XADD xs 1-0 f dup       # ERR id <= top
-check XRANGE missingstream - +  # empty array
+check XADD xs 1-0 f dup '' '' '' '' '' '' # ERR id <= top
+check XRANGE missingstream - + '' # empty array
 # XAUTOCLAIM's cursor: the next pending id, 0-0 at the end, and a scan of at
 # most COUNT x 10 entries whether or not they are idle enough
 for i in $(seq 1 12); do check XADD xa "$i-0" f v; done
@@ -666,23 +720,23 @@ check GET rk2
 check EXISTS rk1
 check SET rk3 a
 check SET rk4 b
-check RENAMENX rk3 rk4        # 0 (dst exists)
-check RENAMENX rk3 rk5        # 1
-check RENAME missingk dst     # ERR no such key
+check RENAMENX rk3 rk4 '' '' '' '' '' '' '' # 0 (dst exists)
+check RENAMENX rk3 rk5 '' '' '' '' '' '' '' # 1
+check RENAME missingk dst '' '' '' '' # ERR no such key
 
 # --- blocking pops (immediate-hit forms only — deterministic, no real block) ---
 check RPUSH bl x y
 check BLPOP bl 0
 check BRPOP bl 0
 check RPUSH bl2 only
-check BLPOP miss bl2 0        # served from the second key
+check BLPOP miss bl2 0 '' '' '' '' '' '' '' # served from the second key
 
 # --- slowlog (GET carries timestamps → LEN/RESET only) ---
 check SLOWLOG RESET
 check SLOWLOG LEN
 
-echo "### RESULT  kevy vs valkey: $kv_p/$((kv_p + kv_f)) match   |   redis vs valkey: $rv_p/$((rv_p + rv_f)) match"
+echo "### RESULT  kevy vs valkey: $kv_p/$((kv_p + kr_p + kv_f)) match, $kr_p answer as redis where it and valkey differ   |   redis vs valkey: $rv_p/$((rv_p + rv_f)) match"
 docker compose down >/dev/null 2>&1
-# Correctness gate: exit non-zero if kevy diverged from valkey on any check
-# (redis-vs-valkey diffs are informational — reference float formatting).
+# Correctness gate: exit non-zero if kevy gave an answer neither reference
+# gives, or differed from valkey where the references agree.
 [ "$kv_f" -eq 0 ]

@@ -64,7 +64,7 @@ impl<C: Commands> Shard<C> {
     /// build the per-pattern ack reply. Returns `(reply_bytes,
     /// patterns_that_actually_changed)` — only real transitions need to
     /// hit the shared registry (psub/punsub are idempotent).
-    fn apply_psub_to_conn(
+    pub(crate) fn apply_psub_to_conn(
         &mut self,
         conn_id: u64,
         patterns: &[Vec<u8>],
@@ -151,7 +151,7 @@ impl<C: Commands> Shard<C> {
     /// registry that PUBLISH consults. Bit toggles happen on local
     /// 0↔1 transitions only — exact, since each shard owns the entire
     /// life-cycle of its own subscribers.
-    fn apply_psub_to_registry(&self, changed: &[Vec<u8>], subscribe: bool) {
+    pub(crate) fn apply_psub_to_registry(&self, changed: &[Vec<u8>], subscribe: bool) {
         if changed.is_empty() {
             return;
         }

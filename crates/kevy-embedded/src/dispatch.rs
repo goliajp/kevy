@@ -174,8 +174,11 @@ pub(crate) use args::Args;
 pub(crate) const DISPATCH_VERBS: &[&str] = &[
     // strings
     "APPEND",
+    "BITFIELD",
+    "BITFIELD_RO",
     "DECR",
     "DECRBY",
+    "EXPIRETIME",
     "GET",
     "GETDEL",
     "GETEX",
@@ -193,11 +196,13 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "MGET",
     "MSET",
     "MSETNX",
+    "PEXPIRETIME",
     "RPUSHX",
     "SET",
     "SETNX",
     "SETRANGE",
     "SINTERCARD",
+    "SMISMEMBER",
     "SMOVE",
     "STRLEN",
     // bitmap
