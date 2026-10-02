@@ -42,6 +42,34 @@ fn incrbyfloat_accumulates() {
     assert!((v - 5.5).abs() < 1e-9, "got {v}");
 }
 
+// the logged increment is the text the live call read, so a replay lands
+// on the same long-double sums digit for digit
+#[test]
+fn float_increments_replay_to_the_same_text() {
+    use crate::config::AppendFsync;
+    let dir = crate::store::test_suites::tests::tmp_dir("float-incr-replay");
+    let cfg = || {
+        Config::default()
+            .with_persist(&dir)
+            .with_ttl_reaper_manual()
+            .with_appendfsync(AppendFsync::Always)
+    };
+    let deltas = [0.1, 1e-17, 2.5e-17, 1e300, -1e300, 123456789.123456789, 1.0 / 3.0];
+    let (k, h) = {
+        let s = Store::open(cfg()).unwrap();
+        for d in deltas {
+            s.incrbyfloat(b"k", d).unwrap();
+            s.hincrbyfloat(b"h", b"f", d).unwrap();
+        }
+        (s.get(b"k").unwrap(), s.hget(b"h", b"f").unwrap())
+    };
+    let s = Store::open(cfg()).unwrap();
+    assert_eq!(s.get(b"k").unwrap(), k);
+    assert_eq!(s.hget(b"h", b"f").unwrap(), h);
+    // what Redis 8.10 stores for the same increments, sent as this text
+    assert_eq!(k.as_deref(), Some(&b"123456789.45679012333857827"[..]));
+}
+
 // ---- decr / decrby -------------------------------------------------------
 
 #[test]

@@ -24,14 +24,21 @@ pub(crate) fn to_f64(lit: Literal<'_>) -> (f64, bool) {
 /// Up to 16 significant hex digits as an integer, the power of two that
 /// scales it, and whether any nonzero digit was dropped past them.
 pub(crate) fn hex_significand(digits: &[u8], exp: i64) -> (u64, i64, bool) {
-    let (mut m, mut e2, mut kept, mut sticky, mut after_point) = (0u64, exp, 0, false, false);
+    let (m, e2, sticky) = hex_bits(digits, exp, 16);
+    (m as u64, e2, sticky)
+}
+
+/// Up to `keep` (≤ 32) significant hex digits as an integer, the power of
+/// two that scales it, and whether any nonzero digit was dropped past them.
+pub(crate) fn hex_bits(digits: &[u8], exp: i64, keep: u32) -> (u128, i64, bool) {
+    let (mut m, mut e2, mut kept, mut sticky, mut after_point) = (0u128, exp, 0, false, false);
     for &c in digits {
         if c == b'.' {
             after_point = true;
             continue;
         }
-        let d = u64::from((c as char).to_digit(16).expect("a hex digit"));
-        if kept == 16 {
+        let d = u128::from((c as char).to_digit(16).expect("a hex digit"));
+        if kept == keep {
             sticky |= d != 0;
             if !after_point {
                 e2 += 4;

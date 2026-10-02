@@ -146,6 +146,7 @@ dependencies = [
  "kevy-bytes",
  "kevy-hash",
  "kevy-map",
+ "kevy-num",
  "kevy-ranktree",
  "kevy-seg",
  "kevy-vlog",

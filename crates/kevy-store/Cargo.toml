@@ -37,6 +37,7 @@ kevy-hash = { path = "../kevy-hash", version = "7.0.0", default-features = false
 kevy-bytes = { path = "../kevy-bytes", version = "7.0.0", default-features = false }
 kevy-map = { path = "../kevy-map", version = "7.0.0", default-features = false }
 kevy-ranktree = { path = "../kevy-ranktree", version = "7.0.0", default-features = false }
+kevy-num = { path = "../kevy-num", version = "7.0.0" }
 
 # The tiering vlog needs a real filesystem (unix positional IO) — never
 # on wasm32. Optional: activated by the `std` feature off-wasm only.

@@ -10,7 +10,7 @@
 use crate::nostd_prelude::*;
 use crate::seg_map::{HS_PROMOTE, SegMap};
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
-use crate::util::{parse_f64, parse_i64};
+use crate::util::parse_i64;
 use crate::value::{HashData, SmallBytes, Value};
 use crate::{Entry, Store, StoreError, now_ns};
 use alloc::sync::Arc;
@@ -24,7 +24,7 @@ pub(crate) enum HashRefMut<'a> {
 }
 
 impl HashRefMut<'_> {
-    fn get(&self, field: &[u8]) -> Option<&SmallBytes> {
+    pub(crate) fn get(&self, field: &[u8]) -> Option<&SmallBytes> {
         match self {
             Self::Flat(h) => h.get(field),
             Self::Seg(h) => h.get(field),
@@ -39,7 +39,11 @@ impl Store {
     /// means the key is absent and `create` was false. Promotes inline →
     /// flat, and flat → sharded at the threshold, so HINCRBY-only
     /// workloads cross the segmentation boundary too.
-    fn hash_mut(&mut self, key: &[u8], create: bool) -> Result<Option<HashRefMut<'_>>, StoreError> {
+    pub(crate) fn hash_mut(
+        &mut self,
+        key: &[u8],
+        create: bool,
+    ) -> Result<Option<HashRefMut<'_>>, StoreError> {
         self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
         self.unpack_row(key);
         if self.live_entry_mut(key).is_none() {
@@ -274,37 +278,9 @@ impl Store {
         Ok(removed)
     }
 
-    /// `HINCRBYFLOAT` — atomic float increment of a hash field.
-    pub fn hincrbyfloat(
-        &mut self,
-        key: &[u8],
-        field: &[u8],
-        delta: f64,
-    ) -> Result<f64, StoreError> {
-        self.purge_hash_ttl(key);
-        self.clear_hash_field_ttls(key, &[field]);
-        let (next, weight_delta) = {
-            let mut h = self.hash_mut(key, true)?.expect("created");
-            let cur = match h.get(field) {
-                Some(v) => parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?,
-                None => 0.0,
-            };
-            let next = cur + delta;
-            if !next.is_finite() {
-                return Err(StoreError::NotFloat);
-            }
-            let vb = SmallBytes::from_vec(format!("{next}").into_bytes());
-            let (_, wd) = h.insert_weighed(SmallBytes::from_slice(field), vb);
-            (next, wd)
-        };
-        self.account_delta(key, weight_delta);
-        Ok(next)
-    }
-
     /// `HINCRBY` — preserves TTL; errors if the field isn't an integer.
     pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> Result<i64, StoreError> {
         self.purge_hash_ttl(key);
-        self.clear_hash_field_ttls(key, &[field]);
         let (next, weight_delta) = {
             let mut h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {

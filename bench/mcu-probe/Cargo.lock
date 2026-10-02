@@ -36,6 +36,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-num"
+version = "7.0.0"
+
+[[package]]
 name = "kevy-ranktree"
 version = "7.0.0"
 
@@ -46,6 +50,7 @@ dependencies = [
  "kevy-bytes",
  "kevy-hash",
  "kevy-map",
+ "kevy-num",
  "kevy-ranktree",
 ]
 
