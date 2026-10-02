@@ -251,7 +251,7 @@ impl Store {
                     // so phase 2 can hand it to the bio thread instead
                     // of dropping inline (a large-value latency-tail
                     // amplifier).
-                    let (e, word) = occ.get_mut_with_aux();
+                    let (e, word) = occ.value_and_aux_mut();
                     let (delta, ttl_delta, old) =
                         overwrite_in_place(e, word, take_new_value(value_slot), expire_at);
                     SetOutcome::Updated { delta, ttl_delta, old }

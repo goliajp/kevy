@@ -79,10 +79,9 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
         }
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
-        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
-        | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE" | b"GEOADD" => {
-            NotifyKind::Zset
-        }
+        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMAX" | b"ZPOPMIN.BELOW"
+        | b"ZREMRANGEBYRANK" | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE"
+        | b"ZDIFFSTORE" | b"GEOADD" => NotifyKind::Zset,
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
         b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"

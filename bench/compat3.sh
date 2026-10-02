@@ -169,6 +169,42 @@ check ZADD zz XX CH 0 zb
 check ZCOUNT z1 1 3
 check ZINCRBY z1 1 b
 check ZREM z1 a
+# top-end pops, reverse ranks, WITHSCORE, multi-score, random picks; a
+# random reply is only compared where every engine must give the same set
+check ZADD zp 1 a 2 b 3 c 3 d 1.5 e
+check ZREVRANK zp a
+check ZREVRANK zp a WITHSCORE
+check ZRANK zp e WITHSCORE
+check ZRANK zp nope WITHSCORE
+check ZREVRANK zp a BAD
+check ZMSCORE zp a nope e
+check ZMSCORE nokey a b
+check ZMSCORE zp
+checku ZRANDMEMBER zp 10
+checku ZRANDMEMBER zp 10 WITHSCORES
+check ZRANDMEMBER nokey
+check ZRANDMEMBER nokey 3 WITHSCORES
+check ZRANDMEMBER zp 0
+check ZRANDMEMBER zp x
+check ZRANDMEMBER zp 1 BAD
+check ZRANDMEMBER zp -9223372036854775808
+check ZADD zone 7 only
+check ZRANDMEMBER zone -3 WITHSCORES
+check ZRANDMEMBER zone
+check ZPOPMAX zp
+check ZPOPMAX zp 2
+check ZPOPMAX zp 0
+check ZPOPMAX zp -1
+check ZPOPMAX zp x
+check ZPOPMAX zp 1 2
+check ZPOPMIN zp x
+check ZPOPMIN zp 1 2
+check ZPOPMAX nokey 2
+check SET zstr v
+check ZPOPMAX zstr
+check ZREVRANK zstr a
+check ZMSCORE zstr a
+check ZRANDMEMBER zstr
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;
