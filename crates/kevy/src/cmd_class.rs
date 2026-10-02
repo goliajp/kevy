@@ -64,8 +64,8 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
     Some(match cmd {
         // String — Redis class `$`.
         b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL" | b"APPEND" | b"INCR"
-        | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"BITFIELD"
-        | b"SETRANGE" => NotifyKind::String,
+        | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"BITFIELD" | b"PFADD"
+        | b"PFMERGE" | b"SETRANGE" => NotifyKind::String,
         // Hash — class `h`.
         b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
         | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" | b"HPERSIST" => NotifyKind::Hash,
@@ -133,6 +133,8 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"APPEND"
             | b"SETBIT"
             | b"BITFIELD"
+            | b"PFADD"
+            | b"PFMERGE"
             | b"SETRANGE"
             | b"COPY"
             | b"BITOP"
@@ -175,4 +177,15 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"MSET"
             | b"MSETNX"
     )
+}
+
+/// The event a result placed on its destination's shard announces: the
+/// verb, except where Redis names it otherwise.
+pub(crate) fn placed_event(verb: &[u8]) -> Vec<u8> {
+    let mut buf = [0u8; 32];
+    match kevy_verbs::args::upper_verb(verb, &mut buf) {
+        b"SORT" => b"sortstore".to_vec(),
+        b"PFMERGE" => b"pfadd".to_vec(),
+        _ => verb.to_ascii_lowercase(),
+    }
 }

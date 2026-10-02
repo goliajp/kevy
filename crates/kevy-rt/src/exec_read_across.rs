@@ -119,6 +119,7 @@ impl<C: Commands> Shard<C> {
                 value,
                 event: self.commands.placed_event(argv),
                 class: self.commands.notify_class(argv),
+                keep_ttl: self.commands.placed_keeps_ttl(argv),
             },
             None => Op::Del(vec![dst.clone()]),
         };
@@ -145,9 +146,15 @@ impl<C: Commands> Shard<C> {
         value: kevy_store::Value,
         event: &[u8],
         class: Option<crate::NotifyKind>,
+        keep_ttl: bool,
     ) -> Part {
-        self.log_value_placed(&key, &value, None);
-        self.store.put_with_ttl(key.clone(), value, None);
+        let ttl_ms = keep_ttl.then(|| self.store.pttl(&key)).and_then(|ms| u64::try_from(ms).ok());
+        self.log_value_placed(&key, &value, ttl_ms);
+        if keep_ttl {
+            self.store.put_keep_ttl(key.clone(), value);
+        } else {
+            self.store.put_with_ttl(key.clone(), value, None);
+        }
         self.note_key_mutated(&key);
         if let Some(class) = class {
             self.notify_class_event(class, event, &key);

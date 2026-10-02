@@ -84,6 +84,9 @@ fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<N
                 .collect(),
         )),
         b"BITFIELD" => one(NotifyKind::String, "setbit", &args[1]),
+        // PFMERGE announces itself as an add; PFCOUNT's cache write, nothing
+        b"PFMERGE" => one(NotifyKind::String, "pfadd", &args[1]),
+        b"PFCOUNT" => Some(Notify::Suppress),
         b"LPUSHX" => one(NotifyKind::List, "lpush", &args[1]),
         b"RPUSHX" => one(NotifyKind::List, "rpush", &args[1]),
         // every field-TTL setter is an `hexpire`, unless its deadline had

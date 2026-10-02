@@ -171,6 +171,9 @@ registry! {
     b"PEXPIRE" WR,
     b"PEXPIREAT" WR,
     b"PEXPIRETIME" RD,
+    b"PFADD" WR,
+    b"PFCOUNT" RD,
+    b"PFMERGE" WR,
     b"PSETEX" WR,
     b"PTTL" RD,
     b"RENAME" WR,
@@ -272,6 +275,19 @@ registry! {
 /// ```
 pub fn verb(upper: &[u8]) -> Option<&'static Verb> {
     VERBS.binary_search_by(|v| v.name.as_bytes().cmp(upper)).ok().map(|i| &VERBS[i])
+}
+
+/// Whether a logged frame of an uppercase verb is applied on replay: the
+/// writes, and PFCOUNT — a read that writes its key's cached estimate,
+/// which Redis propagates.
+///
+/// ```
+/// assert!(kevy_verbs::replayed(b"PFADD"));
+/// assert!(kevy_verbs::replayed(b"PFCOUNT"));
+/// assert!(!kevy_verbs::replayed(b"GET"));
+/// ```
+pub fn replayed(upper: &[u8]) -> bool {
+    upper == b"PFCOUNT" || verb(upper).is_some_and(|v| v.write)
 }
 
 /// Whether an uppercase verb is a stream (`X*`) or geo (`GEO*`) verb,

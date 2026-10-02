@@ -54,4 +54,6 @@ pub(crate) fn cmd_hello(out: &mut Vec<u8>) {
 /// Verb classification tables (`is_write_verb` / `notify_class_for_verb` /
 /// `is_growing_write_verb`) live in [`crate::cmd_class`]; re-exported here
 /// so dispatchers keep their `cmd::*` paths.
-pub(crate) use crate::cmd_class::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
+pub(crate) use crate::cmd_class::{
+    is_growing_write_verb, is_write_verb, notify_class_for_verb, placed_event,
+};

@@ -201,6 +201,9 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("BITPOS",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETBIT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SETBIT",       WR, GROW, Some(N::String),            None,    SERVER | ESTORE | REPLAY),
+    op("PFADD",        WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
+    op("PFCOUNT",      RD, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    op("PFMERGE",      WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("BITFIELD",     WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("BITFIELD_RO",  RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- hashes -------------------------------------------------------
