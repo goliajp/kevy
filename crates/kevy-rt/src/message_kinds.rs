@@ -21,6 +21,9 @@ pub(crate) enum GatherKind {
     /// Scored members: zsets as-is, plain sets at score 1.0 (for the
     /// zset algebra family — Redis lets sets participate).
     Scored,
+    /// The whole value and its remaining TTL, cloned (for a read computed
+    /// across shards from copies, [`crate::Route::ReadAcross`]).
+    Value,
 }
 
 /// A single key's gathered payload.
@@ -29,6 +32,8 @@ pub(crate) enum Gathered {
     Members(Vec<Vec<u8>>),
     /// `(member, score)` payload for [`GatherKind::Scored`].
     Scored(Vec<(Vec<u8>, f64)>),
+    /// [`GatherKind::Value`]'s payload; `None` for an absent key.
+    Value(Option<(kevy_store::Value, Option<u64>)>),
     WrongType,
 }
 

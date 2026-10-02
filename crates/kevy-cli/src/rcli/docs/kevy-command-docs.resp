@@ -1,4 +1,4 @@
-*452
+*462
 $4
 KEYS
 *14
@@ -790,6 +790,38 @@ $10
 complexity
 $28
 O(M) over the returned bytes
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$3
+LCS
+*14
+$7
+summary
+$89
+Return the longest common subsequence of two strings, its length, or its matching ranges.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$68
+LCS key1 key2 [LEN] [IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]
+$10
+complexity
+$41
+O(N*M) — the lengths of the two strings
 $6
 compat
 $4
@@ -3049,6 +3081,38 @@ flags
 *1
 $8
 readonly
+$10
+SINTERCARD
+*14
+$7
+summary
+$78
+Return the size of the intersection of the given sets, counting at most LIMIT.
+$5
+since
+$5
+7.6.0
+$5
+group
+$3
+set
+$6
+syntax
+$46
+SINTERCARD numkeys key [key ...] [LIMIT limit]
+$10
+complexity
+$52
+O(N*M) worst case — N the smallest set, M the keys
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $11
 SINTERSTORE
 *14
@@ -3535,6 +3599,38 @@ flags
 *1
 $8
 readonly
+$5
+ZDIFF
+*14
+$7
+summary
+$59
+Return the difference of the first sorted set and the rest.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$40
+ZDIFF numkeys key [key ...] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $10
 ZDIFFSTORE
 *14
@@ -3599,6 +3695,38 @@ flags
 *1
 $5
 write
+$6
+ZINTER
+*14
+$7
+summary
+$49
+Return the intersection of the given sorted sets.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$95
+ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $10
 ZINTERCARD
 *14
@@ -4204,6 +4332,38 @@ $6
 compat
 $4
 full
+$5
+flags
+*1
+$8
+readonly
+$6
+ZUNION
+*14
+$7
+summary
+$42
+Return the union of the given sorted sets.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$95
+ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 $5
 flags
 *1

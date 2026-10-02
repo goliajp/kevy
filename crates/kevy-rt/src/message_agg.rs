@@ -19,6 +19,12 @@ pub(crate) enum Agg {
         next: usize,
         got: Option<SmallReply>,
     },
+    /// A [`crate::Route::ReadAcross`] read: the command, and the copies of
+    /// its keys as they come in from their shards.
+    ReadAcross {
+        argv: Argv,
+        got: HashMap<Vec<u8>, Gathered>,
+    },
     SumInt(i64),
     /// `WAIT` accumulator: MIN over the per-shard acked-replica
     /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).

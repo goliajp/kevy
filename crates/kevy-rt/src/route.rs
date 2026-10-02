@@ -356,6 +356,24 @@ pub enum Route {
         /// How many keys follow the count.
         numkeys: usize,
     },
+    /// A read naming `count` keys from argument `first` on, answered from
+    /// one computation over them — `LCS`, `SINTERCARD`, `ZINTER`. Keys on
+    /// one shard run there as sent; keys apart are copied to the shard the
+    /// command came to and the command runs over the copies.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `LCS a b`: two keys from argument 1.
+    /// let route = Route::ReadAcross { first: 1, count: 2 };
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    ReadAcross {
+        /// Where the keys start.
+        first: usize,
+        /// How many there are.
+        count: usize,
+    },
 }
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`

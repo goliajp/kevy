@@ -269,3 +269,29 @@ fn a_wrong_type_key_answers_at_once_instead_of_blocking() {
         assert!(t0.elapsed() < Duration::from_secs(2), "it waited for the timeout");
     }
 }
+
+/// The reads over several keys answer the same whether their keys share a
+/// shard or not: each runs over copies of keys that live elsewhere.
+#[test]
+fn reads_over_keys_on_different_shards_answer_as_on_one() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let k = apart("ra", 3);
+    call(&mut c, &[b"SET", b(&k[0]), b"ohmytext"]);
+    call(&mut c, &[b"SET", b(&k[1]), b"mynewtext"]);
+    assert_eq!(call(&mut c, &[b"LCS", b(&k[0]), b(&k[1])]), b"$6\r\nmytext\r\n");
+    assert_eq!(call(&mut c, &[b"LCS", b(&k[0]), b(&k[1]), b"LEN"]), b":6\r\n");
+    let s = apart("rs", 3);
+    call(&mut c, &[b"SADD", b(&s[0]), b"a", b"b", b"c"]);
+    call(&mut c, &[b"SADD", b(&s[1]), b"b", b"c", b"d"]);
+    call(&mut c, &[b"SADD", b(&s[2]), b"c", b"b"]);
+    assert_eq!(call(&mut c, &[b"SINTERCARD", b"3", b(&s[0]), b(&s[1]), b(&s[2])]), b":2\r\n");
+    let z = apart("rz", 2);
+    call(&mut c, &[b"ZADD", b(&z[0]), b"1", b"a", b"2", b"b"]);
+    call(&mut c, &[b"ZADD", b(&z[1]), b"10", b"b", b"30", b"d"]);
+    let r = call(&mut c, &[b"ZUNION", b"2", b(&z[0]), b(&z[1]), b"WITHSCORES"]);
+    assert_eq!(r, b"*6\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$2\r\n12\r\n$1\r\nd\r\n$2\r\n30\r\n");
+    call(&mut c, &[b"SET", b(&z[1]), b"str"]);
+    let r = call(&mut c, &[b"ZINTER", b"2", b(&z[0]), b(&z[1])]);
+    assert!(r.starts_with(b"-WRONGTYPE"), "a remote key's type is checked too: {r:?}");
+}

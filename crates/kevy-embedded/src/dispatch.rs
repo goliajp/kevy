@@ -31,6 +31,7 @@ mod idx_query;
 mod keyspace;
 mod misc;
 mod mpop;
+mod read_across;
 mod set;
 mod shared;
 mod strings;
@@ -66,6 +67,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         || set::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
         || mpop::dispatch(s, up, argv, out)
+        || read_across::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
         || shared::dispatch(s, up, argv, out)
@@ -182,6 +184,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "INCR",
     "INCRBY",
     "INCRBYFLOAT",
+    "LCS",
     "LPUSHX",
     "MGET",
     "MSET",
@@ -189,6 +192,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "SET",
     "SETNX",
     "SETRANGE",
+    "SINTERCARD",
     "STRLEN",
     // bitmap
     "BITCOUNT",
@@ -249,8 +253,10 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "ZADD",
     "ZCARD",
     "ZCOUNT",
+    "ZDIFF",
     "ZDIFFSTORE",
     "ZINCRBY",
+    "ZINTER",
     "ZINTERCARD",
     "ZINTERSTORE",
     "ZMPOP",
@@ -270,6 +276,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "ZREVRANK",
     "ZSCAN",
     "ZSCORE",
+    "ZUNION",
     "ZUNIONSTORE",
     // keyspace
     "COPY",

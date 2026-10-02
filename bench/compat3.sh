@@ -306,6 +306,48 @@ check HTTL b6t NX FIELDS 1 a
 check HTTL b6t FIELDS 2 a
 check HTTL b6t FIELDS 0 a
 check HPERSIST b6t FIELDS 1 a
+# reads over several keys (spread across shards on a sharded kevy)
+check SADD rs1 a b c
+check SADD rs2 b c d
+check SINTERCARD 2 rs1 rs2
+check SINTERCARD 2 rs2 rsnokey
+check SINTERCARD 1 rs2 LIMIT 1
+check SINTERCARD 1 rs2 LIMIT 0
+check SINTERCARD 0 rs2
+check SINTERCARD 2 rs2
+check SINTERCARD 1 rs2 LIMIT -1
+check SINTERCARD 1 b6str
+check SINTERCARD 1 rs2 BAD 1
+check ZADD rz1 1 a 2 b 3 c
+check ZADD rz2 10 b 20 c 30 d
+check ZINTER 2 rz1 rz2
+check ZINTER 2 rz1 rz2 WITHSCORES
+check ZINTER 2 rz1 rz2 WEIGHTS 2 3 AGGREGATE MAX WITHSCORES
+check ZUNION 2 rz1 rz2 WITHSCORES
+check ZUNION 2 rz1 rz2 AGGREGATE MIN WITHSCORES
+check ZDIFF 2 rz1 rz2 WITHSCORES
+check ZDIFF 1 rznokey
+check ZINTER 0 rz1
+check ZINTER x rz1
+check ZINTER 3 rz1 rz2
+check ZDIFF 2 rz1 rz2 WEIGHTS 1 2
+check ZUNION 2 rz1 b6str
+check ZUNION 2 rz1 rs1 WITHSCORES
+check ZUNION 1 rz1 WEIGHTS x
+check ZINTERSTORE rzd 0 rz1
+check ZINTERSTORE rzd 3 rz1
+check ZUNIONSTORE rzd x rz1
+check ZINTERSTORE rzd 1 rz1 WITHSCORES
+check SET rk1 ohmytext
+check SET rk2 mynewtext
+check LCS rk1 rk2
+check LCS rk1 rk2 LEN
+check LCS rk1 rk2 IDX
+check LCS rk1 rk2 IDX MINMATCHLEN 4 WITHMATCHLEN
+check LCS rk1 rknokey
+check LCS rk1 rs1
+check LCS rk1 rk2 BAD
+check LCS rk1 rk2 LEN IDX
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;
