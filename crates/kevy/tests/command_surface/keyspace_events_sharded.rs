@@ -82,6 +82,19 @@ fn drain(s: &mut std::net::TcpStream, wait: Duration) -> Vec<u8> {
     got
 }
 
+/// The events that arrive for one command: read until `want` of them are
+/// in (a slow build can take its time over the first), then for a short
+/// while more, so an event that should not be there still shows.
+fn events_for(s: &mut std::net::TcpStream, want: usize) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut got = Vec::new();
+    while events(&got).len() < want && std::time::Instant::now() < deadline {
+        got.extend(drain(s, Duration::from_millis(20)));
+    }
+    got.extend(drain(s, Duration::from_millis(60)));
+    events(&got)
+}
+
 /// `event(key)` for each pmessage frame in `bytes`, in order.
 fn events(bytes: &[u8]) -> Vec<String> {
     let parts: Vec<&[u8]> =
@@ -294,7 +307,7 @@ fn run_script(nshards: usize, script: &[(&str, &[&str])]) {
         let parts: Vec<&[u8]> = cmd.split(' ').map(str::as_bytes).collect();
         c.write_all(&req(&parts)).unwrap();
         drain(&mut c, Duration::from_millis(100));
-        let got = events(&drain(&mut sub, Duration::from_millis(150)));
+        let got = events_for(&mut sub, want.len());
         assert_eq!(got, *want, "{nshards} shards: {cmd}");
     }
 }
@@ -325,7 +338,7 @@ fn every_shards_events_reach_the_subscriber() {
         let key = format!("k{i}");
         c.write_all(&req(&[b"SET", key.as_bytes(), b"v"])).unwrap();
         drain(&mut c, Duration::from_millis(30));
-        let got = events(&drain(&mut sub, Duration::from_millis(100)));
+        let got = events_for(&mut sub, 1);
         assert_eq!(got, [format!("set({key})")], "shard of {key}");
     }
 }
