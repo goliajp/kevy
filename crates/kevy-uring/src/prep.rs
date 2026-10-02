@@ -6,10 +6,11 @@
 use core::ptr;
 
 use crate::ffi::{
-    IORING_ACCEPT_MULTISHOT, IORING_FSYNC_DATASYNC, IORING_OP_ACCEPT, IORING_OP_ASYNC_CANCEL,
-    IORING_OP_FSYNC, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT,
-    IORING_OP_WRITE, IORING_OP_WRITEV, IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT,
-    IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC, SOCK_NONBLOCK,
+    IORING_ACCEPT_MULTISHOT, IORING_FSYNC_DATASYNC, IORING_MSG_DATA, IORING_MSG_RING_CQE_SKIP,
+    IORING_OP_ACCEPT, IORING_OP_ASYNC_CANCEL, IORING_OP_FSYNC, IORING_OP_MSG_RING, IORING_OP_NOP,
+    IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_OP_WRITEV,
+    IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC,
+    SOCK_NONBLOCK,
 };
 use crate::layout::{IoUringSqe, KernelTimespec};
 use crate::ring::IoUring;
@@ -297,6 +298,27 @@ impl IoUring {
             // addr = timespec ptr, len = 1 (one timespec), off = 0 (pure
             // timeout — no completion-count trigger), rw_flags = 0 (relative).
             ptr::write(sqe, IoUringSqe::new(IORING_OP_TIMEOUT, -1, ts as u64, 1, user_data));
+        }
+        true
+    }
+
+    /// Queue a message to another ring: a completion tagged `target_data`
+    /// (`res` 0) appears in the ring whose fd is `target_ring_fd`, and
+    /// wakes it if it waits. It travels with this ring's next enter, so a
+    /// sender that enters anyway pays no syscall for it; this ring gets no
+    /// completion unless the send fails, and then it carries `user_data`.
+    /// Returns `false` if the SQ is full.
+    pub fn prep_msg_ring(&mut self, target_ring_fd: i32, target_data: u64, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        let mut sqe =
+            IoUringSqe::new(IORING_OP_MSG_RING, target_ring_fd, IORING_MSG_DATA, 0, user_data);
+        sqe.off = target_data;
+        sqe.rw_flags = IORING_MSG_RING_CQE_SKIP;
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            ptr::write(self.sqes_ptr().add(idx), sqe);
         }
         true
     }
