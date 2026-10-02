@@ -1,5 +1,5 @@
 The keyspace event announced when a command's result is placed on its
-destination's shard ([`Route::StoreFromCopies`](crate::Route::StoreFromCopies)).
+destination's shard (`Route::StoreFromCopies`).
 Default: the verb, lower-cased — `ZRANGESTORE` announces `zrangestore`.
 A command whose event is named otherwise (Redis's `SORT … STORE`
 announces `sortstore`) says so here.
