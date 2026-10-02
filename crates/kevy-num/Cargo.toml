@@ -1,0 +1,17 @@
+[package]
+name = "kevy-num"
+description = "Numbers as text exactly as the C library reads and writes them: strtod's decimal, hexadecimal and named literals, and Grisu2 digits in fpconv's layout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/kevy-num"
+readme = "README.md"
+keywords = ["strtod", "float", "parse", "format", "no-std"]
+categories = ["parsing", "value-formatting", "no-std"]
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
