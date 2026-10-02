@@ -4,7 +4,7 @@
 //! Validates the reactor-level intercept in
 //! `crates/kevy-rt/src/exec_client_intercept.rs`:
 //! - `SETNAME` persists the name on the conn;
-//! - `GETNAME` returns the persisted name (not the conn-less stub's `$0`);
+//! - `GETNAME` returns the persisted name, and null when there is none;
 //! - Per-connection isolation (one conn's name doesn't leak to another);
 //! - Invalid names (whitespace / control chars) rejected with -ERR;
 //! - Empty `SETNAME` is allowed (clears the name);
@@ -47,10 +47,10 @@ fn client_setname_persists_per_connection() {
     assert!(r == "$5\r\nconn1\r\n", "GETNAME round-trip failed: {r:?}");
 
     // PHASE 2: Per-connection isolation. A second connection's
-    // GETNAME must return empty bulk (not conn1's name).
+    // GETNAME must return null (not conn1's name).
     let mut b = connect(port);
     let r = send(&mut b, b"*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n");
-    assert_eq!(r, "$0\r\n\r\n", "fresh conn must have empty name, got {r:?}");
+    assert_eq!(r, "$-1\r\n", "fresh conn must have no name, got {r:?}");
 
     // PHASE 3: Rename on a fresh conn (overwrite semantics).
     let mut a2 = connect(port);
@@ -67,15 +67,15 @@ fn client_setname_persists_per_connection() {
     let mut c = connect(port);
     let r = send(&mut c, b"*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$6\r\nha ck1\r\n");
     assert!(r.starts_with("-ERR"), "SETNAME with whitespace should reject, got {r:?}");
-    // After reject, name stays empty.
+    // After reject, there is still no name.
     let r = send(&mut c, b"*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n");
-    assert_eq!(r, "$0\r\n\r\n");
+    assert_eq!(r, "$-1\r\n");
 
     // PHASE 5: Empty SETNAME allowed — clears the name.
     let r = send(&mut a, b"*3\r\n$6\r\nCLIENT\r\n$7\r\nSETNAME\r\n$0\r\n\r\n");
     assert!(r.starts_with("+OK"));
     let r = send(&mut a, b"*2\r\n$6\r\nCLIENT\r\n$7\r\nGETNAME\r\n");
-    assert_eq!(r, "$0\r\n\r\n");
+    assert_eq!(r, "$-1\r\n");
 
     // PHASE 6: Other CLIENT subcommands still work via the standard
     // dispatch (interception is SETNAME/GETNAME-only).

@@ -149,16 +149,18 @@ impl<C: Commands> Shard<C> {
             );
             return;
         }
-        if let Some(c) = self.conns.get(&conn_id) {
-            let name = c.client_name.clone();
-            let mut out = Vec::with_capacity(8 + name.len());
-            out.extend_from_slice(format!("${}\r\n", name.len()).as_bytes());
-            out.extend_from_slice(&name);
-            out.extend_from_slice(b"\r\n");
-            self.immediate_reply(conn_id, out);
-        } else {
-            self.immediate_reply(conn_id, b"$0\r\n\r\n".to_vec());
-        }
+        let Some(c) = self.conns.get(&conn_id) else { return };
+        // an empty name is no name, which reads back as null
+        let out = match (c.client_name.is_empty(), c.proto) {
+            (true, kevy_resp::RespVersion::V3) => b"_\r\n".to_vec(),
+            (true, _) => b"$-1\r\n".to_vec(),
+            (false, _) => {
+                let mut out = Vec::new();
+                kevy_resp::encode_bulk(&mut out, &c.client_name);
+                out
+            }
+        };
+        self.immediate_reply(conn_id, out);
     }
 }
 
