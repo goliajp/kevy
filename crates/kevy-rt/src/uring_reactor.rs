@@ -49,7 +49,7 @@ const URING_SPIN_LIMIT: u32 = 256;
 use crate::uring_idle::{IdleStep, idle_step};
 pub(crate) use crate::uring_ops::{
     CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN, OP_AOF,
-    OP_BIG_CANCEL, OP_BIG_READ, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
+    OP_BIG_CANCEL, OP_BIG_READ, OP_MSG_FAIL, OP_MSG_WAKE, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
 };
 
 impl<C: Commands> Shard<C> {
@@ -74,6 +74,7 @@ impl<C: Commands> Shard<C> {
         // (needs Linux 5.19+; the epoll reactor is the fallback for older
         // kernels AND for per-shard setup failure — see `build_uring`).
         let (mut ring, mut pbuf) = ring_pair;
+        self.uring_publish_ring(&mut ring);
         // Replication listener accept must NOT block the reactor.
         // The epoll path sets this in `shard::run` via `poller.add`-side
         // setup; the io_uring path originally didn't. `accept_ready_replication`
@@ -250,6 +251,8 @@ impl<C: Commands> Shard<C> {
                         cold_path_hint();
                         park.timeout_inflight = false;
                     }
+                    OP_MSG_WAKE => cold_path_hint(),
+                    OP_MSG_FAIL => self.uring_msg_failed(c.user_data),
                     OP_BIG_CANCEL => {
                         cold_path_hint();
                         io_work = true;
@@ -284,7 +287,7 @@ impl<C: Commands> Shard<C> {
             self.send_ext(false);
             self.flush_requests();
             self.flush_publish();
-            self.flush_wakes();
+            self.uring_flush_wakes(&mut ring);
             // Ship the per-shard bio-drop batch to the bio
             // thread BEFORE the AOF fsync window. Two reasons:
             // (1) a pending fsync stall (EverySec / Always) would
@@ -459,6 +462,7 @@ impl<C: Commands> Shard<C> {
         // persist completions (so a `+OK` SAVE reply isn't followed by
         // a torn snapshot), final AOF fsync, feed marker — see
         // [`Shard::shutdown_drain`].
+        self.uring_withdraw_ring();
         self.uring_aof_drain_exit(&mut ring);
         self.shutdown_drain();
         Ok(())

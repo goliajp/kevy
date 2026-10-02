@@ -217,6 +217,8 @@ mod uring_setup;
 mod uring_stall_cadence;
 #[cfg(target_os = "linux")]
 mod uring_stalldump;
+#[cfg(target_os = "linux")]
+mod uring_wake;
 #[cfg(any(target_os = "linux", test))] // `test` too: pure, tested everywhere
 mod uring_write_linearize;
 mod verb_id;
