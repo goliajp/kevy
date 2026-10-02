@@ -273,6 +273,9 @@ impl<C: Commands> Shard<C> {
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
             let did_inbound = self.uring_drain_inbound();
+            if !self.held.is_empty() {
+                self.uring_resume_held(&mut io);
+            }
             if self.balance.has_adopted() {
                 self.install_adopted_uring(&mut io);
             }
