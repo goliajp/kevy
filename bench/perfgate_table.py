@@ -20,7 +20,9 @@ def header(mode, sides, topo, rounds, windows, secs):
     for name, s in zip("AB", sides):
         env = f" — env {s['env_note']}" if s["env_note"] else ""
         print(f"# {name}: {s['label']} — {s['version']} — {s['bin']}{env}")
-    print(f"# server cpus {topo['srv_cpus']} ({topo['srv_threads']} threads), load cpus "
+    pin = ("one shard per cpu" if topo.get("pin_shards")
+           else "shards not pinned: a side does not name them")
+    print(f"# server cpus {topo['srv_cpus']} ({topo['srv_threads']} threads, {pin}), load cpus "
           f"{topo['cli_cpus']} ({topo['cli_threads']} threads); {rounds} rounds, "
           f"{windows} x {secs} s windows per side, the side that goes first alternates")
     sys.stdout.flush()
