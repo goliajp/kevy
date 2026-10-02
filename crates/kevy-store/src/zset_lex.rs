@@ -193,7 +193,7 @@ mod tests {
         match r % 7 {
             0 if lower => LexBound::NegInf,
             0 => LexBound::PosInf,
-            1 | 2 | 3 => LexBound::Inclusive(m),
+            1..=3 => LexBound::Inclusive(m),
             _ => LexBound::Exclusive(m),
         }
     }
