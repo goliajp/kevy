@@ -67,12 +67,15 @@ impl Store {
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
         self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
         self.update_peak();
-        if prev.is_none()
-            && let Some(k) = new_key_copy
-        {
+        self.note_new_key(prev.is_none(), new_key_copy);
+        (slot, prev)
+    }
+
+    /// Queue the new-key event for a key just created, when one is wanted.
+    fn note_new_key(&mut self, created: bool, copy: Option<Vec<u8>>) {
+        if created && let Some(k) = copy {
             self.notify_events.push((crate::notify::KeyspaceEvent::New, k));
         }
-        (slot, prev)
     }
 
     /// Record a value's weight, and the access clock when one runs, in the
