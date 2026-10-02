@@ -175,3 +175,19 @@ fn the_read_modify_write_verbs_agree_with_the_general_hash() {
     assert_eq!(p.hget(b"row:1", b"name").unwrap(), Some(&b"alice"[..]));
     assert_eq!(p.hget(b"row:1", b"dept").unwrap(), Some(&b"eng"[..]));
 }
+
+/// The field-TTL reads answer a packed row's fields — present, absent, and
+/// declared but unset — as they answer the general hash's.
+#[test]
+fn the_field_expiry_reads_agree_with_the_general_hash() {
+    let (mut p, mut g, cols) = both();
+    let at = 4_102_444_800_999;
+    for s in [&mut p, &mut g] {
+        s.hexpire_at(b"row:1", &[b"id"], at, kevy_store::HExpireCond::Always).unwrap();
+    }
+    assert!(p.is_packed(b"row:1"), "a field TTL leaves the row packed");
+    let fields: Vec<&[u8]> = cols.iter().copied().chain([b"nope".as_slice()]).collect();
+    let packed = p.hexpire_time(b"row:1", &fields).unwrap();
+    assert_eq!(packed, g.hexpire_time(b"row:1", &fields).unwrap());
+    assert_eq!(packed, [at as i64, -2, -1, -2]);
+}
