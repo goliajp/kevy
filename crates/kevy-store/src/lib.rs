@@ -83,6 +83,7 @@ mod bio_drop;
 mod bitfield;
 mod bitmap;
 mod clock;
+mod collection_scan;
 mod cond;
 pub use cond::{InsertPosition, ListEnd, ScoreCompare, SetCondition};
 mod defrag;
@@ -465,6 +466,8 @@ const _: () = {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_collection_scan;
 #[cfg(test)]
 mod tests_list_seg;
 #[cfg(test)]

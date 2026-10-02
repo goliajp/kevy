@@ -5,10 +5,8 @@
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
 use kevy_store::Store;
 
-use crate::args::{arg_i64, rest_borrowed, scan_match};
-use crate::reply::{
-    ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, scan_page, store_err, wrong_args,
-};
+use crate::args::{arg_i64, rest_borrowed};
+use crate::reply::{ERR_NOT_INT, emit_bulk_array, emit_int_result, store_err, wrong_args};
 use crate::{Effect, changed};
 
 /// One set command; `None` = the verb is not in this group.
@@ -90,7 +88,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"SPOP" => spop_rand(store, args, true, out),
         b"SRANDMEMBER" => spop_rand(store, args, false, out),
         b"SSCAN" => {
-            sscan(store, args, out);
+            crate::collection_scan::scan(store, args, crate::collection_scan::Kind::Set, out);
             Effect::Read
         }
         _ => return None,
@@ -171,30 +169,6 @@ fn spop_count<A: ArgvView + ?Sized>(args: &A, remove: bool, out: &mut Vec<u8>) -
         return None;
     }
     Some(raw)
-}
-
-/// `SSCAN key cursor [MATCH pattern] [COUNT n]` — every member in one
-/// batch.
-fn sscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 3 {
-        return wrong_args(out, "sscan");
-    }
-    if arg_i64(&args[2]).is_none() {
-        return encode_error(out, ERR_NOT_INT);
-    }
-    let Some(pat) = scan_match(args, 3) else {
-        return encode_error(out, ERR_SYNTAX);
-    };
-    match store.smembers(&args[1]) {
-        Err(e) => store_err(out, e),
-        Ok(all) => {
-            let page: Vec<Vec<u8>> = match pat {
-                None => all,
-                Some(p) => all.into_iter().filter(|m| kevy_store::glob_match(&p, m)).collect(),
-            };
-            scan_page(out, &page);
-        }
-    }
 }
 
 /// `SMOVE src dst member`, both keys in this store, in Redis's order of

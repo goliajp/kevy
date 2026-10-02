@@ -5,9 +5,9 @@ use kevy_resp::{
 };
 use kevy_store::Store;
 
-use crate::args::{arg_i64, rest_borrowed, scan_match};
+use crate::args::{arg_i64, rest_borrowed};
 use crate::reply::{
-    ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, scan_page, store_err, wrong_args,
+    ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, store_err, wrong_args,
 };
 use crate::{Effect, changed, hash_ttl};
 
@@ -137,7 +137,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             Effect::Read
         }
         b"HSCAN" => {
-            hscan(store, args, out);
+            crate::collection_scan::scan(store, args, crate::collection_scan::Kind::Hash, out);
             Effect::Read
         }
         _ => return None,
@@ -217,33 +217,6 @@ fn hrandfield<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
                     encode_bulk(out, f);
                 }
             }
-        }
-    }
-}
-
-/// `HSCAN key cursor [MATCH pattern] [COUNT n]` — every pair in one
-/// batch, field then value.
-fn hscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 3 {
-        return wrong_args(out, "hscan");
-    }
-    if arg_i64(&args[2]).is_none() {
-        return encode_error(out, ERR_NOT_INT);
-    }
-    let Some(pat) = scan_match(args, 3) else {
-        return encode_error(out, ERR_SYNTAX);
-    };
-    match store.hgetall(&args[1]) {
-        Err(e) => store_err(out, e),
-        Ok(flat) => {
-            let mut page: Vec<Vec<u8>> = Vec::with_capacity(flat.len());
-            for [field, value] in flat.as_chunks::<2>().0 {
-                if pat.as_ref().is_none_or(|p| kevy_store::glob_match(p, field)) {
-                    page.push(field.clone());
-                    page.push(value.clone());
-                }
-            }
-            scan_page(out, &page);
         }
     }
 }

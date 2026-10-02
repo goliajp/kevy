@@ -90,6 +90,10 @@ pub(crate) use weight::arc_box;
 /// here and lets the one bucket grow flat instead of looping.
 const MAX_BITS: u8 = 40;
 
+/// The top bit of a cursor [`SegMap::scan_page`] hands out; a flat map's
+/// cursor never has it.
+pub const SEG_CURSOR: u64 = 1 << 63;
+
 #[derive(Debug)]
 pub(crate) struct Bucket<V> {
     local_bits: u8,
@@ -175,6 +179,50 @@ impl<V: Clone> SegMap<V> {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// One page of a `*SCAN` sweep: whole buckets, in the order of the
+    /// hash prefixes they cover, until `count` entries are out. The
+    /// cursor is the next prefix to visit (its top bit set, its lowest bit
+    /// dropped), so a bucket splitting or the directory doubling between
+    /// pages skips nothing below it; a cursor that is not one of these
+    /// starts the sweep over. `0` ends the sweep.
+    ///
+    /// ```
+    /// use kevy_store::SmallBytes;
+    /// use kevy_store::seg_map::SegMap;
+    /// let mut m: SegMap<()> = SegMap::default();
+    /// for i in 0..5_000u32 {
+    ///     m.insert(SmallBytes::from_slice(&i.to_be_bytes()), ());
+    /// }
+    /// let (mut seen, mut cur) = (Vec::new(), 0u64);
+    /// loop {
+    ///     cur = m.scan_page(cur, 100, |k, _| seen.push(k.to_vec()));
+    ///     if cur == 0 { break; }
+    /// }
+    /// seen.sort_unstable();
+    /// seen.dedup();
+    /// assert_eq!(seen.len(), 5_000);
+    /// ```
+    pub fn scan_page(&self, cursor: u64, count: usize, mut f: impl FnMut(&[u8], &V)) -> u64 {
+        let mut prefix = if cursor & SEG_CURSOR != 0 { (cursor & !SEG_CURSOR) << 1 } else { 0 };
+        let mut emitted = 0;
+        loop {
+            let b = &self.buckets[self.dirs[self.route(prefix)] as usize];
+            for (k, v) in b.map.iter() {
+                f(k.as_slice(), v);
+            }
+            emitted += b.map.len();
+            // the bucket covers every prefix sharing its top `local_bits`
+            let span = 1u64.checked_shl(64 - u32::from(b.local_bits));
+            let Some(next) = span.and_then(|s| (prefix & !(s - 1)).checked_add(s)) else {
+                return 0;
+            };
+            prefix = next;
+            if emitted >= count {
+                return SEG_CURSOR | (prefix >> 1);
+            }
+        }
     }
 
     /// Directory slot for a hash (top `global_bits` bits).
