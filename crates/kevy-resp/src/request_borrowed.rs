@@ -94,15 +94,20 @@ fn parse_inline_borrowed(buf: &[u8]) -> Result<Option<(ArgvBorrowed<'_>, usize)>
 fn parse_multibulk_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
-    let Some(hdr_end) = find_crlf(buf, 1) else {
-        return Ok(None);
+    let (count, mut p) = match small_header(buf, 1) {
+        Some(got) => got,
+        None => {
+            let Some(hdr_end) = find_crlf(buf, 1) else {
+                return Ok(None);
+            };
+            let count = parse_int(&buf[1..hdr_end])
+                .ok_or(ProtocolError::Malformed("bad multibulk count"))?;
+            if count < 0 {
+                return Ok(Some((ArgvBorrowed::new(buf), hdr_end + 2)));
+            }
+            (count as usize, hdr_end + 2)
+        }
     };
-    let count =
-        parse_int(&buf[1..hdr_end]).ok_or(ProtocolError::Malformed("bad multibulk count"))?;
-    if count < 0 {
-        return Ok(Some((ArgvBorrowed::new(buf), hdr_end + 2)));
-    }
-    let count = count as usize;
     // Reject an absurd declared count BEFORE it reaches
     // `with_capacity` — the single-pass borrowed parser reserves the
     // range table up front, so an unchecked count is a remote,
@@ -113,14 +118,17 @@ fn parse_multibulk_borrowed(
     }
 
     let mut argv = ArgvBorrowed::with_capacity(buf, count);
-    let mut p = hdr_end + 2;
     for _ in 0..count {
         match buf.get(p) {
             None => return Ok(None),
             Some(b'$') => {}
             Some(_) => return Err(ProtocolError::Malformed("expected bulk string")),
         }
-        let Some((len, data_start)) = parse_bulk_len(buf, p)? else {
+        let header = match small_header(buf, p + 1) {
+            Some(got) => Some(got),
+            None => parse_bulk_len(buf, p)?,
+        };
+        let Some((len, data_start)) = header else {
             return Ok(None);
         };
         let data_end = data_start + len;
@@ -134,6 +142,28 @@ fn parse_multibulk_borrowed(
         p = data_end + 2;
     }
     Ok(Some((argv, p)))
+}
+
+/// A one- or two-digit number at `at` and its CRLF, as nearly every count
+/// and argument length is: the number and where the next byte is. `None`
+/// for anything else — more digits, a sign, a short or malformed buffer —
+/// which the general parser then reads and judges.
+#[inline(always)]
+fn small_header(buf: &[u8], at: usize) -> Option<(usize, usize)> {
+    let d0 = buf.get(at)?.wrapping_sub(b'0');
+    if d0 > 9 {
+        return None;
+    }
+    match *buf.get(at + 1)? {
+        b'\r' if buf.get(at + 2) == Some(&b'\n') => Some((usize::from(d0), at + 3)),
+        d1 if d1.is_ascii_digit()
+            && buf.get(at + 2) == Some(&b'\r')
+            && buf.get(at + 3) == Some(&b'\n') =>
+        {
+            Some((usize::from(d0) * 10 + usize::from(d1 - b'0'), at + 4))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +231,57 @@ mod tests {
         assert!(parse_command_borrowed(b"*1\r\n$99999999999999999999\r\n").is_err());
         // Bulk data not CRLF-terminated.
         assert!(parse_command_borrowed(b"*1\r\n$3\r\nabcXX").is_err());
+    }
+
+    type Seen = Result<Option<(Vec<Vec<u8>>, usize)>, ()>;
+
+    fn borrowed(buf: &[u8]) -> Seen {
+        parse_command_borrowed(buf)
+            .map(|got| got.map(|(a, used)| (a.iter().map(<[u8]>::to_vec).collect(), used)))
+            .map_err(|_| ())
+    }
+
+    fn owned(buf: &[u8]) -> Seen {
+        parse_command(buf)
+            .map(|got| got.map(|(a, used)| (a.iter().map(<[u8]>::to_vec).collect(), used)))
+            .map_err(|_| ())
+    }
+
+    /// The short-header path answers exactly what the general parser does,
+    /// on whole frames, every prefix of them, and every frame with one byte
+    /// replaced; lengths straddle the one-, two- and three-digit forms.
+    #[test]
+    fn short_headers_parse_as_the_general_parser_does() {
+        let lens = [0usize, 1, 2, 9, 10, 11, 42, 99, 100, 101, 255];
+        let mut frames = Vec::new();
+        for argc in 1..=12usize {
+            for &len in &lens {
+                let args: Vec<Vec<u8>> = (0..argc).map(|i| vec![b'a' + i as u8; len]).collect();
+                let mut frame = Vec::new();
+                encode_command(&mut frame, &args);
+                frames.push(frame);
+            }
+        }
+        let mut checked = 0usize;
+        for frame in &frames {
+            for cut in 0..=frame.len() {
+                assert_eq!(borrowed(&frame[..cut]), owned(&frame[..cut]), "{:?}", &frame[..cut]);
+                checked += 1;
+            }
+            for at in 0..frame.len().min(24) {
+                for b in *b"-+x\r\n09$*" {
+                    let mut bad = frame.clone();
+                    bad[at] = b;
+                    let (want, got) = (owned(&bad), borrowed(&bad));
+                    if matches!(want, Ok(Some((ref a, _))) if a.is_empty()) {
+                        continue; // the two parsers differ by design on empty frames
+                    }
+                    assert_eq!(got, want, "{bad:?}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50_000, "checked only {checked}");
     }
 
     #[test]
