@@ -22,8 +22,11 @@ impl Store {
         ttl: Duration,
         cond: HExpireCond,
     ) -> KevyResult<Vec<HExpireCode>> {
-        let deadline = now_unix_ms().saturating_add(ttl.as_millis() as u64);
-        self.hpexpire_at(key, fields, deadline, cond)
+        // judged at the instant the TTL is added to, so a positive TTL
+        // never deletes, however long the shard lock takes
+        let now = now_unix_ms();
+        let deadline = now.saturating_add(ttl.as_millis() as u64);
+        self.hpexpire_as_of(key, fields, deadline, now, cond)
     }
 
     /// `HPEXPIREAT` — absolute unix-ms per-field deadline (the
@@ -35,9 +38,21 @@ impl Store {
         deadline_ms: u64,
         cond: HExpireCond,
     ) -> KevyResult<Vec<HExpireCode>> {
+        self.hpexpire_as_of(key, fields, deadline_ms, now_unix_ms(), cond)
+    }
+
+    fn hpexpire_as_of(
+        &self,
+        key: &[u8],
+        fields: &[&[u8]],
+        deadline_ms: u64,
+        now: u64,
+        cond: HExpireCond,
+    ) -> KevyResult<Vec<HExpireCode>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
-        let codes = g.store.hexpire_at(key, fields, deadline_ms, cond).map_err(store_err)?;
+        let codes =
+            g.store.hexpire_as_of(key, fields, deadline_ms, now, cond).map_err(store_err)?;
         // the record names only the fields that changed (set, or deleted by
         // a past deadline): it carries no condition, so a field the
         // condition refused must not appear in it

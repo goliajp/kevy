@@ -13,11 +13,6 @@
 //! N for sets / push). This keeps the encoders alloc-free and matches how
 //! dispatch already streams replies into the conn's output buffer.
 
-// `write!` into an in-memory buffer returns a `Result` because
-// `fmt::Write` / `io::Write` must, not because it can fail: the
-// `String` and `Vec` impls are infallible. Said once here.
-#![expect(clippy::let_underscore_must_use, reason = "writing to an in-memory buffer cannot fail")]
-
 /// `%<count>\r\n` — a map header. Follow with `count` × 2 sub-replies
 /// (key₁ value₁ key₂ value₂ …). The count is the **pair** count, not
 /// the element count.
@@ -108,28 +103,7 @@ pub fn encode_push_header(out: &mut Vec<u8>, count: i64) {
 /// ```
 pub fn encode_double(out: &mut Vec<u8>, v: f64) {
     out.push(b',');
-    if v.is_nan() {
-        out.extend_from_slice(b"nan");
-    } else if v.is_infinite() {
-        out.extend_from_slice(if v > 0.0 { b"inf" } else { b"-inf" });
-    } else {
-        // Match the wire shape RESP3 clients expect: an integer-valued
-        // double serialises without a decimal point ("3" not "3.0"),
-        // matching what the parse_double_reply round-trip expects. The
-        // bit-exact compare is the point — we mean "no fractional bits
-        // present", not "approximately integer".
-        #[allow(clippy::float_cmp)]
-        let is_integer_valued = v == v.trunc();
-        if is_integer_valued && v.abs() < 1e17 {
-            push_int(out, v as i64);
-        } else {
-            // Rust's default `{}` for f64 emits a shortest round-trippable
-            // representation — same shape Redis emits for ZSCORE. Format
-            // into a stack buffer (no heap alloc) then extend.
-            use std::io::Write as _;
-            let _ = write!(out, "{v}");
-        }
-    }
+    crate::write_double(out, v);
     out.extend_from_slice(b"\r\n");
 }
 

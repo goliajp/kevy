@@ -10,6 +10,8 @@
 //! assert_eq!(out, b"+OK\r\n");
 //! ```
 
+#[cfg(feature = "streams-geo")]
+pub use crate::geo::geo_search;
 pub use crate::mpop::{blmpop, bzmpop, lmpop, zmpop};
 pub use crate::multiread::{lcs, zcombine};
 #[cfg(feature = "streams-geo")]

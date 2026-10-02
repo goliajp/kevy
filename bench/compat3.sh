@@ -435,6 +435,25 @@ check BITFIELD bf1 GET U8 0
 check BITFIELD bf1 SET u8 -1 1
 check BITFIELD bf1 SET u8 0 x
 check BITFIELD bf1 GET u8 4294967296
+check BITFIELD bf1 GET u8 4294967295
+check BITFIELD_RO bf1 GET u8 '#536870912'
+check ZADD fpz 0x10 hexa
+check ZADD fpz ' 1' sp
+check ZADD fpz 1e400 big
+check ZSCORE fpz hexa
+check ZINCRBY fpz inf hexa
+check ZINCRBY fpz -inf hexa
+check ZSCORE fpz hexa
+check ZADD fpz 0.00012345 tiny 1e20 huge
+check ZRANGE fpz 0 -1 WITHSCORES
+check ZCOUNT fpz ' 1' +inf
+check ZCOUNT fpz '1 ' +inf
+check GEOADD fpg 13.361389 38.115556 m
+check GEOPOS fpg m
+check GEOSEARCH fpg FROMLONLAT 13 38 BYRADIUS -1 km
+check GEOSEARCH fpg FROMLONLAT 13 38 BYRADIUS x km
+check GEOSEARCH fpg FROMLONLAT 200 38 BYRADIUS 1 km
+check GEOSEARCH fpg FROMLONLAT 13 38 BYBOX 1 x km
 check BITFIELD bf1 OVERFLOW BAD
 check BITFIELD bf1 GET u8
 check BITFIELD bf1 BAD u8 0

@@ -122,6 +122,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-num"
+version = "7.0.0"
+
+[[package]]
 name = "kevy-persist"
 version = "7.0.0"
 dependencies = [
@@ -149,6 +153,7 @@ name = "kevy-resp"
 version = "7.0.0"
 dependencies = [
  "kevy-bytes",
+ "kevy-num",
 ]
 
 [[package]]
@@ -200,6 +205,7 @@ name = "kevy-verbs"
 version = "7.0.0"
 dependencies = [
  "kevy-geo",
+ "kevy-num",
  "kevy-resp",
  "kevy-store",
 ]

@@ -59,17 +59,19 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
     })
 }
 
-/// The absolute unix-ms deadline `raw` names, or the refusal.
-fn deadline(raw: i64, t: Time, name: &str) -> Result<u64, String> {
+/// The absolute unix-ms deadline `raw` names and the "now" it is judged
+/// against — one clock read for both, as Redis judges a command at one
+/// instant — or the refusal.
+fn deadline(raw: i64, t: Time, name: &str) -> Result<(u64, u64), String> {
     if raw < 0 {
         return Err("ERR invalid expire time, must be >= 0".to_string());
     }
+    let now = now_unix_ms();
     let ms = if t.secs { raw.checked_mul(1000) } else { Some(raw) };
-    let at = ms.and_then(|ms| {
-        if t.relative { now_unix_ms().checked_add(ms as u64) } else { Some(ms as u64) }
-    });
+    let at =
+        ms.and_then(|ms| if t.relative { now.checked_add(ms as u64) } else { Some(ms as u64) });
     match at {
-        Some(at) if at <= MAX_DEADLINE_MS => Ok(at),
+        Some(at) if at <= MAX_DEADLINE_MS => Ok((at, now)),
         _ => Err(format!("ERR invalid expire time in '{name}' command")),
     }
 }
@@ -151,7 +153,7 @@ fn hexpire<A: ArgvView + ?Sized>(
         return Effect::Unchanged;
     };
     let parsed = deadline(raw, t, name).and_then(|at| setter_tail(args).map(|tail| (at, tail)));
-    let (at, (cond, idx)) = match parsed {
+    let ((at, now), (cond, idx)) = match parsed {
         Ok(p) => p,
         Err(e) => {
             encode_error(out, &e);
@@ -159,7 +161,7 @@ fn hexpire<A: ArgvView + ?Sized>(
         }
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
-    match store.hexpire_at(&args[1], &fields, at, cond) {
+    match store.hexpire_as_of(&args[1], &fields, at, now, cond) {
         Err(e) => {
             store_err(out, e);
             Effect::Unchanged
