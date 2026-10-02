@@ -72,7 +72,7 @@ impl Store {
     }
 
     /// Queue the new-key event for a key just created, when one is wanted.
-    fn note_new_key(&mut self, created: bool, copy: Option<Vec<u8>>) {
+    fn note_new_key(&mut self, created: bool, copy: Option<alloc::vec::Vec<u8>>) {
         if created && let Some(k) = copy {
             self.notify_events.push((crate::notify::KeyspaceEvent::New, k));
         }
