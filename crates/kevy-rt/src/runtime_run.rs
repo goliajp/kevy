@@ -355,6 +355,7 @@ impl<C: Commands> Runtime<C> {
                 pending_wakes: 0,
                 backlog_nonempty: 0,
                 request_batch_nonempty: 0,
+                held: Vec::new(),
                 publish_batch_nonempty: 0,
                 parked: shared.parked.clone(),
                 restore_gate: Arc::clone(&shared.restore_gate),

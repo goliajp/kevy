@@ -84,7 +84,18 @@ impl<C: Commands> Shard<C> {
     /// Enqueue a message to another shard, marking it for a coalesced wakeup. The
     /// fast path is a lock-free ring push; on a full ring it spills to the local
     /// per-target backlog (preserving order), which `flush_backlog` drains later.
+    ///
+    /// Read-your-writes across the two lanes: single-key forwards buffer in
+    /// `request_batch` until `flush_requests` runs at the end of the
+    /// reactor iteration, while every multi-key or multi-step op sends its
+    /// requests here at once. Unflushed, such a request would reach a peer
+    /// before a write the same connection sent earlier, and read state
+    /// without it. So a request first sends the buffered forwards, on the
+    /// same origin→peer rings (FIFO). An empty batch costs one branch.
     pub(crate) fn send_to(&mut self, dst: usize, msg: Inbound) {
+        if self.request_batch_nonempty != 0 && matches!(msg, Inbound::Request { .. }) {
+            self.flush_requests();
+        }
         let bit = 1u64 << dst;
         if self.backlog_nonempty & bit == 0 {
             match self.outboxes[dst].as_mut() {

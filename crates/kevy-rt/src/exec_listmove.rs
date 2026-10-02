@@ -170,9 +170,7 @@ impl<C: Commands> Shard<C> {
             ListMoveStep::Push => self.after_push(m, taken, pushed),
             // The element is back on the source; the client gets the error the
             // destination raised.
-            ListMoveStep::Restore => {
-                self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype())
-            }
+            ListMoveStep::Restore => self.finish_list_move(&m, wrongtype()),
         }
     }
 
@@ -185,14 +183,14 @@ impl<C: Commands> Shard<C> {
             // arbiter, which re-arms the watchers and keeps the conn parked.
             None | Some(Ok(None)) => {
                 let miss = if m.blocking { Vec::new() } else { b"$-1\r\n".to_vec() };
-                return self.finish_list_move(m.conn_id, m.blocking, &m.src, miss);
+                return self.finish_list_move(&m, miss);
             }
             Some(Err(())) => {
-                return self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype());
+                return self.finish_list_move(&m, wrongtype());
             }
             Some(Ok(Some(v))) => v,
         };
-        self.rearm(m.conn_id, m.agg(ListMoveStep::Push, Some(value.clone()), None));
+        self.rearm(m.conn_id, m.seq, m.agg(ListMoveStep::Push, Some(value.clone()), None));
         let (conn_id, seq, dst_shard, dst, to_left) =
             (m.conn_id, m.seq, m.dst_shard, m.dst.clone(), m.to_left);
         self.dispatch_op(conn_id, seq, dst_shard, Op::ListMovePush { key: dst, value, to_left });
@@ -208,7 +206,7 @@ impl<C: Commands> Shard<C> {
         let Some(Ok(Some(element))) = taken else {
             // Unreachable by construction — we only enter Push holding an
             // element. Reply nil rather than panic inside a reactor.
-            return self.finish_list_move(m.conn_id, m.blocking, &m.src, b"$-1\r\n".to_vec());
+            return self.finish_list_move(&m, b"$-1\r\n".to_vec());
         };
         if pushed == Some(true) {
             // announced once the move holds, as Redis orders them: the push,
@@ -220,12 +218,16 @@ impl<C: Commands> Shard<C> {
             }
             let mut out = Vec::with_capacity(element.len() + 16);
             kevy_resp::encode_bulk(&mut out, &element);
-            return self.finish_list_move(m.conn_id, m.blocking, &m.src, out);
+            return self.finish_list_move(&m, out);
         }
         // The destination exists and is not a list. Put the element back where
         // it came from before telling the client — a WRONGTYPE must not cost
         // them their data.
-        self.rearm(m.conn_id, m.agg(ListMoveStep::Restore, Some(element.clone()), Some(false)));
+        self.rearm(
+            m.conn_id,
+            m.seq,
+            m.agg(ListMoveStep::Restore, Some(element.clone()), Some(false)),
+        );
         let (conn_id, seq, src_shard, src, from_left) =
             (m.conn_id, m.seq, m.src_shard, m.src.clone(), m.from_left);
         self.dispatch_op(
@@ -236,10 +238,12 @@ impl<C: Commands> Shard<C> {
         );
     }
 
-    /// Re-arm the orchestrator slot for the next step.
-    fn rearm(&mut self, conn_id: u64, agg: Agg) {
+    /// Re-arm the orchestrator slot — the one at `seq`, which earlier
+    /// commands still waiting on their replies may stand in front of — for
+    /// the next step.
+    fn rearm(&mut self, conn_id: u64, seq: u64, agg: Agg) {
         if let Some(c) = self.conns.get_mut(&conn_id)
-            && let Some(slot) = c.pending.front_mut()
+            && let Some(slot) = c.pending.get_mut(seq.wrapping_sub(c.next_emit) as usize)
         {
             slot.remaining = 1;
             slot.agg = crate::message_agg::slot_agg(agg);
@@ -254,16 +258,19 @@ impl<C: Commands> Shard<C> {
     /// watchers on a hit, and how to re-arm on an empty (raced) reply. The
     /// orchestrator's slot is dropped in that case — it was only ever the
     /// state machine's holder, never the reply's route.
-    fn finish_list_move(&mut self, conn_id: u64, blocking: bool, src: &[u8], bytes: Vec<u8>) {
-        if blocking {
-            if let Some(c) = self.conns.get_mut(&conn_id) {
-                c.pending.pop_front();
+    fn finish_list_move(&mut self, m: &Move, bytes: Vec<u8>) {
+        let at = self.conns.get(&m.conn_id).map(|c| m.seq.wrapping_sub(c.next_emit) as usize);
+        if m.blocking {
+            if let (Some(c), Some(at)) = (self.conns.get_mut(&m.conn_id), at)
+                && at < c.pending.len()
+            {
+                c.pending.remove(at);
             }
-            self.origin_on_serve_resp(conn_id, src.to_vec(), bytes);
+            self.origin_on_serve_resp(m.conn_id, m.src.clone(), bytes);
             return;
         }
-        if let Some(c) = self.conns.get_mut(&conn_id) {
-            if let Some(slot) = c.pending.front_mut() {
+        if let (Some(c), Some(at)) = (self.conns.get_mut(&m.conn_id), at) {
+            if let Some(slot) = c.pending.get_mut(at) {
                 slot.remaining = 0;
                 let reply = SmallReply::from_vec(bytes);
                 let v3 = slot.proto == kevy_resp::RespVersion::V3;
