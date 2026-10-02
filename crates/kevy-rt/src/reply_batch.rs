@@ -40,9 +40,9 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Run a local command that waits behind an earlier one still out,
-    /// its reply parked in its slot rather than copied into one of its
-    /// own.
+    /// Run a local command that waits behind an earlier one still out: its
+    /// slot goes in already done, the reply parked in it, so nothing has
+    /// to find the slot again by its seq.
     pub(crate) fn run_local_behind<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -50,16 +50,27 @@ impl<C: Commands> Shard<C> {
         args: &A,
         proto: RespVersion,
         meta: DispatchMeta,
+        is_quit: bool,
     ) {
         let mut out = std::mem::take(&mut self.reply_scratch);
         out.clear();
         self.run_dispatch_into(args, proto, meta, &mut out);
-        match self.send_ext(true) {
-            Some(t) => {
-                let part = Part::Reply(SmallReply::from_slice(&out));
-                self.hold_ext(t, crate::exec_ext::Deliver::Local { conn: conn_id, seq, part });
+        if let Some(t) = self.send_ext(true) {
+            self.push_pending_single(conn_id, false);
+            let part = Part::Reply(SmallReply::from_slice(&out));
+            self.hold_ext(t, crate::exec_ext::Deliver::Local { conn: conn_id, seq, part });
+        } else if let Some(conn) =
+            crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+        {
+            let done = Some(conn.park(&out));
+            let proto = conn.proto;
+            conn.pending.push_back(PendingSlot { remaining: 0, agg: None, done, proto });
+            if conn.pending.len() == 1 {
+                drain_front(conn);
             }
-            None => self.fold_bytes(conn_id, seq, &out),
+        }
+        if is_quit {
+            self.mark_closing(conn_id);
         }
         self.reply_scratch = out;
     }

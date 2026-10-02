@@ -92,13 +92,13 @@ impl<C: Commands> Shard<C> {
         {
             return;
         }
-        self.push_pending_single(conn_id, is_quit);
         if shard == self.id {
             // Local-but-not-fast-path (a prior cmd is still pending):
             // dispatch straight off the borrowed argv — no owned
             // materialise needed.
-            self.run_local_behind(conn_id, seq, args, proto, meta);
+            self.run_local_behind(conn_id, seq, args, proto, meta, is_quit);
         } else {
+            self.push_pending_single(conn_id, is_quit);
             self.forward_to(shard, conn_id, seq, args, proto, meta);
         }
     }
