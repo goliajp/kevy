@@ -244,7 +244,8 @@ mod tests {
             let mut all: Vec<Vec<u8>> = members.clone();
             all.sort();
             all.dedup();
-            for _ in 0..200 {
+            // every size still meets its encoding under miri, with fewer probes
+            for _ in 0..if cfg!(miri) { 8 } else { 200 } {
                 let (min, max) = (bound(next(), true), bound(next(), false));
                 let want: Vec<Vec<u8>> =
                     all.iter().filter(|m| above(&min, m) && below(&max, m)).cloned().collect();
