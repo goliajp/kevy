@@ -19,9 +19,9 @@
     "p95_us": 0.1
   },
   "instr_by_callgrind": {
-    "_doc": "instructions of these throughput angles are judged by the named callgrind angle: identical code moves them ±2–3% round to round",
-    "onekey_get": "xonekey_get",
-    "onekey_set": "xonekey_set",
+    "_doc": "instructions of these throughput angles are judged by the named callgrind angle: identical code moves them ±2–3% round to round. A one-key callgrind angle cannot be made to forward every time (where its one connection lands depends on the connections before it), and xget / xset run the same forwarding, batching and folding code deterministically",
+    "onekey_get": "xget",
+    "onekey_set": "xset",
     "zinterstore": "zinterstore"
   },
   "noise_by_angle": {
