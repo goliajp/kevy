@@ -71,6 +71,10 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             Effect::Read
         }
         b"FLUSHDB" | b"FLUSHALL" => {
+            if !crate::flush_args_ok(args) {
+                encode_error(out, crate::reply::ERR_SYNTAX);
+                return Some(Effect::Unchanged);
+            }
             store.flushall();
             encode_simple_string(out, "OK");
             Effect::Write

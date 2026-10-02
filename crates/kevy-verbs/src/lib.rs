@@ -64,6 +64,22 @@ mod zset_range;
 
 pub use verbs::{VERBS, Verb, is_streams_geo, is_write, replayed, verb};
 
+/// Whether `FLUSHALL` / `FLUSHDB` arguments are ones Redis takes: none, or
+/// one of `ASYNC` / `SYNC`.
+///
+/// ```
+/// let argv = |s: &str| kevy_resp::Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// assert!(kevy_verbs::flush_args_ok(&argv("FLUSHALL async")));
+/// assert!(!kevy_verbs::flush_args_ok(&argv("FLUSHALL ASYNC SYNC")));
+/// ```
+pub fn flush_args_ok<A: kevy_resp::ArgvView + ?Sized>(args: &A) -> bool {
+    match args.len() {
+        1 => true,
+        2 => args[1].eq_ignore_ascii_case(b"ASYNC") || args[1].eq_ignore_ascii_case(b"SYNC"),
+        _ => false,
+    }
+}
+
 /// What a command did, for a caller that records writes.
 ///
 /// It describes a command whose reply was not an error. An error reply
