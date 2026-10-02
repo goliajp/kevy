@@ -111,14 +111,15 @@ impl Store {
     /// what u16 offsets address — leaves the packed form for the general one
     /// with every value intact. None of them is an error: a packed row is a
     /// size class and a declaration, not a type.
-    fn hset_packed(
+    fn hset_packed_at(
         &mut self,
         key: &[u8],
+        at: usize,
         field: &[u8],
         value: &[u8],
     ) -> Result<HsetOutcome, StoreError> {
-        let v = self.hash_value_for_set(key)?.expect("present and packed");
-        let Value::PackedRow(r) = v else { return Err(StoreError::WrongType) };
+        let e = self.map.entry_at_mut(key, at).expect("the slot live_slot found");
+        let Value::PackedRow(r) = &mut e.value else { return Err(StoreError::WrongType) };
         // a packed row's weight is worked out, not kept: measure it first
         let before = r.footprint();
         let slot = r.names().iter().position(|c| c == field);
@@ -133,7 +134,7 @@ impl Store {
         if rebuilt.is_none() {
             return self.unpack_then_set(key, field, value);
         }
-        self.reweigh_scalar(key, before);
+        self.reweigh_at(at, Some(before));
         Ok(HsetOutcome::Rebuilt { added: !existed })
     }
 
@@ -186,10 +187,17 @@ impl Store {
         if pairs.is_empty() {
             return Ok(0);
         }
-        let mut added = 0usize;
+        // one probe for the whole command: every pair then reaches the
+        // hash through its slot, which no pair's insert can move
+        self.tier_resolve(key, crate::value::COLD_TAG_HASH)?;
+        let (first, rest) = pairs.split_first().expect("checked non-empty");
+        let (slot, mut added, todo) = match self.live_slot(key) {
+            Some(slot) => (slot, 0usize, pairs),
+            None => (self.hset_create(key, first.0, first.1), 1, rest),
+        };
         let mut delta: i64 = 0;
-        for (f, v) in pairs {
-            match self.hset_one(key, f, v)? {
+        for (f, v) in todo {
+            match self.hset_at(key, slot, f, v)? {
                 HsetOutcome::AddedInline => added += 1,
                 HsetOutcome::UpdatedInline => {}
                 HsetOutcome::AddedHeap(w) => {
@@ -205,7 +213,7 @@ impl Store {
                 }
             }
         }
-        self.account_delta(key, delta);
+        self.account_delta_at(Some(slot), delta);
         Ok(added)
     }
 
@@ -226,14 +234,8 @@ impl Store {
         if exists {
             return Ok(false);
         }
-        match self.hset_one(key, field, val)? {
-            HsetOutcome::AddedInline | HsetOutcome::UpdatedInline => Ok(true),
-            HsetOutcome::AddedHeap(w) => {
-                self.account_delta(key, w);
-                Ok(true)
-            }
-            HsetOutcome::UpdatedHeap(_) | HsetOutcome::Rebuilt { .. } => Ok(true),
-        }
+        self.hset(key, &[(field, val)])?;
+        Ok(true)
     }
 
     /// `HDEL` — returns count removed; deletes the key if emptied.
@@ -320,16 +322,14 @@ impl Store {
 
     /// A.8 core: set one `(field, value)` pair, applying the
     /// encoding-switch.
-    fn hset_one(
+    fn hset_at(
         &mut self,
         key: &[u8],
+        at: usize,
         field: &[u8],
         value: &[u8],
     ) -> Result<HsetOutcome, StoreError> {
-        if self.hash_value_for_set(key)?.is_none() {
-            return Ok(self.hset_create(key, field, value));
-        }
-        let v = self.hash_value_for_set(key)?.expect("present and a hash");
+        let v = &mut self.map.entry_at_mut(key, at).expect("the slot live_slot found").value;
         match v {
             Value::SmallHashInline(h) => match h.try_set(field, value) {
                 HAddResult::Added => Ok(HsetOutcome::AddedInline),
@@ -338,11 +338,11 @@ impl Store {
                     let mut promoted = small_hash::promote(h);
                     heap_hash_set(HashRefMut::Flat(&mut promoted), field, value);
                     *v = Value::Hash(Arc::new(promoted));
-                    self.reweigh_entry(key);
+                    self.reweigh_at(at, None);
                     Ok(HsetOutcome::Rebuilt { added: true })
                 }
             },
-            Value::PackedRow(_) => self.hset_packed(key, field, value),
+            Value::PackedRow(_) => self.hset_packed_at(key, at, field, value),
             // Flat hash at the threshold: shard, then set. One-time
             // O(HS_PROMOTE) re-bucket (or clone, if a view pins it now).
             Value::Hash(h) if h.len() >= HS_PROMOTE => {
@@ -350,7 +350,7 @@ impl Store {
                 let mut seg = SegMap::from_flat(flat);
                 let outcome = heap_hash_set(HashRefMut::Seg(&mut seg), field, value);
                 *v = Value::SegHash(Arc::new(seg));
-                self.reweigh_entry(key);
+                self.reweigh_at(at, None);
                 Ok(outcome.rebuilt())
             }
             Value::Hash(h) => Ok(heap_hash_set(HashRefMut::Flat(Arc::make_mut(h)), field, value)),
@@ -359,24 +359,17 @@ impl Store {
         }
     }
 
-    /// Create a fresh entry for `key` holding one pair.
-    fn hset_create(&mut self, key: &[u8], field: &[u8], value: &[u8]) -> HsetOutcome {
-        if let Some(inline) = SmallHashData::with_one(field, value) {
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::SmallHashInline(inline), None),
-            );
-            HsetOutcome::AddedInline
-        } else {
-            let smb_f = SmallBytes::from_slice(field);
-            let mut h = HashData::with_capacity(1);
-            h.insert(smb_f, SmallBytes::from_slice(value));
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::Hash(Arc::new(h)), None),
-            );
-            HsetOutcome::AddedInline
-        }
+    /// Create a fresh entry for `key` holding one pair; its slot.
+    fn hset_create(&mut self, key: &[u8], field: &[u8], value: &[u8]) -> usize {
+        let value = match SmallHashData::with_one(field, value) {
+            Some(inline) => Value::SmallHashInline(inline),
+            None => {
+                let mut h = HashData::with_capacity(1);
+                h.insert(SmallBytes::from_slice(field), SmallBytes::from_slice(value));
+                Value::Hash(Arc::new(h))
+            }
+        };
+        self.insert_entry_at(SmallBytes::from_slice(key), Entry::new(value, None)).0
     }
 }
 

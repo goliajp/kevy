@@ -46,13 +46,18 @@ impl Store {
 
     /// `SADD` — returns the count of newly-added members.
     pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> Result<usize, StoreError> {
-        if members.is_empty() {
+        let Some((first, rest)) = members.split_first() else {
             return Ok(0);
-        }
-        let mut added = 0usize;
+        };
+        // one probe for the whole command: every member then reaches the
+        // set through its slot, which no member's insert can move
+        let (slot, mut added, todo) = match self.live_slot(key) {
+            Some(slot) => (slot, 0usize, members),
+            None => (self.sadd_create(key, first), 1, rest),
+        };
         let mut delta: i64 = 0;
-        for m in members {
-            match self.sadd_one(key, m)? {
+        for m in todo {
+            match self.sadd_at(key, slot, m)? {
                 SaddOutcome::AddedInline => added += 1,
                 SaddOutcome::AddedHeap(w) => {
                     added += 1;
@@ -61,23 +66,23 @@ impl Store {
                 SaddOutcome::AlreadyPresent(grown) => delta += grown,
             }
         }
-        self.account_delta(key, delta);
+        self.account_delta_at(Some(slot), delta);
         Ok(added)
     }
 
-    /// Insert one member; encapsulates the encoding-switch decision.
-    fn sadd_one(&mut self, key: &[u8], m: &[u8]) -> Result<SaddOutcome, StoreError> {
-        if self.set_value_mut(key)?.is_none() {
-            return Ok(self.sadd_create(key, m));
-        }
-        let v = self.set_value_mut(key)?.expect("present and a set type");
+    /// Insert one member into the entry at `slot`; encapsulates the
+    /// encoding-switch decision. A value of another type is refused
+    /// before anything changes.
+    fn sadd_at(&mut self, key: &[u8], slot: usize, m: &[u8]) -> Result<SaddOutcome, StoreError> {
+        let e = self.map.entry_at_mut(key, slot).expect("the slot live_slot found");
+        let v = &mut e.value;
         match v {
             Value::SmallSetInline(s) => match s.try_add(m) {
                 AddResult::Added => Ok(SaddOutcome::AddedInline),
                 AddResult::AlreadyPresent => Ok(SaddOutcome::AlreadyPresent(0)),
                 AddResult::NoRoom => {
                     let outcome = promote_inline_set_and_add(v, m);
-                    self.reweigh_entry(key);
+                    self.reweigh_at(slot, None);
                     Ok(outcome)
                 }
             },
@@ -85,7 +90,7 @@ impl Store {
             // O(HS_PROMOTE) re-bucket (or clone, if a view pins it now).
             Value::Set(s) if s.len() >= HS_PROMOTE => {
                 let added = promote_flat_set_to_seg(v, m);
-                self.reweigh_entry(key);
+                self.reweigh_at(slot, None);
                 // Reweighed from scratch — swallow the per-member delta.
                 if added {
                     Ok(SaddOutcome::AddedHeap(0))
@@ -115,23 +120,17 @@ impl Store {
         }
     }
 
-    /// Create a fresh entry for `key` holding one member.
-    fn sadd_create(&mut self, key: &[u8], m: &[u8]) -> SaddOutcome {
-        if let Some(inline) = SmallSetData::with_one(m) {
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::SmallSetInline(inline), None),
-            );
-        } else {
-            let smb = SmallBytes::from_slice(m);
-            let mut s = SetData::with_capacity(1);
-            s.insert(smb);
-            self.insert_entry(
-                SmallBytes::from_slice(key),
-                Entry::new(Value::Set(Arc::new(s)), None),
-            );
-        }
-        SaddOutcome::AddedInline
+    /// Create a fresh entry for `key` holding one member; its slot.
+    fn sadd_create(&mut self, key: &[u8], m: &[u8]) -> usize {
+        let value = match SmallSetData::with_one(m) {
+            Some(inline) => Value::SmallSetInline(inline),
+            None => {
+                let mut s = SetData::with_capacity(1);
+                s.insert(SmallBytes::from_slice(m));
+                Value::Set(Arc::new(s))
+            }
+        };
+        self.insert_entry_at(SmallBytes::from_slice(key), Entry::new(value, None)).0
     }
 
     /// `SREM` — returns the count removed (deleting an emptied key).
