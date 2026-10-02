@@ -415,11 +415,11 @@ impl<C: Commands> Shard<C> {
             let reap_pending = !self.closing_uring_conns.is_empty();
             if !io_work && did_inbound == 0 && !has_backlog && !reap_pending {
                 // Forwarded requests outstanding: spin while replies are
-                // expected soon, park once waiting costs more than the
-                // owner's wake (see `ReplyWait`).
+                // expected soon, then nap without announcing a park, so the
+                // owner never pays to wake this shard (see `ReplyWait`).
                 if self.xshard_inflight > 0 {
                     if reply_wait.idle(std::time::Instant::now) == IdleStep::Park {
-                        self.uring_park(&mut ring, &mut park)?;
+                        ring.wait_timeout(reply_wait.nap())?;
                         woke_from_park = true;
                     } else {
                         std::hint::spin_loop();
