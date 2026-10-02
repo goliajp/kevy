@@ -10,11 +10,17 @@
 //! assert_eq!(out, b"+OK\r\n");
 //! ```
 
+pub use crate::mpop::{blmpop, bzmpop, lmpop, zmpop};
+pub use crate::multiread::{lcs, zcombine};
 #[cfg(feature = "streams-geo")]
 pub use crate::stream::xinfo;
 #[cfg(feature = "streams-geo")]
 pub use crate::stream::xreadgroup_refusal;
 pub use crate::stream_resp3::stream_resp3;
 pub use crate::strings::set;
+pub use crate::zrange::zrange;
 pub use crate::zset::parse_zadd_flags;
-pub use crate::zset_range::{zrange, zrangebyscore};
+pub use crate::zset_pick::{
+    bzpopmax, bzpopmin, zmscore, zpopmax, zpopmin, zrandmember, zrank, zrevrank,
+};
+pub use crate::zset_range::zrangebyscore;

@@ -297,14 +297,15 @@ fn brpoplpush_parks_then_serves_a_later_push_to_the_right_shard() {
 }
 
 /// A blocking move that never gets an element times out with nil — and does
-/// not leave the destination behind.
+/// not leave the destination behind. The nil is the null array, as Redis
+/// answers every blocking timeout, though a served move replies a bulk.
 #[test]
 fn brpoplpush_times_out_with_nil() {
     let srv = Server::start(SHARDS);
     let mut c = srv.connect();
     call(&mut c, &[b"DEL", b"to:src", b"to:dst"]);
     let t0 = std::time::Instant::now();
-    assert_eq!(call(&mut c, &[b"BRPOPLPUSH", b"to:src", b"to:dst", b"1"]), b"$-1\r\n");
+    assert_eq!(call(&mut c, &[b"BRPOPLPUSH", b"to:src", b"to:dst", b"1"]), b"*-1\r\n");
     let dt = t0.elapsed();
     assert!(dt >= std::time::Duration::from_millis(800), "returned too early: {dt:?}");
     assert_eq!(call(&mut c, &[b"EXISTS", b"to:dst"]), b":0\r\n");

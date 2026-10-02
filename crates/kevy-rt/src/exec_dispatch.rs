@@ -187,7 +187,8 @@ impl<C: Commands> Shard<C> {
             match reply {
                 Ok(true) => {}
                 Ok(false) => {
-                    conn.output.extend_from_slice(b"$-1\r\n");
+                    let nil: &[u8] = if proto == RespVersion::V3 { b"_\r\n" } else { b"$-1\r\n" };
+                    conn.output.extend_from_slice(nil);
                 }
                 Err(_) => {
                     // WRONGTYPE — only error a string-only GET can hit
@@ -310,8 +311,8 @@ impl<C: Commands> Shard<C> {
         // fast path: that path's wake serves the replay through a LOCAL
         // dispatch, which is the very thing that loses the element. Force it
         // through the arbiter, whose serve runs the orchestrator.
-        let xshard_dst = kind == crate::BlockKind::Brpoplpush
-            && args.len() == 4
+        let xshard_dst = matches!(kind, crate::BlockKind::Brpoplpush | crate::BlockKind::Blmove)
+            && args.len() > 2
             && !keys.is_empty()
             && self.shard_of(&args[2]) != self.shard_of(&keys[0]);
 
@@ -378,10 +379,10 @@ impl<C: Commands> Shard<C> {
         // read: the override and the Lua wake buffer are only taken when
         // something armed them since the last write.
         let armed = crate::propagation::take_armed();
-        let prop = if armed {
-            crate::propagation::take_override()
+        let (prop, notify) = if armed {
+            (crate::propagation::take_override(), crate::propagation::take_notify())
         } else {
-            crate::propagation::Propagate::AsIs
+            (crate::propagation::Propagate::AsIs, None)
         };
         if matches!(prop, crate::propagation::Propagate::AsIs) {
             // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
@@ -415,7 +416,7 @@ impl<C: Commands> Shard<C> {
         } else {
             self.record_propagation_override(prop, args);
         }
-        self.maybe_notify_dispatch(args);
+        self.maybe_notify_dispatch(args, notify);
         // BLOCK wake: if this write targets a key a waiter is parked on,
         // wake it. Gated on `wake_idx` (None for non-wake writes), so a
         // None-only workload pays one Option discriminant check per write.

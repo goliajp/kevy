@@ -36,9 +36,12 @@ pub mod geo;
 mod hash;
 mod hash_ttl;
 mod keyspace;
+mod lcs;
 mod list;
 mod list_move;
+pub mod mpop;
 pub mod multikey;
+mod multiread;
 mod record;
 mod record_group;
 mod record_read;
@@ -49,7 +52,9 @@ mod stream;
 mod stream_resp3;
 mod strings;
 mod verbs;
+mod zrange;
 mod zset;
+mod zset_pick;
 mod zset_range;
 
 pub use verbs::{VERBS, Verb, is_streams_geo, is_write, verb};
@@ -331,6 +336,15 @@ pub fn exec<A: ArgvView + ?Sized>(
         return Some(e);
     }
     if let Some(e) = set::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = multiread::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = mpop::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = zset_pick::exec(verb, store, args, out) {
         return Some(e);
     }
     if let Some(e) = zset::exec(verb, store, args, out) {

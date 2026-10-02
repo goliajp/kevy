@@ -8,9 +8,12 @@
 use kevy_resp::{ArgvView, CmdError};
 use kevy_store::{BitOp, ZAggregate};
 
-/// A parsed `VERB dst numkeys key… [WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]`:
-/// the destination is argument 1, the keys arguments `3..3 + numkeys`.
+/// A parsed zset combination: `[dst] numkeys key… [WEIGHTS w…]
+/// [AGGREGATE SUM|MIN|MAX] [WITHSCORES]`. The `*STORE` forms put the
+/// destination at argument 1 and the keys at `3..3 + numkeys`; the reply
+/// forms (`ZINTER` / `ZUNION` / `ZDIFF`) the keys at `2..2 + numkeys`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ZStoreArgs {
     /// How many source keys follow the count.
     pub numkeys: usize,
@@ -18,63 +21,126 @@ pub struct ZStoreArgs {
     pub weights: Option<Vec<f64>>,
     /// How scores of one member combine across the sources.
     pub aggregate: ZAggregate,
+    /// A reply form asked for the scores too.
+    pub withscores: bool,
 }
 
-/// `ZINTERSTORE` / `ZUNIONSTORE`, and `ZDIFFSTORE` when `diff_form` (it
-/// takes neither WEIGHTS nor AGGREGATE).
+/// Which of the six combination commands is being parsed.
+#[derive(Clone, Copy)]
+struct Form {
+    name: &'static str,
+    store: bool,
+    diff: bool,
+}
+
+/// `ZINTERSTORE` / `ZUNIONSTORE`.
 ///
 /// ```
 /// use kevy_resp::Argv;
 /// use kevy_verbs::multikey::parse_zstore;
 /// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
-/// let z = parse_zstore(&a(&["ZUNIONSTORE", "d", "2", "a", "b", "WEIGHTS", "1", "2"]), false)?;
+/// let z = parse_zstore(&a(&["ZUNIONSTORE", "d", "2", "a", "b", "WEIGHTS", "1", "2"]))?;
 /// assert_eq!((z.numkeys, z.weights), (2, Some(vec![1.0, 2.0])));
-/// assert!(parse_zstore(&a(&["ZDIFFSTORE", "d", "1", "a", "WEIGHTS", "1"]), true).is_err());
 /// # Ok::<(), kevy_resp::CmdError>(())
 /// ```
-pub fn parse_zstore<A: ArgvView + ?Sized>(
-    args: &A,
-    diff_form: bool,
-) -> Result<ZStoreArgs, CmdError> {
-    if args.len() < 4 {
-        return Err(CmdError::Wire("ERR wrong number of arguments"));
+pub fn parse_zstore<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    let inter = args[0].eq_ignore_ascii_case(b"ZINTERSTORE");
+    let name = if inter { "zinterstore" } else { "zunionstore" };
+    combine(args, Form { name, store: true, diff: false })
+}
+
+/// `ZDIFFSTORE`: the same shape, but neither WEIGHTS nor AGGREGATE.
+///
+/// ```
+/// use kevy_resp::Argv;
+/// use kevy_verbs::multikey::parse_zdiffstore;
+/// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
+/// assert_eq!(parse_zdiffstore(&a(&["ZDIFFSTORE", "d", "2", "a", "b"]))?.numkeys, 2);
+/// assert!(parse_zdiffstore(&a(&["ZDIFFSTORE", "d", "1", "a", "WEIGHTS", "1"])).is_err());
+/// # Ok::<(), kevy_resp::CmdError>(())
+/// ```
+pub fn parse_zdiffstore<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    combine(args, Form { name: "zdiffstore", store: true, diff: true })
+}
+
+/// `ZINTER` / `ZUNION numkeys key… [WEIGHTS w…] [AGGREGATE …] [WITHSCORES]`.
+///
+/// ```
+/// use kevy_resp::Argv;
+/// use kevy_verbs::multikey::parse_zcombine;
+/// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
+/// let z = parse_zcombine(&a(&["ZINTER", "2", "a", "b", "WITHSCORES"]))?;
+/// assert_eq!((z.numkeys, z.withscores), (2, true));
+/// # Ok::<(), kevy_resp::CmdError>(())
+/// ```
+pub fn parse_zcombine<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    let name = if args[0].eq_ignore_ascii_case(b"ZINTER") { "zinter" } else { "zunion" };
+    combine(args, Form { name, store: false, diff: false })
+}
+
+/// `ZDIFF numkeys key… [WITHSCORES]`.
+///
+/// ```
+/// use kevy_resp::Argv;
+/// use kevy_verbs::multikey::parse_zdiff;
+/// let a = |v: &[&str]| Argv::from(v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>());
+/// assert!(parse_zdiff(&a(&["ZDIFF", "1", "a", "AGGREGATE", "MIN"])).is_err());
+/// ```
+pub fn parse_zdiff<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreArgs, CmdError> {
+    combine(args, Form { name: "zdiff", store: false, diff: true })
+}
+
+fn combine<A: ArgvView + ?Sized>(args: &A, form: Form) -> Result<ZStoreArgs, CmdError> {
+    let at = if form.store { 2 } else { 1 };
+    let syntax = || CmdError::Wire("ERR syntax error");
+    let numkeys = match args.get(at).map(crate::args::arg_i64) {
+        Some(Some(n)) if n >= 1 => n as usize,
+        Some(Some(_)) => return Err(CmdError::Wire(at_least_one(form.name))),
+        _ => return Err(CmdError::Wire("ERR value is not an integer or out of range")),
+    };
+    if args.len() < at + 1 + numkeys {
+        return Err(syntax());
     }
-    let numkeys = parse_numkeys(&args[2])?;
-    if args.len() < 3 + numkeys {
-        return Err(CmdError::Wire("ERR Number of keys can't be greater than number of args"));
-    }
-    let mut weights = None;
-    let mut aggregate = ZAggregate::Sum;
-    let mut i = 3 + numkeys;
+    let (mut weights, mut aggregate, mut withscores) = (None, ZAggregate::Sum, false);
+    let mut i = at + 1 + numkeys;
     while i < args.len() {
         let a = &args[i];
-        if !diff_form && a.eq_ignore_ascii_case(b"WEIGHTS") {
+        if !form.diff && a.eq_ignore_ascii_case(b"WEIGHTS") {
             if args.len() < i + 1 + numkeys {
-                return Err(CmdError::Wire("ERR syntax error"));
+                return Err(syntax());
             }
-            let mut w = Vec::with_capacity(numkeys);
-            for j in 0..numkeys {
-                let v = std::str::from_utf8(&args[i + 1 + j])
-                    .ok()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .ok_or("ERR weight value is not a float")?;
-                w.push(v);
-            }
-            weights = Some(w);
+            let w: Option<Vec<f64>> = (0..numkeys)
+                .map(|j| std::str::from_utf8(&args[i + 1 + j]).ok()?.parse::<f64>().ok())
+                .collect();
+            weights = Some(w.ok_or("ERR weight value is not a float")?);
             i += 1 + numkeys;
-        } else if !diff_form && a.eq_ignore_ascii_case(b"AGGREGATE") {
-            aggregate = match args.get(i + 1).ok_or("ERR syntax error")? {
+        } else if !form.diff && a.eq_ignore_ascii_case(b"AGGREGATE") {
+            aggregate = match args.get(i + 1).ok_or_else(syntax)? {
                 m if m.eq_ignore_ascii_case(b"SUM") => ZAggregate::Sum,
                 m if m.eq_ignore_ascii_case(b"MIN") => ZAggregate::Min,
                 m if m.eq_ignore_ascii_case(b"MAX") => ZAggregate::Max,
-                _ => return Err(CmdError::Wire("ERR syntax error")),
+                _ => return Err(syntax()),
             };
             i += 2;
+        } else if !form.store && a.eq_ignore_ascii_case(b"WITHSCORES") {
+            withscores = true;
+            i += 1;
         } else {
-            return Err(CmdError::Wire("ERR syntax error"));
+            return Err(syntax());
         }
     }
-    Ok(ZStoreArgs { numkeys, weights, aggregate })
+    Ok(ZStoreArgs { numkeys, weights, aggregate, withscores })
+}
+
+fn at_least_one(name: &str) -> &'static str {
+    match name {
+        "zinterstore" => "ERR at least 1 input key is needed for 'zinterstore' command",
+        "zunionstore" => "ERR at least 1 input key is needed for 'zunionstore' command",
+        "zdiffstore" => "ERR at least 1 input key is needed for 'zdiffstore' command",
+        "zinter" => "ERR at least 1 input key is needed for 'zinter' command",
+        "zunion" => "ERR at least 1 input key is needed for 'zunion' command",
+        _ => "ERR at least 1 input key is needed for 'zdiff' command",
+    }
 }
 
 /// `ZINTERCARD numkeys key… [LIMIT n]`: the key count (keys are arguments

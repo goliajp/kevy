@@ -27,6 +27,7 @@ impl<C: Commands> Shard<C> {
         }
         if let Some(flags) = live.notify_flags {
             self.notify_flags = flags;
+            crate::propagation::set_notify_wanted(flags.is_active());
             // Mirror the store-origin event classes into the store's
             // capture mask (all-off keeps every store hook at a single
             // byte test). Channel gating still happens at publish time.
@@ -36,6 +37,7 @@ impl<C: Commands> Shard<C> {
                 (crate::NotificationFlags::NEW_KEY, K::New),
                 (crate::NotificationFlags::EXPIRED, K::Expired),
                 (crate::NotificationFlags::EVICTED, K::Evicted),
+                (crate::NotificationFlags::GENERIC, K::Emptied),
             ];
             self.store.set_notify_capture(
                 classes.into_iter().filter(|(f, _)| on && flags.contains(*f)).map(|(_, k)| k),

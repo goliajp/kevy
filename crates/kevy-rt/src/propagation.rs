@@ -122,6 +122,65 @@ thread_local! {
     /// with no lazy-init check; the post-write step reads only this on a
     /// deterministic non-Lua write.
     static ARMED: Cell<bool> = const { Cell::new(false) };
+    /// The keyspace events the command currently executing asked for in
+    /// place of its default one.
+    static NOTIFY: Cell<Option<Notify>> = const { Cell::new(None) };
+    /// Whether this shard publishes keyspace events at all.
+    static NOTIFY_WANTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the shard running on this thread publishes keyspace events:
+/// with them off, a verb body need not work out which events it would
+/// ask for.
+///
+/// ```
+/// // a thread that is no shard publishes nothing
+/// assert!(!kevy_rt::propagation::notify_wanted());
+/// ```
+#[inline]
+pub fn notify_wanted() -> bool {
+    NOTIFY_WANTED.with(Cell::get)
+}
+
+pub(crate) fn set_notify_wanted(on: bool) {
+    NOTIFY_WANTED.with(|c| c.set(on));
+}
+
+/// The keyspace events a write publishes when not its default — its verb,
+/// lower-cased, on argument 1.
+///
+/// ```
+/// use kevy_rt::propagation::Notify;
+/// // `BLPOP a b 0` that popped from `b` is an `lpop` on `b`
+/// let popped = Notify::Events(vec![(kevy_rt::NotifyKind::List, "lpop", b"b".to_vec())]);
+/// assert_ne!(popped, Notify::Suppress);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Notify {
+    /// The write changed nothing: no event at all.
+    Suppress,
+    /// These events, in order, each `(class, event name, key)`.
+    Events(Vec<(crate::NotifyKind, &'static str, Vec<u8>)>),
+}
+
+/// Ask for `n` in place of the executing write's default keyspace event.
+/// Taken by that write's post-write step, like [`set_override`].
+///
+/// ```
+/// use kevy_rt::propagation::{Notify, discard_override, set_notify};
+/// // a pop that found nothing publishes nothing
+/// set_notify(Notify::Suppress);
+/// # discard_override();
+/// ```
+pub fn set_notify(n: Notify) {
+    NOTIFY.with(|c| c.set(Some(n)));
+    arm();
+}
+
+/// Take (and clear) the pending keyspace-event override.
+pub(crate) fn take_notify() -> Option<Notify> {
+    NOTIFY.with(Cell::take)
 }
 
 /// Note that a post-write input (override, deferred record, Lua wake key)
@@ -210,6 +269,7 @@ pub(crate) fn take_override() -> Propagate {
 pub fn discard_override() {
     OVERRIDE.with(Cell::take);
     DEFERRED.with(Cell::take);
+    NOTIFY.with(Cell::take);
 }
 
 #[cfg(test)]

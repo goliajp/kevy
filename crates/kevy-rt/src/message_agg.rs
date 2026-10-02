@@ -11,6 +11,37 @@ use std::collections::HashMap;
 /// Accumulator for a command's (possibly multi-shard) result.
 pub(crate) enum Agg {
     First(Option<SmallReply>),
+    /// A [`crate::Route::FirstHit`] pop across shards: the per-key
+    /// commands still to try, from `next` on, and the reply of the try in
+    /// flight once it lands.
+    FirstHit {
+        tries: Vec<(usize, Argv)>,
+        next: usize,
+        got: Option<SmallReply>,
+    },
+    /// A cross-shard `MSETNX` asking whether any key exists: the pairs to
+    /// set, by shard, once none does, and how many existed so far.
+    MSetNx {
+        pairs: Vec<(usize, crate::message::KvPairs)>,
+        existing: i64,
+    },
+    /// A cross-shard `SMOVE`: which step it is in, the keys and member,
+    /// and the last step's answer.
+    SetMove {
+        step: u8,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        member: Vec<u8>,
+        answer: i64,
+    },
+    /// A [`crate::Route::ReadAcross`] read: the command, and the copies of
+    /// its keys as they come in from their shards.
+    ReadAcross {
+        argv: Argv,
+        got: HashMap<Vec<u8>, Gathered>,
+        /// The key a [`crate::Route::StoreFromCopies`] writes.
+        dst: Option<Vec<u8>>,
+    },
     SumInt(i64),
     /// `WAIT` accumulator: MIN over the per-shard acked-replica
     /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).
@@ -246,6 +277,8 @@ pub(crate) enum Agg {
         /// empty, and the move ends there with a nil reply. `Err(())` = the
         /// source is not a list.
         taken: Option<Result<Option<Vec<u8>>, ()>>,
+        /// Step 1 emptied the source: its `del` follows the move's events.
+        src_emptied: bool,
         /// Step 2's verdict, `Some(false)` when the destination refused.
         pushed: Option<bool>,
     },

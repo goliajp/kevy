@@ -196,3 +196,39 @@ fn hello_3_proto_is_per_conn() {
     assert_eq!(&v3_head, b"%7\r\n", "v3 conn should see Map header");
     assert_eq!(&v2_head, b"*14\r", "v2 conn should see Array header");
 }
+
+/// Read until the stream's bytes end with `tail`.
+fn read_through(s: &mut std::net::TcpStream, tail: &[u8]) -> Vec<u8> {
+    let mut got = Vec::new();
+    let mut b = [0u8; 512];
+    while !got.ends_with(tail) {
+        let n = s.read(&mut b).unwrap();
+        assert!(n > 0, "closed before {:?}", String::from_utf8_lossy(tail));
+        got.extend_from_slice(&b[..n]);
+    }
+    got
+}
+
+/// An EXEC whose WATCH fired is a null reply, and RESP3 has one null:
+/// `_`. RESP2 keeps its null array.
+#[test]
+fn aborted_exec_answers_in_the_conns_protocol() {
+    let srv = Server::start(4);
+    let mut other = srv.connect();
+    for (hello, nil) in [(&b"3"[..], &b"_\r\n"[..]), (b"2", b"*-1\r\n")] {
+        let mut c = srv.connect();
+        c.write_all(&req(&[b"HELLO", hello])).unwrap();
+        c.write_all(&req(&[b"PING"])).unwrap();
+        read_through(&mut c, b"+PONG\r\n");
+        c.write_all(&req(&[b"WATCH", b"w"])).unwrap();
+        read_through(&mut c, b"+OK\r\n");
+        other.write_all(&req(&[b"SET", b"w", b"1"])).unwrap();
+        read_through(&mut other, b"+OK\r\n");
+        c.write_all(&req(&[b"MULTI"])).unwrap();
+        c.write_all(&req(&[b"GET", b"w"])).unwrap();
+        c.write_all(&req(&[b"EXEC"])).unwrap();
+        let mut want = b"+OK\r\n+QUEUED\r\n".to_vec();
+        want.extend_from_slice(nil);
+        assert_eq!(read_n(&mut c, want.len()), want, "HELLO {}", hello[0] as char);
+    }
+}

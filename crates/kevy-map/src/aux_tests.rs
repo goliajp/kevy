@@ -96,7 +96,7 @@ fn an_occupied_entry_reads_and_writes_its_word_in_one_probe() {
     match m.raw_entry_mut(&3) {
         RawEntryMut::Occupied(mut o) => {
             assert_eq!(o.aux(), Some(0));
-            let (v, w) = o.get_mut_with_aux();
+            let (v, w) = o.value_and_aux_mut();
             *v += 1;
             *w.unwrap() = 7;
             assert_eq!(o.aux(), Some(7));

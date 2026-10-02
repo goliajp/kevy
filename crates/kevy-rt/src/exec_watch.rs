@@ -206,7 +206,8 @@ impl<C: Commands> Shard<C> {
             if let Some(c) = self.conns.get_mut(&conn_id) {
                 let base_idx = (header_seq - c.next_emit) as usize;
                 if let Some(h) = c.pending.get_mut(base_idx) {
-                    h.done = Some(SmallReply::from_slice(b"*-1\r\n"));
+                    let nil: &[u8] = if h.proto == RespVersion::V3 { b"_\r\n" } else { b"*-1\r\n" };
+                    h.done = Some(SmallReply::from_slice(nil));
                 }
                 for i in 0..n {
                     if let Some(p) = c.pending.get_mut(base_idx + 1 + i) {

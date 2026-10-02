@@ -178,6 +178,8 @@ mod value_cold;
 mod value_enum;
 mod zset;
 mod zset_algebra;
+mod zset_lex;
+mod zset_pick;
 mod zset_range;
 pub mod zset_seg;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
@@ -193,6 +195,7 @@ pub use string::{GetReply, GetShared};
 pub use util::glob_match;
 pub use value::*;
 pub use zset_flags::{ZaddFlags, ZaddReport};
+pub use zset_lex::LexBound;
 
 /// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
 /// `Instant`. The embedding host advances time (ns since an arbitrary fixed

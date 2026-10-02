@@ -74,6 +74,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             Effect::Write
         }
         b"MSET" => mset(store, args, out),
+        b"MSETNX" => msetnx(store, args, out),
         b"RENAME" => rename(store, args, false, out),
         b"RENAMENX" => rename(store, args, true, out),
         _ => return None,
@@ -164,6 +165,24 @@ fn mset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) ->
         i += 2;
     }
     encode_simple_string(out, "OK");
+    Effect::Write
+}
+
+/// `MSETNX key value [key value …]`: every pair, or — when any of the
+/// keys exists — none.
+fn msetnx<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
+        wrong_args(out, "msetnx");
+        return Effect::Unchanged;
+    }
+    if (1..args.len()).step_by(2).any(|i| store.key_exists(&args[i])) {
+        encode_integer(out, 0);
+        return Effect::Unchanged;
+    }
+    for i in (1..args.len()).step_by(2) {
+        store.set(&args[i], args[i + 1].to_vec(), None, kevy_store::SetCondition::Always);
+    }
+    encode_integer(out, 1);
     Effect::Write
 }
 

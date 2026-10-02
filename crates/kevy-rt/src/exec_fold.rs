@@ -6,6 +6,7 @@ use crate::Commands;
 use crate::message::{Agg, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
+use kevy_resp::RespVersion;
 
 impl<C: Commands> Shard<C> {
     /// Fold a sub-result into its slot; emit completed replies in seq order.
@@ -25,6 +26,16 @@ impl<C: Commands> Shard<C> {
                 return; // already emitted (defensive — shouldn't happen)
             }
             let idx = (seq - conn.next_emit) as usize;
+            // a reply built outside the dispatch (an orchestrated op, an
+            // error, a pubsub ack) carries RESP2 nulls
+            let part = match part {
+                Part::Reply(b)
+                    if conn.pending.get(idx).is_some_and(|s| s.proto == RespVersion::V3) =>
+                {
+                    Part::Reply(b.resp3_nulls())
+                }
+                part => part,
+            };
             // The in-order single-target reply — the forwarded GET/SET of a
             // pipeline — goes straight to the output: no aggregator, no
             // stored copy, no materialise.
@@ -171,13 +182,21 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard COPY: step 1's clone, then step 2's verdict.
                 (Agg::CopyOrchestrator { read, .. }, Part::CopyRead(r)) => *read = Some(r),
+                (Agg::FirstHit { got, .. }, Part::Reply(b)) => *got = Some(b),
+                (Agg::ReadAcross { got, .. }, Part::Gathered(pairs)) => got.extend(pairs),
+                (Agg::SetMove { answer, .. }, Part::Int(n)) => *answer = n,
+                (Agg::MSetNx { existing, .. }, Part::Int(n)) => *existing += n,
                 (Agg::CopyOrchestrator { stored, .. }, Part::CopyPutDone { stored: st }) => {
                     *stored = Some(st);
                 }
                 // Cross-shard list move: buffer each step's result in the agg
                 // so finalize can decide the next hop.
-                (Agg::ListMoveOrchestrator { taken, .. }, Part::ListMoveTaken(r)) => {
-                    *taken = Some(r)
+                (
+                    Agg::ListMoveOrchestrator { taken, src_emptied, .. },
+                    Part::ListMoveTaken(r, emptied),
+                ) => {
+                    *taken = Some(r);
+                    *src_emptied = emptied;
                 }
                 (Agg::ListMoveOrchestrator { pushed, .. }, Part::ListMovePushed { refused }) => {
                     *pushed = Some(refused.is_none())
@@ -197,6 +216,10 @@ impl<C: Commands> Shard<C> {
                         | Agg::RenameOrchestrator { .. }
                         | Agg::ListMoveOrchestrator { .. }
                         | Agg::CopyOrchestrator { .. }
+                        | Agg::FirstHit { .. }
+                        | Agg::ReadAcross { .. }
+                        | Agg::SetMove { .. }
+                        | Agg::MSetNx { .. }
                         | Agg::BitOpGather { .. }
                         | Agg::ZStoreGather { .. }
                         | Agg::GeoStore { .. }
@@ -222,6 +245,18 @@ impl<C: Commands> Shard<C> {
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ListMoveOrchestrator { .. } => self.finalize_list_move_agg(conn_id, seq, agg),
                 Agg::CopyOrchestrator { .. } => self.finalize_copy_agg(conn_id, seq, agg),
+                Agg::FirstHit { tries, next, got } => {
+                    self.finalize_first_hit(conn_id, seq, tries, next, got);
+                }
+                Agg::MSetNx { pairs, existing } => {
+                    self.finalize_msetnx(conn_id, seq, pairs, existing)
+                }
+                Agg::SetMove { step, src, dst, member, answer } => {
+                    self.finalize_set_move(conn_id, seq, step, (src, dst, member), answer);
+                }
+                Agg::ReadAcross { argv, got, dst } => {
+                    self.finalize_read_across(conn_id, seq, &argv, got, dst);
+                }
                 Agg::BitOpGather { .. } => self.finalize_bitop_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),

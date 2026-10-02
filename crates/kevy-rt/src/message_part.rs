@@ -86,8 +86,10 @@ pub(crate) enum Part {
         stored: bool,
     },
     /// Cross-shard list move step 1: the popped element, or `None` when the
-    /// source was empty/absent. `Err(())` = the source is not a list.
-    ListMoveTaken(Result<Option<Vec<u8>>, ()>),
+    /// source was empty/absent. `Err(())` = the source is not a list. The
+    /// flag says the pop emptied the source, whose `del` event then waits
+    /// for the move to finish.
+    ListMoveTaken(Result<Option<Vec<u8>>, ()>, bool),
     /// Cross-shard list move step 2: `refused` is `None` when the push
     /// landed. `Some(value)` when the destination exists and is not a list
     /// — the element comes back so the orchestrator can restore the source.

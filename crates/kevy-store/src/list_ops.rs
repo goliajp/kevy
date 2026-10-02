@@ -17,28 +17,19 @@ impl Store {
     /// the tail of `src` and push it onto the head of `dst`. Returns the
     /// moved element, or `None` if `src` was empty / absent.
     ///
-    /// When `src == dst` Redis defines the result as a rotation
-    /// (tail → head of the same list), which falls out of this code
-    /// naturally because the pop sees the pre-rotation tail.
+    /// When `src == dst` Redis defines the result as a rotation (tail →
+    /// head of the same list).
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.rpush(b"q", &[b"only".as_slice()])?;
+    /// s.expire(b"q", std::time::Duration::from_secs(100));
+    /// assert_eq!(s.rpoplpush(b"q", b"q")?, Some(b"only".to_vec()));
+    /// assert!(s.pttl(b"q") > 0, "the rotation keeps the key and its TTL");
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
     pub fn rpoplpush(&mut self, src: &[u8], dst: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
-        // WRONGTYPE pre-check on dst: if dst exists but isn't a list,
-        // we must reject BEFORE consuming the src element (Redis: the
-        // pop is reverted on WRONGTYPE at the destination).
-        match self.live_entry(dst) {
-            None => {}
-            Some(e) => match &e.value {
-                Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => {}
-                _ => return Err(StoreError::WrongType),
-            },
-        }
-        let mut popped = self.rpop(src, 1)?;
-        let Some(v) = popped.pop() else {
-            return Ok(None);
-        };
-        // Push to the head of dst. `lpush` returns the new
-        // length; we want the popped value back to the caller.
-        self.lpush(dst, &[v.as_slice()])?;
-        Ok(Some(v))
+        self.lmove(src, dst, ListEnd::Right, ListEnd::Left)
     }
 
     /// `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` — generalised
@@ -51,12 +42,20 @@ impl Store {
         from: ListEnd,
         to: ListEnd,
     ) -> Result<Option<Vec<u8>>, StoreError> {
+        // WRONGTYPE pre-check on dst: if dst exists but isn't a list,
+        // reject BEFORE consuming the src element (Redis: the pop is
+        // reverted on WRONGTYPE at the destination).
         match self.live_entry(dst) {
             None => {}
             Some(e) => match &e.value {
                 Value::List(_) | Value::SegList(_) | Value::SmallListInline(_) => {}
                 _ => return Err(StoreError::WrongType),
             },
+        }
+        // rotating a one-element list leaves it as it was; popping first
+        // would empty it, drop the key and its TTL, then make a new one
+        if src == dst && self.llen(src)? == 1 {
+            return self.lindex(src, 0);
         }
         let mut popped = match from {
             ListEnd::Left => self.lpop(src, 1)?,

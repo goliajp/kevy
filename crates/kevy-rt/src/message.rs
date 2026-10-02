@@ -253,6 +253,38 @@ pub(crate) enum Op {
         argv: Argv,
         write: bool,
     },
+    /// One key's try of a [`crate::Route::FirstHit`] pop: `argv` is the
+    /// command naming that key alone, run in the waiting conn's protocol
+    /// as a write. Reply: [`Part::Reply`], null when the key held nothing.
+    FirstHitTry {
+        argv: Argv,
+        proto: RespVersion,
+    },
+    /// `SMOVE` step 1, on the destination's shard: is `key` a set or
+    /// absent? Reply [`Part::Int`]: 1 yes, 0 no.
+    SetMoveCheck(Vec<u8>),
+    /// `SMOVE` step 2, on the source's shard: Redis's checks, then the
+    /// removal. Reply [`Part::Int`]: 1 removed, 0 the reply is 0, -1 the
+    /// reply is WRONGTYPE.
+    SetMoveTake {
+        src: Vec<u8>,
+        member: Vec<u8>,
+        dst_is_set: bool,
+    },
+    /// `SMOVE` step 3 (and its undo): add `member` to `key`. Reply
+    /// [`Part::Int`]: 1 added or there, -1 `key` is not a set.
+    SetMovePut {
+        key: Vec<u8>,
+        member: Vec<u8>,
+    },
+    /// Place a value computed elsewhere at `key`, replacing whatever it
+    /// held, and announce it as `event` of `class`. Reply [`Part::Ok`].
+    StoreValue {
+        key: Vec<u8>,
+        value: kevy_store::Value,
+        event: Vec<u8>,
+        class: Option<crate::NotifyKind>,
+    },
     /// The check an `XREADGROUP` split across shards runs on each
     /// stream's shard before any is read: `argv` is the same
     /// single-stream rewrite [`Op::XReadOne`] would run, only checked
@@ -283,36 +315,6 @@ pub(crate) enum SmallReply {
         off: u32,
         len: u32,
     },
-}
-
-impl SmallReply {
-    /// Copy `b` into the inline arm when it fits, else one heap alloc.
-    #[inline]
-    pub(crate) fn from_slice(b: &[u8]) -> Self {
-        if b.len() <= 30 {
-            let mut buf = [0u8; 30];
-            buf[..b.len()].copy_from_slice(b);
-            SmallReply::Inline { len: b.len() as u8, buf }
-        } else {
-            SmallReply::Heap(b.to_vec())
-        }
-    }
-
-    /// Wrap an already-owned `Vec` — zero-copy for the heap arm.
-    #[inline]
-    pub(crate) fn from_vec(v: Vec<u8>) -> Self {
-        SmallReply::Heap(v)
-    }
-
-    /// The reply's bytes; `parked` is the owning conn's parked buffer.
-    #[inline]
-    pub(crate) fn bytes<'a>(&'a self, parked: &'a [u8]) -> &'a [u8] {
-        match self {
-            SmallReply::Inline { len, buf } => &buf[..*len as usize],
-            SmallReply::Heap(v) => v,
-            SmallReply::Parked { off, len } => &parked[*off as usize..(*off + *len) as usize],
-        }
-    }
 }
 
 /// A batch of single-key dispatches forwarded to one owning shard:

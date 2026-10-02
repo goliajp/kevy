@@ -76,26 +76,51 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             }
         }
         b"ZPOPMIN" => {
-            if (2..=3).contains(&args.len()) {
-                let count = if args.len() == 3 {
-                    match arg_i64(&args[2]) {
-                        Some(c) if c >= 0 => c as usize,
-                        Some(_) => {
-                            encode_error(out, "ERR value is out of range, must be positive");
-                            return true;
-                        }
-                        None => {
-                            encode_error(out, "ERR value is not an integer or out of range");
-                            return true;
-                        }
-                    }
-                } else {
-                    1
-                };
-                emit_zpopmin_resp3(store.zpopmin(&args[1], count), out);
-            } else {
-                wrong_args(out, "zpopmin");
-            }
+            kevy_verbs::cmd::zpopmin(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZPOPMAX" => {
+            kevy_verbs::cmd::zpopmax(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZRANK" => {
+            kevy_verbs::cmd::zrank(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZREVRANK" => {
+            kevy_verbs::cmd::zrevrank(store, args, out, RespVersion::V3);
+            true
+        }
+        b"BZPOPMIN" => {
+            kevy_verbs::cmd::bzpopmin(store, args, out, RespVersion::V3);
+            true
+        }
+        b"BZPOPMAX" => {
+            kevy_verbs::cmd::bzpopmax(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZMPOP" => {
+            kevy_verbs::cmd::zmpop(store, args, out, RespVersion::V3);
+            true
+        }
+        b"BZMPOP" => {
+            kevy_verbs::cmd::bzmpop(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZINTER" | b"ZUNION" | b"ZDIFF" => {
+            kevy_verbs::cmd::zcombine(store, args, out, RespVersion::V3);
+            true
+        }
+        b"LCS" => {
+            kevy_verbs::cmd::lcs(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZMSCORE" => {
+            kevy_verbs::cmd::zmscore(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZRANDMEMBER" => {
+            kevy_verbs::cmd::zrandmember(store, args, out, RespVersion::V3);
             true
         }
         b"SPOP" if args.len() == 3 => {
@@ -166,12 +191,8 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
         // a Double `,N`), vs the V2 flat interleaved bulk array. The
         // no-WITHSCORES form is the same plain `*N` array of bulks on
         // both protos (the zrange body handles that branch internally).
-        b"ZRANGE" => {
+        b"ZRANGE" | b"ZREVRANGE" | b"ZRANGEBYSCORE" | b"ZREVRANGEBYSCORE" => {
             kevy_verbs::cmd::zrange(store, args, out, RespVersion::V3);
-            true
-        }
-        b"ZRANGEBYSCORE" => {
-            kevy_verbs::cmd::zrangebyscore(store, args, out, RespVersion::V3);
             true
         }
         // RESP3 carries multi-line text replies as Verbatim strings
@@ -238,20 +259,6 @@ fn emit_zscore_resp3(res: Result<Option<f64>, StoreError>, out: &mut Vec<u8>) {
 fn emit_zincrby_resp3(res: Result<f64, StoreError>, out: &mut Vec<u8>) {
     match res {
         Ok(sc) => encode_double(out, sc),
-        Err(e) => store_err(out, e),
-    }
-}
-
-/// `ZPOPMIN` over RESP3: scores are Doubles (RESP2 emits bulk strings).
-fn emit_zpopmin_resp3(res: Result<Vec<(Vec<u8>, f64)>, StoreError>, out: &mut Vec<u8>) {
-    match res {
-        Ok(items) => {
-            kevy_resp::encode_array_len(out, (items.len() * 2) as i64);
-            for (m, sc) in &items {
-                encode_bulk(out, m);
-                encode_double(out, *sc);
-            }
-        }
         Err(e) => store_err(out, e),
     }
 }

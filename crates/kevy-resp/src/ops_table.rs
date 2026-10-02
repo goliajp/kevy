@@ -28,66 +28,9 @@
 #[path = "ops_surface.rs"]
 pub mod surface;
 
-/// Keyspace-notification class of a command (the Redis class letter
-/// each variant names).
-///
-/// ```
-/// use kevy_resp::ops_table::{NotifyKind, spec};
-/// assert_eq!(spec("LPUSH").and_then(|s| s.notify), Some(NotifyKind::List));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum NotifyKind {
-    /// Redis notification class `$` (string commands).
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("APPEND").unwrap().notify, Some(NotifyKind::String));
-    /// ```
-    String,
-    /// Class `h`.
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("HSET").unwrap().notify, Some(NotifyKind::Hash));
-    /// ```
-    Hash,
-    /// Class `l`.
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("RPUSH").unwrap().notify, Some(NotifyKind::List));
-    /// ```
-    List,
-    /// Class `s`.
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("SADD").unwrap().notify, Some(NotifyKind::Set));
-    /// ```
-    Set,
-    /// Class `z`.
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("ZADD").unwrap().notify, Some(NotifyKind::Zset));
-    /// ```
-    Zset,
-    /// Class `t`.
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("XADD").unwrap().notify, Some(NotifyKind::Stream));
-    /// ```
-    Stream,
-    /// Class `g` (DEL / EXPIRE / PERSIST …).
-    ///
-    /// ```
-    /// use kevy_resp::ops_table::{NotifyKind, spec};
-    /// assert_eq!(spec("DEL").unwrap().notify, Some(NotifyKind::Generic));
-    /// ```
-    Generic,
-}
+#[path = "ops_notify_kind.rs"]
+mod notify_kind;
+pub use notify_kind::NotifyKind;
 
 /// One registry row: a command's classification + the surfaces it
 /// exists on today. The rows are the crate's own [`OP_TABLE`]; read them
@@ -238,12 +181,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     // ESTORE-only and nothing on the server could act on it.
     op("GETEX",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("GETRANGE",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SUBSTR",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("GETSET",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("INCR",         WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBY",       WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("INCRBYFLOAT",  WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("MGET",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
+    op("MSETNX",       WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
     op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER | REPLAY),
     op("SET",          WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("SETEX",        WR, GROW, Some(N::String), None,    SERVER | REPLAY),
@@ -275,6 +220,10 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
+    op("HEXPIREAT",    WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
+    op("HEXPIRETIME",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HPEXPIRETIME", RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HSTRLEN",      RD, NG,   None,            None,    SERVER | ESTORE),
     op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPTTL",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HPERSIST",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
@@ -291,9 +240,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("LINSERT",      WR, GROW, Some(N::List),            None,    SERVER | ESTORE | REPLAY),
     op("LLEN",         RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("LMOVE",        WR, GROW, Some(N::List),   None,    SERVER | REPLAY),
+    op("BLMOVE",       WR, GROW, None,            None,    SERVER | REPLAY),
+    op("LMPOP",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
+    op("BLMPOP",       WR, NG,   None,            None,    SERVER | REPLAY),
     op("LPOP",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LPOS",         RD, NG,   None,            None,    SERVER),
     op("LPUSH",        WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
+    op("LPUSHX",       WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | REPLAY),
+    op("RPUSHX",       WR, GROW, Some(N::List),   Some(1), SERVER | ESTORE | REPLAY),
     op("LRANGE",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("LREM",         WR, NG,   Some(N::List),   None,    SERVER | ESTORE | REPLAY),
     op("LSET",         WR, GROW, Some(N::List),   None,    SERVER | ESTORE | REPLAY),
@@ -312,12 +266,17 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SPOP",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
     op("SRANDMEMBER",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("SREM",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
+    op("SMOVE",        WR, GROW, Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
     op("SSCAN",        RD, NG,   None,            None,    SERVER),
     op("SUNION",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
     op("BZPOPMIN",     WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BZPOPMAX",     WR, NG,   None,            None,    SERVER | REPLAY),
+    op("BZMPOP",       WR, NG,   None,            None,    SERVER | REPLAY),
+    // the multi-key pops record what they took (ZREM / LPOP / RPOP)
+    op("ZMPOP",        WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
@@ -330,15 +289,29 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZINTER",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZUNION",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZDIFF",        RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("LCS",          RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZPOPMIN",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
+    op("ZPOPMAX",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
+    op("ZMSCORE",      RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZRANDMEMBER",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGE",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGEBYSCORE", RD, NG,  None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZRANK",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREM",         WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("ZREMRANGEBYRANK",  WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
+    op("ZREMRANGEBYLEX",   WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
+    op("ZRANGESTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
+    op("ZRANGEBYLEX",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("ZREVRANGEBYLEX", RD, NG, None,            None,    SERVER | ESTORE),
+    op("ZLEXCOUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREMRANGEBYSCORE", WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
     op("ZREVRANGE",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREVRANGEBYSCORE", RD, NG, None,          None,    SERVER | ESTORE),
+    op("ZREVRANK",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZSCORE",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     // ---- streams (embedded replay with its streams-geo feature) --------

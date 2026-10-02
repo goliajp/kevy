@@ -181,7 +181,7 @@ impl<C: Commands> Shard<C> {
     ///
     /// Returns `true` when it took the serve.
     fn serve_via_list_move(&mut self, conn: u64, key: &[u8]) -> bool {
-        let Some((src, dst)) = self.brpoplpush_pair(conn, key) else {
+        let Some((src, dst, from_left, to_left)) = self.list_move_pair(conn, key) else {
             return false;
         };
         if self.shard_of(&dst) == self.shard_of(&src) {
@@ -195,20 +195,26 @@ impl<C: Commands> Shard<C> {
         let Some(seq) = self.conns.get(&conn).map(|c| c.next_emit + c.pending.len() as u64) else {
             return false;
         };
-        self.start_list_move_inner(conn, seq, &src, &dst, false, true, true);
+        self.start_list_move_inner(conn, seq, &src, &dst, from_left, to_left, true);
         true
     }
 
-    /// `(source, destination)` when this conn is parked on a BRPOPLPUSH whose
-    /// serve replay is `BRPOPLPUSH src dst 0`. `None` for every other kind.
-    fn brpoplpush_pair(&self, conn: u64, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    /// `(source, destination, from_left, to_left)` when this conn is parked
+    /// on a move whose serve replay is `BRPOPLPUSH src dst 0` or `BLMOVE src
+    /// dst from to 0`. `None` for every other kind.
+    fn list_move_pair(&self, conn: u64, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>, bool, bool)> {
         let ob = self.origin_blocks.get(&conn)?;
-        if ob.kind != BlockKind::Brpoplpush {
-            return None;
-        }
         let ok = ob.keys.iter().find(|k| k.key == key)?;
         let dst = ok.serve_argv.get(2)?.to_vec();
-        Some((key.to_vec(), dst))
+        let (from_left, to_left) = match ob.kind {
+            BlockKind::Brpoplpush => (false, true),
+            BlockKind::Blmove => {
+                let left = |i: usize| ok.serve_argv.get(i).map(|a| a.eq_ignore_ascii_case(b"LEFT"));
+                (left(3)?, left(4)?)
+            }
+            _ => return None,
+        };
+        Some((key.to_vec(), dst, from_left, to_left))
     }
 
     /// origin: the serve result is back. Non-empty → deliver + unpark + cancel
@@ -340,7 +346,7 @@ impl<C: Commands> Shard<C> {
             };
             if let Some(c) = self.conns.get_mut(&conn) {
                 c.blocked = false;
-                encode_block_timeout(&mut c.output, ob.kind, ob.proto);
+                encode_block_timeout(&mut c.output, ob.proto);
                 c.next_emit += 1;
                 self.dirty.push(conn);
             }
@@ -419,9 +425,9 @@ impl<C: Commands> Shard<C> {
         keys: &[Vec<u8>],
     ) -> bool {
         match kind {
-            BlockKind::Brpoplpush => {
-                args.len() == 4
-                    && !keys.is_empty()
+            BlockKind::Brpoplpush | BlockKind::Blmove => {
+                !keys.is_empty()
+                    && args.len() > 2
                     && self.shard_of(&args[2]) != self.shard_of(&keys[0])
             }
             BlockKind::XReadGroupBlock => keys.iter().any(|k| self.shard_of(k) != self.id),

@@ -1,4 +1,4 @@
-*418
+*476
 $4
 KEYS
 *14
@@ -799,6 +799,38 @@ flags
 *1
 $8
 readonly
+$3
+LCS
+*14
+$7
+summary
+$89
+Return the longest common subsequence of two strings, its length, or its matching ranges.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$68
+LCS key1 key2 [LEN] [IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]
+$10
+complexity
+$41
+O(N*M) — the lengths of the two strings
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $6
 SETBIT
 *14
@@ -1184,6 +1216,38 @@ flags
 $5
 write
 $6
+MSETNX
+*14
+$7
+summary
+$62
+Set multiple key/value pairs, only if none of the keys exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$32
+MSETNX key value [key value ...]
+$10
+complexity
+$10
+O(N) pairs
+$6
+compat
+$172
+differs: keys on different shards are checked and then set, so another client may create one of them in between; co-locate the keys with a {hashtag} for Redis's atomic form
+$5
+flags
+*1
+$5
+write
+$6
 PSETEX
 *14
 $7
@@ -1343,6 +1407,38 @@ flags
 *1
 $8
 readonly
+$6
+SUBSTR
+*14
+$7
+summary
+$64
+Return a byte range of a string value; the old name of GETRANGE.
+$5
+since
+$5
+7.6.0
+$5
+group
+$6
+string
+$6
+syntax
+$20
+SUBSTR key start end
+$10
+complexity
+$28
+O(M) over the returned bytes
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 HDEL
 *14
@@ -1432,13 +1528,77 @@ $32
 O(F) fields in the FIELDS clause
 $6
 compat
-$120
-differs: the FIELDS parse error reads 'Mandatory keyword FIELDS is missing' where Redis says 'Mandatory argument FIELDS'
+$4
+full
 $5
 flags
 *1
 $5
 write
+$9
+HEXPIREAT
+*14
+$7
+summary
+$57
+Set per-field expiries as absolute Unix-second deadlines.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$80
+HEXPIREAT key unix-time-seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$11
+HEXPIRETIME
+*14
+$7
+summary
+$75
+Return per-field absolute expiries in Unix seconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$50
+HEXPIRETIME key FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $4
 HGET
 *14
@@ -1752,8 +1912,8 @@ $11
 O(F) fields
 $6
 compat
-$117
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it
+$4
+full
 $5
 flags
 *1
@@ -1784,8 +1944,8 @@ $11
 O(F) fields
 $6
 compat
-$52
-differs: same FIELDS error-text deviation as HEXPIRE
+$4
+full
 $5
 flags
 *1
@@ -1816,8 +1976,8 @@ $11
 O(F) fields
 $6
 compat
-$52
-differs: same FIELDS error-text deviation as HEXPIRE
+$4
+full
 $5
 flags
 *1
@@ -1919,6 +2079,38 @@ flags
 *1
 $5
 write
+$12
+HPEXPIRETIME
+*14
+$7
+summary
+$80
+Return per-field absolute expiries in Unix milliseconds (-1 no TTL, -2 missing).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$51
+HPEXPIRETIME key FIELDS numfields field [field ...]
+$10
+complexity
+$11
+O(F) fields
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $5
 HPTTL
 *14
@@ -1944,8 +2136,40 @@ $11
 O(F) fields
 $6
 compat
-$88
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$7
+HSTRLEN
+*14
+$7
+summary
+$58
+Return the length of a hash field's value (0 when absent).
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+hash
+$6
+syntax
+$17
+HSTRLEN key field
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$4
+full
 $5
 flags
 *1
@@ -1976,8 +2200,8 @@ $11
 O(F) fields
 $6
 compat
-$88
-differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+$4
+full
 $5
 flags
 *1
@@ -2015,6 +2239,74 @@ flags
 *1
 $8
 readonly
+$6
+BLMOVE
+*14
+$7
+summary
+$86
+Blocking LMOVE: move an element between two lists, waiting for the source to have one.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$55
+BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout
+$10
+complexity
+$13
+O(1) to serve
+$6
+compat
+$60
+differs: a cross-shard move is not atomic — see BRPOPLPUSH
+$5
+flags
+*2
+$5
+write
+$8
+blocking
+$6
+BLMPOP
+*14
+$7
+summary
+$67
+Blocking LMPOP: pop from the first non-empty list, waiting for one.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$61
+BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT count]
+$10
+complexity
+$44
+O(N + M) — N keys tried, M elements popped
+$6
+compat
+$51
+differs: same multi-key priority deviation as BLPOP
+$5
+flags
+*2
+$5
+write
+$8
+blocking
 $5
 BLPOP
 *14
@@ -2213,6 +2505,38 @@ flags
 *1
 $5
 write
+$5
+LMPOP
+*14
+$7
+summary
+$58
+Pop elements from the first non-empty list among the keys.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$52
+LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count]
+$10
+complexity
+$44
+O(N + M) — N keys tried, M elements popped
+$6
+compat
+$160
+differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
+$5
+flags
+*1
+$5
+write
 $4
 LPOP
 *14
@@ -2300,6 +2624,38 @@ $10
 complexity
 $32
 O(M) values, O(1) amortised each
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$6
+LPUSHX
+*14
+$7
+summary
+$45
+Prepend elements to a list only if it exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$32
+LPUSHX key element [element ...]
+$10
+complexity
+$20
+O(N) elements pushed
 $6
 compat
 $4
@@ -2565,6 +2921,38 @@ flags
 *1
 $5
 write
+$6
+RPUSHX
+*14
+$7
+summary
+$44
+Append elements to a list only if it exists.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+list
+$6
+syntax
+$32
+RPUSHX key element [element ...]
+$10
+complexity
+$20
+O(N) elements pushed
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
 $4
 SADD
 *14
@@ -2725,6 +3113,38 @@ flags
 *1
 $8
 readonly
+$10
+SINTERCARD
+*14
+$7
+summary
+$78
+Return the size of the intersection of the given sets, counting at most LIMIT.
+$5
+since
+$5
+7.6.0
+$5
+group
+$3
+set
+$6
+syntax
+$46
+SINTERCARD numkeys key [key ...] [LIMIT limit]
+$10
+complexity
+$52
+O(N*M) worst case — N the smallest set, M the keys
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $11
 SINTERSTORE
 *14
@@ -2821,6 +3241,38 @@ flags
 *1
 $8
 readonly
+$5
+SMOVE
+*14
+$7
+summary
+$38
+Move a member from one set to another.
+$5
+since
+$5
+7.6.0
+$5
+group
+$3
+set
+$6
+syntax
+$31
+SMOVE source destination member
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$198
+differs: when the two keys live on different shards the member is removed from one and then added to the other, so the move is not atomic; co-locate the keys with a {hashtag} for Redis's atomic form
+$5
+flags
+*1
+$5
+write
 $4
 SPOP
 *14
@@ -3013,6 +3465,74 @@ flags
 *1
 $5
 write
+$6
+BZMPOP
+*14
+$7
+summary
+$73
+Blocking ZMPOP: pop from the first non-empty sorted set, waiting for one.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$58
+BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT count]
+$10
+complexity
+$52
+O(K) + O(M log N) — K keys tried, M members popped
+$6
+compat
+$51
+differs: same multi-key priority deviation as BLPOP
+$5
+flags
+*2
+$5
+write
+$8
+blocking
+$8
+BZPOPMAX
+*14
+$7
+summary
+$73
+Blocking pop of the highest-scored member across one or more sorted sets.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$30
+BZPOPMAX key [key ...] timeout
+$10
+complexity
+$34
+O(log N) per pop; the park is O(1)
+$6
+compat
+$4
+full
+$5
+flags
+*2
+$5
+write
+$8
+blocking
 $8
 BZPOPMIN
 *14
@@ -3143,6 +3663,38 @@ flags
 *1
 $8
 readonly
+$5
+ZDIFF
+*14
+$7
+summary
+$59
+Return the difference of the first sorted set and the rest.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$40
+ZDIFF numkeys key [key ...] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $10
 ZDIFFSTORE
 *14
@@ -3207,6 +3759,38 @@ flags
 *1
 $5
 write
+$6
+ZINTER
+*14
+$7
+summary
+$49
+Return the intersection of the given sorted sets.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$95
+ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
+$5
+flags
+*1
+$8
+readonly
 $10
 ZINTERCARD
 *14
@@ -3262,6 +3846,102 @@ $10
 complexity
 $44
 O(sum of the source cardinalities + R log R)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$5
+ZMPOP
+*14
+$7
+summary
+$63
+Pop members from the first non-empty sorted set among the keys.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$49
+ZMPOP numkeys key [key ...] MIN|MAX [COUNT count]
+$10
+complexity
+$52
+O(K) + O(M log N) — K keys tried, M members popped
+$6
+compat
+$160
+differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
+$5
+flags
+*1
+$5
+write
+$7
+ZMSCORE
+*14
+$7
+summary
+$37
+Return the scores of several members.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$31
+ZMSCORE key member [member ...]
+$10
+complexity
+$35
+O(M) — one hash lookup per member
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$7
+ZPOPMAX
+*14
+$7
+summary
+$48
+Pop up to count members with the highest scores.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$19
+ZPOPMAX key [count]
+$10
+complexity
+$10
+O(M log N)
 $6
 compat
 $4
@@ -3337,13 +4017,45 @@ $5
 write
 $9
 extension
+$9
+ZLEXCOUNT
+*14
+$7
+summary
+$44
+Count the members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$21
+ZLEXCOUNT key min max
+$10
+complexity
+$45
+O(log² N) — two binary searches over ranks
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $6
 ZRANGE
 *14
 $7
 summary
-$29
-Return members by rank range.
+$58
+Return members by rank, score or member range, either way.
 $5
 since
 $5
@@ -3354,16 +4066,16 @@ $4
 zset
 $6
 syntax
-$34
-ZRANGE key start stop [WITHSCORES]
+$79
+ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
 $10
 complexity
-$89
-O(log N + M) — one rank descent seeks to start, then the M requested members are walked
+$139
+O(log N + M) — one rank descent seeks to start, then the M requested members are walked; BYLEX finds its ends by binary search over ranks
 $6
 compat
-$148
-differs: only the legacy 'key start stop [WITHSCORES]' form is accepted — the Redis 6.2 BYSCORE / BYLEX / REV / LIMIT arguments are a syntax error
+$4
+full
 $5
 flags
 *1
@@ -3401,6 +4113,102 @@ flags
 *1
 $8
 readonly
+$11
+ZRANDMEMBER
+*14
+$7
+summary
+$94
+Return random members, distinct for a positive count and possibly repeated for a negative one.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$36
+ZRANDMEMBER key [count [WITHSCORES]]
+$10
+complexity
+$44
+O(M log N) — each pick is one rank descent
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$11
+ZRANGEBYLEX
+*14
+$7
+summary
+$41
+Return members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$44
+ZRANGEBYLEX key min max [LIMIT offset count]
+$10
+complexity
+$14
+O(log² N + M)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$11
+ZRANGESTORE
+*14
+$7
+summary
+$80
+Store a range of a sorted set — by rank, score or member — into destination.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$72
+ZRANGESTORE dst src min max [BYSCORE | BYLEX] [REV] [LIMIT offset count]
+$10
+complexity
+$27
+O(log N + M) members stored
+$6
+compat
+$156
+differs: when the two keys live on different shards the range is read from a copy of src and placed on dst's shard, so the store is not atomic with the read
+$5
+flags
+*1
+$5
+write
 $5
 ZRANK
 *14
@@ -3418,16 +4226,16 @@ $4
 zset
 $6
 syntax
-$16
-ZRANK key member
+$28
+ZRANK key member [WITHSCORE]
 $10
 complexity
 $101
 O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
 $6
 compat
-$56
-differs: the Redis 7.2 WITHSCORE option is not supported
+$4
+full
 $5
 flags
 *1
@@ -3456,6 +4264,38 @@ $10
 complexity
 $10
 O(M log N)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$5
+write
+$14
+ZREMRANGEBYLEX
+*14
+$7
+summary
+$45
+Remove the members between two member bounds.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$26
+ZREMRANGEBYLEX key min max
+$10
+complexity
+$20
+O(log² N + M log N)
 $6
 compat
 $4
@@ -3561,6 +4401,70 @@ flags
 *1
 $8
 readonly
+$14
+ZREVRANGEBYLEX
+*14
+$7
+summary
+$56
+Return members between two member bounds, highest first.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$47
+ZREVRANGEBYLEX key max min [LIMIT offset count]
+$10
+complexity
+$14
+O(log² N + M)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
+$8
+ZREVRANK
+*14
+$7
+summary
+$55
+Return a member's rank, ordered from the highest score.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$31
+ZREVRANK key member [WITHSCORE]
+$10
+complexity
+$8
+O(log N)
+$6
+compat
+$4
+full
+$5
+flags
+*1
+$8
+readonly
 $9
 ZREVRANGE
 *14
@@ -3652,6 +4556,38 @@ $6
 compat
 $4
 full
+$5
+flags
+*1
+$8
+readonly
+$6
+ZUNION
+*14
+$7
+summary
+$42
+Return the union of the given sorted sets.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$95
+ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
+$10
+complexity
+$63
+O(L + R log R) — L members across the inputs, R in the result
+$6
+compat
+$155
+differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 $5
 flags
 *1

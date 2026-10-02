@@ -180,7 +180,7 @@ impl<'a, K, V> RawOccupiedEntryMut<'a, K, V> {
 
     /// The stored value and the entry's side word, both to change.
     #[inline]
-    pub fn get_mut_with_aux(&mut self) -> (&mut V, Option<&mut u64>) {
+    pub fn value_and_aux_mut(&mut self) -> (&mut V, Option<&mut u64>) {
         // SAFETY: see [`get`]. The value lives in the slot array and the
         // word in the side lane: two allocations, so the borrows are disjoint.
         let kv = unsafe { (*self.map.slots_ptr.as_ptr().add(self.slot)).assume_init_mut() };

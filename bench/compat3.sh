@@ -169,6 +169,251 @@ check ZADD zz XX CH 0 zb
 check ZCOUNT z1 1 3
 check ZINCRBY z1 1 b
 check ZREM z1 a
+# top-end pops, reverse ranks, WITHSCORE, multi-score, random picks; a
+# random reply is only compared where every engine must give the same set
+check ZADD zp 1 a 2 b 3 c 3 d 1.5 e
+check ZREVRANK zp a
+check ZREVRANK zp a WITHSCORE
+check ZRANK zp e WITHSCORE
+check ZRANK zp nope WITHSCORE
+check ZREVRANK zp a BAD
+check ZMSCORE zp a nope e
+check ZMSCORE nokey a b
+check ZMSCORE zp
+checku ZRANDMEMBER zp 10
+# few enough lines that valkey-cli does not pad the indexes, which the
+# unordered compare strips
+check ZADD zp3 1 a 2 b 3 c
+checku ZRANDMEMBER zp3 5 WITHSCORES
+check ZRANDMEMBER nokey
+check ZRANDMEMBER nokey 3 WITHSCORES
+check ZRANDMEMBER zp 0
+check ZRANDMEMBER zp x
+check ZRANDMEMBER zp 1 BAD
+check ZRANDMEMBER zp -9223372036854775808
+check ZADD zone 7 only
+check ZRANDMEMBER zone -3 WITHSCORES
+check ZRANDMEMBER zone
+check ZPOPMAX zp
+check ZPOPMAX zp 2
+check ZPOPMAX zp 0
+check ZPOPMAX zp -1
+check ZPOPMAX zp x
+check ZPOPMAX zp 1 2
+check ZPOPMIN zp x
+check ZPOPMIN zp 1 2
+check ZPOPMAX nokey 2
+check SET zstr v
+check ZPOPMAX zstr
+check ZREVRANK zstr a
+check ZMSCORE zstr a
+check ZRANDMEMBER zstr
+# multi-key pops (the blocking forms only where data is there or the
+# timeout is short; ZMPOP's keys span shards on a sharded kevy)
+check ZADD zm1 1 a 2 b 3 c
+check ZADD zm2 5 x
+check RPUSH lm1 a b c d
+check ZMPOP 2 nokey zm1 MIN
+check ZMPOP 2 nokey zm1 MAX COUNT 2
+check ZMPOP 1 zm1 MIN COUNT 10
+check ZMPOP 2 nokey nokey2 MIN
+check ZMPOP 0 zm1 MIN
+check ZMPOP x zm1 MIN
+check ZMPOP 3 zm1 MIN
+check ZMPOP 1 zm2 BAD
+check ZMPOP 1 zm2 MIN COUNT 0
+check ZMPOP 1 zm2 MIN COUNT
+check ZMPOP 1 zm2 MIN COUNT 1 COUNT 1
+check ZMPOP 2 nokey lm1 MIN
+check LMPOP 2 nokey lm1 LEFT
+check LMPOP 1 lm1 RIGHT COUNT 2
+check LMPOP 1 lm1 LEFT COUNT 5
+check LMPOP 1 lm1 LEFT
+check LMPOP 1 nokey MIDDLE
+check LMPOP 1 nokey LEFT COUNT 0
+check ZADD zb 1 a 2 b
+check BZPOPMAX zb 0
+check BZPOPMAX nokey zb 0
+check BZPOPMAX nokey 0.05
+check BZPOPMAX nokey x
+check BZPOPMAX nokey -1
+check ZADD zb2 5 x 6 y 7 z
+check BZMPOP 0 1 zb2 MAX COUNT 2
+check BZMPOP 0 2 nokey zb2 MIN
+check BZMPOP 0.05 1 nokey MIN
+check BZMPOP -1 1 zb2 MIN
+check BZMPOP 0 0 zb2 MIN
+check BZMPOP 0 2 zb2 MIN
+check RPUSH lb 1 2 3
+check BLMPOP 0 1 lb RIGHT COUNT 2
+check BLMPOP 0 2 nokey lb LEFT
+check BLMPOP 0.05 1 lb LEFT
+check BLMPOP 0 1 lb UP
+check SET bstr v
+check BLMPOP 0 1 bstr LEFT
+check BZMPOP 0 1 bstr MIN
+check RPUSH bsrc a b
+check BLMOVE bsrc bdst LEFT RIGHT 0
+check BLMOVE bsrc bdst RIGHT LEFT 0
+check BLMOVE bsrc bdst LEFT RIGHT 0.05
+check BLMOVE bsrc bdst UP RIGHT 0
+check BLMOVE bsrc bdst LEFT RIGHT -1
+check BLMOVE bstr bdst LEFT RIGHT 0
+check LRANGE bdst 0 -1
+check BRPOPLPUSH nokey bdst 0.05
+check BLPOP nokey -1
+# HSTRLEN, LPUSHX / RPUSHX, SUBSTR, the field-TTL family's grammar
+check HSET b6h f hello g 12345 n -1.5
+check HSTRLEN b6h f
+check HSTRLEN b6h n
+check HSTRLEN b6h nope
+check HSTRLEN b6nokey f
+check HSTRLEN b6h f extra
+check SET b6str v
+check HSTRLEN b6str f
+check LPUSHX b6nokey a
+check RPUSHX b6nokey a
+check EXISTS b6nokey
+check RPUSH b6l a
+check LPUSHX b6l x y
+check RPUSHX b6l z
+check LRANGE b6l 0 -1
+check LPUSHX b6str a
+check SET b6s HelloWorld
+check SUBSTR b6s 0 4
+check SUBSTR b6s -3 -1
+check SUBSTR b6s 4 2
+check SUBSTR b6nokey 0 1
+check SUBSTR b6s x 1
+check SUBSTR b6l 0 1
+check HSET b6t a 1 b 2
+check HEXPIRETIME b6t FIELDS 2 a nope
+check HEXPIREAT b6t 4102444800 FIELDS 2 a nope
+check HEXPIRETIME b6t FIELDS 1 a
+check HPEXPIRETIME b6t FIELDS 1 a
+check HEXPIREAT b6t 4102444800 NX FIELDS 1 a
+check HEXPIREAT b6t 4102444801 GT FIELDS 1 a
+check HEXPIREAT b6t 1 FIELDS 1 b
+check HEXISTS b6t b
+check HEXPIREAT b6t 4102444800 FIELDS 0 a
+check HEXPIREAT b6t 4102444800 FIELDS 2 a
+check HEXPIREAT b6t 4102444800 BAD 1 a
+check HEXPIREAT b6t -1 FIELDS 1 a
+check HEXPIRE b6t 100 NX XX FIELDS 1 a
+check HEXPIRE b6t 100 FIELDS 1 a FIELDS 1 a
+check HPEXPIREAT b6t 70368744177664 FIELDS 1 a
+check HTTL b6t NX FIELDS 1 a
+check HTTL b6t FIELDS 2 a
+check HTTL b6t FIELDS 0 a
+check HPERSIST b6t FIELDS 1 a
+# reads over several keys (spread across shards on a sharded kevy)
+check SADD rs1 a b c
+check SADD rs2 b c d
+check SINTERCARD 2 rs1 rs2
+check SINTERCARD 2 rs2 rsnokey
+check SINTERCARD 1 rs2 LIMIT 1
+check SINTERCARD 1 rs2 LIMIT 0
+check SINTERCARD 0 rs2
+check SINTERCARD 2 rs2
+check SINTERCARD 1 rs2 LIMIT -1
+check SINTERCARD 1 b6str
+check SINTERCARD 1 rs2 BAD 1
+check ZADD rz1 1 a 2 b 3 c
+check ZADD rz2 10 b 20 c 30 d
+check ZINTER 2 rz1 rz2
+check ZINTER 2 rz1 rz2 WITHSCORES
+check ZINTER 2 rz1 rz2 WEIGHTS 2 3 AGGREGATE MAX WITHSCORES
+check ZUNION 2 rz1 rz2 WITHSCORES
+check ZUNION 2 rz1 rz2 AGGREGATE MIN WITHSCORES
+check ZDIFF 2 rz1 rz2 WITHSCORES
+check ZDIFF 1 rznokey
+check ZINTER 0 rz1
+check ZINTER x rz1
+check ZINTER 3 rz1 rz2
+check ZDIFF 2 rz1 rz2 WEIGHTS 1 2
+check ZUNION 2 rz1 b6str
+check ZUNION 2 rz1 rs1 WITHSCORES
+check ZUNION 1 rz1 WEIGHTS x
+check ZINTERSTORE rzd 0 rz1
+check ZINTERSTORE rzd 3 rz1
+check ZUNIONSTORE rzd x rz1
+check ZINTERSTORE rzd 1 rz1 WITHSCORES
+check SET rk1 ohmytext
+check SET rk2 mynewtext
+check LCS rk1 rk2
+check LCS rk1 rk2 LEN
+check LCS rk1 rk2 IDX
+check LCS rk1 rk2 IDX MINMATCHLEN 4 WITHMATCHLEN
+check LCS rk1 rknokey
+check LCS rk1 rs1
+check LCS rk1 rk2 BAD
+check LCS rk1 rk2 LEN IDX
+# ZRANGE's 6.2 forms and the lexicographic family
+check ZADD zrr 1 a 2 b 3 c 4 d 5 e
+check ZRANGE zrr 0 1 REV
+check ZRANGE zrr 0 -1 REV WITHSCORES
+check ZRANGE zrr 2 4 BYSCORE
+check ZRANGE zrr (2 +inf BYSCORE LIMIT 1 2 WITHSCORES
+check ZRANGE zrr 4 2 BYSCORE REV
+check ZRANGE zrr +inf -inf BYSCORE REV LIMIT 0 2
+check ZRANGE zrr 0 -1 LIMIT 0 1
+check ZRANGE zrr 0 -1 BYSCORE BYLEX
+check ZRANGE zrr x 1 BYSCORE
+check ZRANGE zrr 1 5 BYSCORE LIMIT -1 2
+check ZRANGE zrr 1 5 BYSCORE LIMIT 1
+check ZREVRANGE zrr 0 1 LIMIT 0 1
+check ZADD zlx 0 a 0 b 0 c 0 d 0 e 0 f
+check ZRANGE zlx [b (e BYLEX
+check ZRANGE zlx - + BYLEX LIMIT 1 2
+check ZRANGE zlx (e [b BYLEX REV
+check ZRANGE zlx [b [e BYLEX WITHSCORES
+check ZRANGE zlx b e BYLEX
+check ZRANGEBYLEX zlx [b [d
+check ZRANGEBYLEX zlx - + LIMIT 2 3
+check ZRANGEBYLEX zlx a +
+check ZRANGEBYLEX zlx [b [d WITHSCORES
+check ZREVRANGEBYLEX zlx [d [b
+check ZREVRANGEBYLEX zlx + - LIMIT 1 2
+check ZLEXCOUNT zlx - +
+check ZLEXCOUNT zlx [b (e
+check ZLEXCOUNT zlx x y
+check ZREMRANGEBYLEX zlx [e +
+check ZRANGE zlx 0 -1
+check ZRANGEBYLEX b6str - +
+check ZRANGE b6str 0 -1 BYLEX
+check ZRANGESTORE zrdst zrr 0 -1
+check ZRANGE zrdst 0 -1 WITHSCORES
+check ZRANGESTORE zrdst zrr 2 4 BYSCORE
+check ZRANGESTORE zrdst zrr 0 0 REV
+check ZRANGE zrdst 0 -1 WITHSCORES
+check ZRANGESTORE zrdst zrr (1 +inf BYSCORE LIMIT 1 1
+check ZRANGESTORE zrdst zlx [b (d BYLEX
+check ZRANGESTORE zrdst rznokey 0 -1
+check EXISTS zrdst
+check ZRANGESTORE zrdst zrr 0 -1 WITHSCORES
+check ZRANGESTORE zrdst b6str 0 -1
+check ZRANGESTORE b6str zrr 0 -1
+check TYPE b6str
+check SADD sm1 a b
+check SADD sm2 x
+check SMOVE sm1 sm2 a
+check SMOVE sm1 sm2 nope
+check SMOVE sm1 smnew b
+check SMEMBERS smnew
+check SMOVE sm2 sm2 x
+check SMOVE sm2 sm2 nope
+check SMOVE sm2 rk1 x
+check SMOVE sm2 rk1 nope
+check SMOVE rk1 sm2 x
+check SMOVE smnokey rk1 x
+check SMOVE sm1 sm2
+check MSETNX mx1 a mx2 b
+check MSETNX mx2 x mx3 y
+check EXISTS mx3
+check MSETNX mx4 a mx4 b
+check GET mx4
+check MSETNX mx1
+check MSETNX mx1 a mx2
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;
