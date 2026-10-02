@@ -113,6 +113,12 @@ impl<C: Commands> Shard<C> {
             Route::ReadAcross { first, count } if self.one_shard(args, first..first + count) => {
                 Route::Single(first)
             }
+            Route::StoreFromCopies { first, count, dst }
+                if self.one_shard(args, first..first + count)
+                    && self.shard_of(&args[dst]) == self.shard_of(&args[first]) =>
+            {
+                Route::Single(dst)
+            }
             route => route,
         };
         match route {
@@ -127,14 +133,14 @@ impl<C: Commands> Shard<C> {
             Route::BitOpStore => self.start_bitop(conn_id, seq, args),
             Route::Copy => self.start_copy(conn_id, seq, args),
             Route::ReadAcross { first, count } => {
-                self.start_read_across(
-                    conn_id,
-                    seq,
-                    args,
-                    first..first + count,
-                    is_quit,
-                    cluster_conn,
-                );
+                let across =
+                    crate::exec_read_across::Across { keys: first..first + count, dst: None };
+                self.start_read_across(conn_id, seq, args, across, is_quit, cluster_conn);
+            }
+            Route::StoreFromCopies { first, count, dst } => {
+                let across =
+                    crate::exec_read_across::Across { keys: first..first + count, dst: Some(dst) };
+                self.start_read_across(conn_id, seq, args, across, is_quit, cluster_conn);
             }
             Route::FirstHit { numkeys } => {
                 self.start_first_hit(conn_id, seq, proto, args, numkeys, is_quit, cluster_conn);

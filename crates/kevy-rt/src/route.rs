@@ -374,6 +374,26 @@ pub enum Route {
         /// How many there are.
         count: usize,
     },
+    /// [`Route::ReadAcross`] for a command that writes its result to the
+    /// key at `dst` — `ZRANGESTORE`. When the keys are apart the result is
+    /// computed over copies, then placed on `dst`'s shard (or `dst`
+    /// removed, when it came out empty) before the reply goes.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `ZRANGESTORE dst src 0 -1`: reads src (argument 2), writes dst.
+    /// let route = Route::StoreFromCopies { first: 2, count: 1, dst: 1 };
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    StoreFromCopies {
+        /// Where the keys read start.
+        first: usize,
+        /// How many there are.
+        count: usize,
+        /// The key written.
+        dst: usize,
+    },
 }
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`

@@ -295,3 +295,25 @@ fn reads_over_keys_on_different_shards_answer_as_on_one() {
     let r = call(&mut c, &[b"ZINTER", b"2", b(&z[0]), b(&z[1])]);
     assert!(r.starts_with(b"-WRONGTYPE"), "a remote key's type is checked too: {r:?}");
 }
+
+/// `ZRANGESTORE` whose destination lives on another shard than its source
+/// lands the range there, replaces whatever the destination held, and
+/// removes it for an empty range.
+#[test]
+fn zrangestore_places_the_range_on_the_destinations_shard() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let k = apart("rg", 2);
+    let (dst, src) = (b(&k[0]), b(&k[1]));
+    call(&mut c, &[b"ZADD", src, b"1", b"a", b"2", b"b", b"3", b"c"]);
+    call(&mut c, &[b"SET", dst, b"was-a-string"]);
+    assert_eq!(call(&mut c, &[b"ZRANGESTORE", dst, src, b"(1", b"+inf", b"BYSCORE"]), b":2\r\n");
+    assert_eq!(
+        call(&mut c, &[b"ZRANGE", dst, b"0", b"-1", b"WITHSCORES"]),
+        b"*4\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$1\r\n3\r\n"
+    );
+    assert_eq!(call(&mut c, &[b"ZRANGESTORE", dst, src, b"10", b"20", b"BYSCORE"]), b":0\r\n");
+    assert_eq!(call(&mut c, &[b"EXISTS", dst]), b":0\r\n", "an empty range removes dst");
+    let r = call(&mut c, &[b"ZRANGESTORE", dst, src, b"0", b"-1", b"WITHSCORES"]);
+    assert_eq!(r, b"-ERR syntax error\r\n");
+}

@@ -47,6 +47,8 @@ fn events<A: ArgvView + ?Sized>(
                 kevy_verbs::mpop::parse_zmpop(args, at).ok()?.end == kevy_store::ListEnd::Left;
             one(NotifyKind::Zset, if min { "zpopmin" } else { "zpopmax" }, &frame[1])
         }
+        // an empty range removes the destination, which is a `del`
+        (b"ZRANGESTORE", _) if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
         (b"LPUSHX", _) => one(NotifyKind::List, "lpush", &args[1]),
         (b"RPUSHX", _) => one(NotifyKind::List, "rpush", &args[1]),
         // every field-TTL setter is an `hexpire`, unless its deadline had

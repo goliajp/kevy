@@ -1,4 +1,4 @@
-*470
+*472
 $4
 KEYS
 *14
@@ -4113,6 +4113,38 @@ flags
 *1
 $8
 readonly
+$11
+ZRANGESTORE
+*14
+$7
+summary
+$80
+Store a range of a sorted set — by rank, score or member — into destination.
+$5
+since
+$5
+7.6.0
+$5
+group
+$4
+zset
+$6
+syntax
+$72
+ZRANGESTORE dst src min max [BYSCORE | BYLEX] [REV] [LIMIT offset count]
+$10
+complexity
+$27
+O(log N + M) members stored
+$6
+compat
+$156
+differs: when the two keys live on different shards the range is read from a copy of src and placed on dst's shard, so the store is not atomic with the read
+$5
+flags
+*1
+$5
+write
 $5
 ZRANK
 *14

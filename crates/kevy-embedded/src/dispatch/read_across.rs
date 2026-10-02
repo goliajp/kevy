@@ -2,6 +2,8 @@
 //! keys that may live on different shards. Each key is copied under its
 //! own shard's lock and the command runs over the copies, as on the
 //! server; the answer is not a point-in-time snapshot across shards.
+//! `ZRANGESTORE` reads its source the same way and then writes its
+//! destination under that key's lock.
 
 use kevy_verbs::multikey::{parse_zcombine, parse_zdiff, parse_zintercard};
 
@@ -10,6 +12,10 @@ use crate::store::Store;
 
 /// One multi-key read; `false` = verb not in this group.
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+    if up == b"ZRANGESTORE" {
+        zrangestore(s, argv, out);
+        return true;
+    }
     if !matches!(up, b"LCS" | b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF") {
         return false;
     }
@@ -31,4 +37,42 @@ pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>
     }
     kevy_verbs::exec(&mut copies, up, &args, out);
     true
+}
+
+/// `ZRANGESTORE dst src …`: the range of a copy of `src`, stored at `dst`
+/// and recorded as the `DEL` and `ZADD` that rebuild it.
+fn zrangestore(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+    let args = Args::new(argv);
+    let mut copies = kevy_store::Store::new();
+    if argv.len() >= 5
+        && let Some((value, ttl_ms)) = s.wshard(&argv[2]).store.clone_with_ttl(&argv[2])
+    {
+        copies.put_with_ttl(argv[2].clone(), value, ttl_ms);
+    }
+    let mark = out.len();
+    kevy_verbs::exec(&mut copies, b"ZRANGESTORE", &args, out);
+    if argv.len() < 5 || out.get(mark) == Some(&b'-') {
+        return;
+    }
+    let dst = &argv[1];
+    let items = copies.zrange(dst, 0, -1).unwrap_or_default();
+    let mut g = s.wshard(dst);
+    if items.is_empty() && !g.store.key_exists(dst) {
+        return;
+    }
+    g.store.zstore_result(dst, &items);
+    let scores: Vec<Vec<u8>> =
+        items.iter().map(|(_, sc)| kevy_verbs::reply::fmt_score(*sc)).collect();
+    let mut zadd: Vec<&[u8]> = vec![b"ZADD", dst];
+    for ((m, _), sc) in items.iter().zip(&scores) {
+        zadd.push(sc);
+        zadd.push(m);
+    }
+    let recorded = crate::store::commit_write(&mut g, &[b"DEL", dst]).and_then(|()| {
+        if items.is_empty() { Ok(()) } else { crate::store::commit_write(&mut g, &zadd) }
+    });
+    if let Err(e) = recorded {
+        out.truncate(mark);
+        super::kevy_err(out, &e);
+    }
 }

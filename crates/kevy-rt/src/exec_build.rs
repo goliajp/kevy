@@ -53,6 +53,7 @@ impl<C: Commands> Shard<C> {
             | Route::ListMove { .. }
             | Route::FirstHit { .. }
             | Route::ReadAcross { .. }
+            | Route::StoreFromCopies { .. }
             | Route::Slowlog(_) => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached conn-level route {route:?} \

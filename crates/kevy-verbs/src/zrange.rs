@@ -186,3 +186,50 @@ pub fn zrange<A: ArgvView + ?Sized>(
         Err(RangeError::Store(e)) => store_err(out, e),
     }
 }
+
+/// `ZRANGESTORE dst src min max [BYSCORE|BYLEX] [REV] [LIMIT offset
+/// count]`: the range of `src` replaces `dst`, whatever `dst` held; an
+/// empty range deletes `dst`. How many members were stored.
+///
+/// ```
+/// use kevy_resp::Argv;
+/// let mut store = kevy_store::Store::new();
+/// store.zadd(b"z", &[(1.0, &b"a"[..]), (2.0, &b"b"[..])]).unwrap();
+/// let argv = Argv::from(["ZRANGESTORE", "d", "z", "0", "0"].map(|s| s.as_bytes().to_vec()).to_vec());
+/// let mut out = Vec::new();
+/// kevy_verbs::exec(&mut store, b"ZRANGESTORE", &argv, &mut out);
+/// assert_eq!(out, b":1\r\n");
+/// assert_eq!(store.zrange(b"d", 0, -1).unwrap(), [(b"a".to_vec(), 1.0)]);
+/// ```
+pub(crate) fn zrangestore<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> crate::Effect {
+    if args.len() < 5 {
+        wrong_args(out, "zrangestore");
+        return crate::Effect::Unchanged;
+    }
+    let spec = match parse(args, 5, true) {
+        Ok(s) => s,
+        Err(e) => {
+            encode_error(out, e);
+            return crate::Effect::Unchanged;
+        }
+    };
+    let items = match query(store, &args[2], &args[3], &args[4], spec) {
+        Ok(items) => items,
+        Err(RangeError::Wire(e)) => {
+            encode_error(out, e);
+            return crate::Effect::Unchanged;
+        }
+        Err(RangeError::Store(e)) => {
+            store_err(out, e);
+            return crate::Effect::Unchanged;
+        }
+    };
+    let had = store.key_exists(&args[1]);
+    let n = store.zstore_result(&args[1], &items);
+    kevy_resp::encode_integer(out, n as i64);
+    crate::changed(n > 0 || had)
+}

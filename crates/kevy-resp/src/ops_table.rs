@@ -302,6 +302,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZREM",         WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("ZREMRANGEBYRANK",  WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
     op("ZREMRANGEBYLEX",   WR, NG, Some(N::Zset), None,    SERVER | ESTORE | REPLAY),
+    op("ZRANGESTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
     op("ZRANGEBYLEX",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZREVRANGEBYLEX", RD, NG, None,            None,    SERVER | ESTORE),
     op("ZLEXCOUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
