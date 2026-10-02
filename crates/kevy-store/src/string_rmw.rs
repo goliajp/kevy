@@ -1,5 +1,5 @@
 //! Read-modify-write string ops split out of `string.rs` (500-LOC
-//! rule): `APPEND` / `GETSET` / `GETDEL` / `INCRBYFLOAT`. All four are
+//! rule): `APPEND` / `GETSET` / `GETDEL` (INCRBYFLOAT is in `float_incr.rs`). All are
 //! encoding-aware across `Value::Str` / `Value::Int` / `Value::ArcBulk`
 //! — earlier `Str`-only arms replied WRONGTYPE where Redis succeeds;
 //! guard: `tests_string_encoding.rs`.
@@ -7,7 +7,7 @@
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
 use crate::string_set::pick_value_for_set_owned;
-use crate::util::{fmt_num, format_i64_into, itoa_i64_stack, parse_f64};
+use crate::util::{format_i64_into, itoa_i64_stack};
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
 
@@ -110,73 +110,10 @@ impl Store {
             _ => Ok(None),
         }
     }
-
-    /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
-    pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
-        self.tier_resolve(key, crate::value::COLD_TAG_STRING)?;
-        let outcome = if let Some(e) = self.live_entry_mut(key) {
-            match (e.value.weight(), &mut e.value) {
-                (before, Value::Str(v)) => {
-                    let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;
-                    let bytes = float_incr_bytes(cur, delta)?;
-                    *v = SmallBytes::from_slice(&bytes);
-                    FloatOutcome::Reweigh(bytes, before)
-                }
-                (before, Value::Int(n)) => {
-                    let bytes = float_incr_bytes(*n as f64, delta)?;
-                    e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                    FloatOutcome::Reweigh(bytes, before)
-                }
-                (before, Value::ArcBulk(a)) => {
-                    let cur = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)?;
-                    let bytes = float_incr_bytes(cur, delta)?;
-                    e.value = Value::Str(SmallBytes::from_slice(&bytes));
-                    FloatOutcome::Reweigh(bytes, before)
-                }
-                _ => return Err(StoreError::WrongType),
-            }
-        } else {
-            // Absent/expired ⇒ start from 0.0.
-            if !delta.is_finite() {
-                return Err(StoreError::NotFloat);
-            }
-            FloatOutcome::Insert(fmt_num(delta))
-        };
-        match outcome {
-            FloatOutcome::Reweigh(bytes, before) => {
-                self.reweigh_scalar(key, before);
-                Ok(bytes)
-            }
-            FloatOutcome::Insert(bytes) => {
-                self.insert_entry(
-                    SmallBytes::from_slice(key),
-                    Entry::new(Value::Str(SmallBytes::from_slice(&bytes)), None),
-                );
-                Ok(bytes)
-            }
-        }
-    }
 }
 
 enum AppendOutcome {
     /// The new length, and what the value weighed before the append.
     Reweigh(usize, u64),
     Insert,
-}
-
-enum FloatOutcome {
-    /// The new bytes, and what the value weighed before the increment.
-    Reweigh(Vec<u8>, u64),
-    Insert(Vec<u8>),
-}
-
-/// Shared tail of the three INCRBYFLOAT arms: add `delta`, reject a
-/// non-finite result (Redis `NaN`/`inf` guard), format Redis-style.
-#[inline]
-fn float_incr_bytes(cur: f64, delta: f64) -> Result<Vec<u8>, StoreError> {
-    let next = cur + delta;
-    if !next.is_finite() {
-        return Err(StoreError::NotFloat);
-    }
-    Ok(fmt_num(next))
 }

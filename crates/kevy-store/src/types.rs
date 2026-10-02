@@ -131,6 +131,31 @@ pub enum StoreError {
     /// assert_eq!(s.zscore(b"z", b"m"), Ok(Some(f64::INFINITY)));
     /// ```
     ScoreIsNan,
+    /// INCRBYFLOAT / HINCRBYFLOAT: the sum is infinite.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// assert_eq!(s.incr_by_float_text(b"k", b"inf"), Err(StoreError::IncrNotFinite));
+    /// ```
+    IncrNotFinite,
+    /// HINCRBYFLOAT: the increment itself is infinite.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// assert_eq!(s.hincrbyfloat_text(b"h", b"f", b"-inf"), Err(StoreError::ValueNotFinite));
+    /// ```
+    ValueNotFinite,
+    /// HINCRBYFLOAT: the field holds something that is not a number.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"x".as_slice())]).unwrap();
+    /// assert_eq!(s.hincrbyfloat_text(b"h", b"f", b"1"), Err(StoreError::HashValueNotFloat));
+    /// ```
+    HashValueNotFloat,
     /// `maxmemory` would be exceeded and the active eviction policy is
     /// [`EvictionPolicy::NoEviction`]. Surfaces as Redis's classic OOM error
     /// at the RESP layer.
@@ -175,6 +200,9 @@ impl StoreError {
             Self::NoSuchKey => "ERR no such key",
             Self::NotFloat => "ERR value is not a valid float",
             Self::ScoreIsNan => "ERR resulting score is not a number (NaN)",
+            Self::IncrNotFinite => "ERR increment would produce NaN or Infinity",
+            Self::ValueNotFinite => "ERR value is NaN or Infinity",
+            Self::HashValueNotFloat => "ERR hash value is not a float",
             Self::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
             Self::StreamExhausted => {
                 "ERR The stream has exhausted the last possible ID, unable to add more items"
@@ -193,6 +221,9 @@ impl fmt::Display for StoreError {
             Self::NoSuchKey => "no such key",
             Self::NotFloat => "value is not a valid float",
             Self::ScoreIsNan => "resulting score is not a number (NaN)",
+            Self::IncrNotFinite => "increment would produce NaN or Infinity",
+            Self::ValueNotFinite => "value is NaN or Infinity",
+            Self::HashValueNotFloat => "hash value is not a float",
             Self::OutOfMemory => "maxmemory reached and the eviction policy is noeviction",
             Self::StreamExhausted => "the stream has exhausted the last possible ID",
         })

@@ -90,6 +90,7 @@ pub use defrag::{DefragHint, DefragStep};
 mod entry;
 mod entry_weight;
 mod error;
+mod float_incr;
 pub use bitmap::BitOp;
 pub use error::{KevyError, KevyResult};
 pub mod evict;
