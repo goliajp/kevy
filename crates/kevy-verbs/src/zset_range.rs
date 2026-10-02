@@ -24,6 +24,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             crate::zrange::zrange(store, args, out, v2);
             Effect::Read
         }
+        b"ZRANGESTORE" => crate::zrange::zrangestore(store, args, out),
         b"ZLEXCOUNT" => {
             lex(store, args, out, false);
             Effect::Read

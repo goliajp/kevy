@@ -240,6 +240,7 @@ registry! {
     b"ZRANGE" RD,
     b"ZRANGEBYLEX" RD,
     b"ZRANGEBYSCORE" RD,
+    b"ZRANGESTORE" WR,
     b"ZRANK" RD,
     b"ZREM" WR,
     b"ZREMRANGEBYLEX" WR,

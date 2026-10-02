@@ -269,6 +269,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("ZRANGE", -4),
     ("ZRANGEBYLEX", -4),
     ("ZRANGEBYSCORE", -4),
+    ("ZRANGESTORE", -5),
     ("ZRANK", -3),
     ("ZREM", -3),
     ("ZREMRANGEBYLEX", 4),

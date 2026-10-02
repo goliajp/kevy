@@ -422,6 +422,9 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::StoreValue { key, value, event, class } => {
+                self.op_store_value(key, value, &event, class)
+            }
             Op::FirstHitTry { argv, proto } => {
                 self.run_dispatch(&argv, proto, crate::exec_first_hit::FIRST_HIT_META)
             }

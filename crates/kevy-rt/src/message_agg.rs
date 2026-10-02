@@ -24,6 +24,8 @@ pub(crate) enum Agg {
     ReadAcross {
         argv: Argv,
         got: HashMap<Vec<u8>, Gathered>,
+        /// The key a [`crate::Route::StoreFromCopies`] writes.
+        dst: Option<Vec<u8>>,
     },
     SumInt(i64),
     /// `WAIT` accumulator: MIN over the per-shard acked-replica

@@ -244,8 +244,8 @@ impl<C: Commands> Shard<C> {
                 Agg::FirstHit { tries, next, got } => {
                     self.finalize_first_hit(conn_id, seq, tries, next, got);
                 }
-                Agg::ReadAcross { argv, got } => {
-                    self.finalize_read_across(conn_id, seq, &argv, got)
+                Agg::ReadAcross { argv, got, dst } => {
+                    self.finalize_read_across(conn_id, seq, &argv, got, dst);
                 }
                 Agg::BitOpGather { .. } => self.finalize_bitop_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),

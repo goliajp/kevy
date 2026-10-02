@@ -260,6 +260,14 @@ pub(crate) enum Op {
         argv: Argv,
         proto: RespVersion,
     },
+    /// Place a value computed elsewhere at `key`, replacing whatever it
+    /// held, and announce it as `event` of `class`. Reply [`Part::Ok`].
+    StoreValue {
+        key: Vec<u8>,
+        value: kevy_store::Value,
+        event: Vec<u8>,
+        class: Option<crate::NotifyKind>,
+    },
     /// The check an `XREADGROUP` split across shards runs on each
     /// stream's shard before any is read: `argv` is the same
     /// single-stream rewrite [`Op::XReadOne`] would run, only checked

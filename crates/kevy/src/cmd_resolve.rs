@@ -137,6 +137,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"MGET" if args.len() >= 2 => Route::Gather(MultiOp::Mget),
         b"ZMPOP" | b"LMPOP" => mpop_route(upper, args),
         b"LCS" if args.len() >= 3 => Route::ReadAcross { first: 1, count: 2 },
+        b"ZRANGESTORE" if args.len() >= 5 => Route::StoreFromCopies { first: 2, count: 1, dst: 1 },
         b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF" => read_across_route(upper, args),
         b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
         b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),

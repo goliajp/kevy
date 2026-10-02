@@ -112,6 +112,13 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// One `event` of `class` on `key`, when that class is switched on.
+    pub(crate) fn notify_class_event(&mut self, class: NotifyKind, event: &[u8], key: &[u8]) {
+        if self.notify_flags.is_active() && class_enabled(class, &self.notify_flags) {
+            self.notify_keyspace_event(event, key);
+        }
+    }
+
     /// A write's default event: its verb, lower-cased, on argument 1.
     fn notify_by_verb<A: ArgvView + ?Sized>(&mut self, args: &A) {
         let Some(class) = self.commands.notify_class(args) else { return };

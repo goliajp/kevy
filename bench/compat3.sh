@@ -381,6 +381,19 @@ check ZREMRANGEBYLEX zlx [e +
 check ZRANGE zlx 0 -1
 check ZRANGEBYLEX b6str - +
 check ZRANGE b6str 0 -1 BYLEX
+check ZRANGESTORE zrdst zrr 0 -1
+check ZRANGE zrdst 0 -1 WITHSCORES
+check ZRANGESTORE zrdst zrr 2 4 BYSCORE
+check ZRANGESTORE zrdst zrr 0 0 REV
+check ZRANGE zrdst 0 -1 WITHSCORES
+check ZRANGESTORE zrdst zrr (1 +inf BYSCORE LIMIT 1 1
+check ZRANGESTORE zrdst zlx [b (d BYLEX
+check ZRANGESTORE zrdst rznokey 0 -1
+check EXISTS zrdst
+check ZRANGESTORE zrdst zrr 0 -1 WITHSCORES
+check ZRANGESTORE zrdst b6str 0 -1
+check ZRANGESTORE b6str zrr 0 -1
+check TYPE b6str
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

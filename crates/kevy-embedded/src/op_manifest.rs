@@ -108,6 +108,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "ZRANGE",
     "ZRANGEBYLEX",
     "ZRANGEBYSCORE",
+    "ZRANGESTORE",
     "ZRANK",
     "ZREM",
     "ZREMRANGEBYLEX",
