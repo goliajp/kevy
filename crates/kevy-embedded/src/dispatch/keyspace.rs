@@ -8,7 +8,7 @@ use super::{emit_int, kevy_err, opt_bulk, rest};
 use kevy_resp::{
     encode_array_len, encode_bulk, encode_error, encode_integer, encode_simple_string,
 };
-use kevy_verbs::reply::{ERR_SYNTAX, wrong_args};
+use kevy_verbs::reply::wrong_args;
 
 /// One keyspace request; `false` = verb not in this group.
 // LOC-WAIVER: data-driven verb dispatch table — one arm per keyspace verb.
@@ -123,21 +123,12 @@ fn cmd_rename(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, nx: bool) {
 
 /// `COPY src dst [REPLACE]`.
 fn cmd_copy(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
-    let replace = match argv.len() {
-        3 => false,
-        4 if argv[3].eq_ignore_ascii_case(b"REPLACE") => true,
-        4 => return encode_error(out, ERR_SYNTAX),
-        _ => return wrong_args(out, "copy"),
+    // the grammar refuses a key copied onto itself, as Redis does; the
+    // `Store::copy` API method still answers `false` for it
+    let replace = match kevy_verbs::multikey::parse_copy(&super::Args::new(argv)) {
+        Ok(replace) => replace,
+        Err(e) => return encode_error(out, e.as_wire()),
     };
-    // Redis refuses a key copied onto itself, and says which two
-    // objects it means. Without this the facade answered `:0` — the
-    // same reply a refused overwrite gives, so a caller could not tell
-    // "you asked for something impossible" from "the destination was
-    // already there". The `Store::copy` API method is unchanged: this
-    // is the protocol face matching the protocol.
-    if argv[1] == argv[2] {
-        return encode_error(out, "ERR source and destination objects are the same");
-    }
     let mode = if replace { crate::CopyMode::Replace } else { crate::CopyMode::IfAbsent };
     match s.copy(&argv[1], &argv[2], mode) {
         Ok(copied) => encode_integer(out, i64::from(copied)),
