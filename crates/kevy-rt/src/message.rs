@@ -284,6 +284,8 @@ pub(crate) enum Op {
         value: kevy_store::Value,
         event: Vec<u8>,
         class: Option<crate::NotifyKind>,
+        /// Keep the deadline `key` already has, instead of none.
+        keep_ttl: bool,
     },
     /// The check an `XREADGROUP` split across shards runs on each
     /// stream's shard before any is read: `argv` is the same

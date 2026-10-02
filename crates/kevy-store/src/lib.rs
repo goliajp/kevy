@@ -101,6 +101,7 @@ pub use store_admin::DetachedEntries;
 mod hash;
 mod hash_read;
 mod hash_weight;
+mod hll;
 pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 mod hash_ttl_read;

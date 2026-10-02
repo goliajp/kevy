@@ -156,6 +156,25 @@ pub enum StoreError {
     /// assert_eq!(s.hincrbyfloat_text(b"h", b"f", b"1"), Err(StoreError::HashValueNotFloat));
     /// ```
     HashValueNotFloat,
+    /// A HyperLogLog command met a string that is not a HyperLogLog.
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"abc".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.pfadd(b"k", &[b"a"]), Err(StoreError::NotHll));
+    /// ```
+    NotHll,
+    /// A sparse HyperLogLog whose runs do not cover its registers.
+    ///
+    /// ```
+    /// use kevy_store::{SetCondition, Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.pfadd(b"h", &[b"a"]).unwrap();
+    /// s.append(b"h", b"zz").unwrap();
+    /// assert_eq!(s.pfcount(&[b"h"]), Err(StoreError::HllCorrupt));
+    /// ```
+    HllCorrupt,
     /// `maxmemory` would be exceeded and the active eviction policy is
     /// [`EvictionPolicy::NoEviction`]. Surfaces as Redis's classic OOM error
     /// at the RESP layer.
@@ -203,6 +222,8 @@ impl StoreError {
             Self::IncrNotFinite => "ERR increment would produce NaN or Infinity",
             Self::ValueNotFinite => "ERR value is NaN or Infinity",
             Self::HashValueNotFloat => "ERR hash value is not a float",
+            Self::NotHll => "WRONGTYPE Key is not a valid HyperLogLog string value.",
+            Self::HllCorrupt => "INVALIDOBJ Corrupted HLL object detected",
             Self::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
             Self::StreamExhausted => {
                 "ERR The stream has exhausted the last possible ID, unable to add more items"
@@ -224,6 +245,8 @@ impl fmt::Display for StoreError {
             Self::IncrNotFinite => "increment would produce NaN or Infinity",
             Self::ValueNotFinite => "value is NaN or Infinity",
             Self::HashValueNotFloat => "hash value is not a float",
+            Self::NotHll => "key is not a valid HyperLogLog string value",
+            Self::HllCorrupt => "corrupted HLL object detected",
             Self::OutOfMemory => "maxmemory reached and the eviction policy is noeviction",
             Self::StreamExhausted => "the stream has exhausted the last possible ID",
         })

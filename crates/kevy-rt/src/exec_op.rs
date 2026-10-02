@@ -427,8 +427,8 @@ impl<C: Commands> Shard<C> {
                 self.op_set_move_take(&src, &member, dst_is_set)
             }
             Op::SetMovePut { key, member } => self.op_set_move_put(&key, &member),
-            Op::StoreValue { key, value, event, class } => {
-                self.op_store_value(key, value, &event, class)
+            Op::StoreValue { key, value, event, class, keep_ttl } => {
+                self.op_store_value(key, value, &event, class, keep_ttl)
             }
             Op::FirstHitTry { argv, proto } => {
                 self.run_dispatch(&argv, proto, crate::exec_first_hit::FIRST_HIT_META)

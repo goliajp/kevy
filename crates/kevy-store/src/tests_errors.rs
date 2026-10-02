@@ -41,6 +41,16 @@ fn every_store_error_has_its_wire_line_and_its_message() {
             "hash value is not a float",
         ),
         (
+            StoreError::NotHll,
+            "WRONGTYPE Key is not a valid HyperLogLog string value.",
+            "key is not a valid HyperLogLog string value",
+        ),
+        (
+            StoreError::HllCorrupt,
+            "INVALIDOBJ Corrupted HLL object detected",
+            "corrupted HLL object detected",
+        ),
+        (
             StoreError::ScoreIsNan,
             "ERR resulting score is not a number (NaN)",
             "resulting score is not a number (NaN)",
