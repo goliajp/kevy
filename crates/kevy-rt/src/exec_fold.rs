@@ -185,6 +185,7 @@ impl<C: Commands> Shard<C> {
                 (Agg::FirstHit { got, .. }, Part::Reply(b)) => *got = Some(b),
                 (Agg::ReadAcross { got, .. }, Part::Gathered(pairs)) => got.extend(pairs),
                 (Agg::SetMove { answer, .. }, Part::Int(n)) => *answer = n,
+                (Agg::MSetNx { existing, .. }, Part::Int(n)) => *existing += n,
                 (Agg::CopyOrchestrator { stored, .. }, Part::CopyPutDone { stored: st }) => {
                     *stored = Some(st);
                 }
@@ -218,6 +219,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::FirstHit { .. }
                         | Agg::ReadAcross { .. }
                         | Agg::SetMove { .. }
+                        | Agg::MSetNx { .. }
                         | Agg::BitOpGather { .. }
                         | Agg::ZStoreGather { .. }
                         | Agg::GeoStore { .. }
@@ -245,6 +247,9 @@ impl<C: Commands> Shard<C> {
                 Agg::CopyOrchestrator { .. } => self.finalize_copy_agg(conn_id, seq, agg),
                 Agg::FirstHit { tries, next, got } => {
                     self.finalize_first_hit(conn_id, seq, tries, next, got);
+                }
+                Agg::MSetNx { pairs, existing } => {
+                    self.finalize_msetnx(conn_id, seq, pairs, existing)
                 }
                 Agg::SetMove { step, src, dst, member, answer } => {
                     self.finalize_set_move(conn_id, seq, step, (src, dst, member), answer);

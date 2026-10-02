@@ -188,6 +188,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("INCRBYFLOAT",  WR, GROW, Some(N::String), None,    SERVER | ESTORE | REPLAY),
     op("MGET",         RD, NG,   None,            None,    SERVER | ESTORE),
     op("MSET",         WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
+    op("MSETNX",       WR, GROW, None,            None,    SERVER | ESTORE | REPLAY),
     op("PSETEX",       WR, GROW, Some(N::String), None,    SERVER | REPLAY),
     op("SET",          WR, GROW, Some(N::String), None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("SETEX",        WR, GROW, Some(N::String), None,    SERVER | REPLAY),

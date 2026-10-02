@@ -172,5 +172,6 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"XCLAIM"
             | b"XAUTOCLAIM"
             | b"MSET"
+            | b"MSETNX"
     )
 }

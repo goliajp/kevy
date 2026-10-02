@@ -407,6 +407,13 @@ check SMOVE sm2 rk1 nope
 check SMOVE rk1 sm2 x
 check SMOVE smnokey rk1 x
 check SMOVE sm1 sm2
+check MSETNX mx1 a mx2 b
+check MSETNX mx2 x mx3 y
+check EXISTS mx3
+check MSETNX mx4 a mx4 b
+check GET mx4
+check MSETNX mx1
+check MSETNX mx1 a mx2
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

@@ -129,6 +129,7 @@ mod exec_first_hit;
 mod exec_fold;
 mod exec_geostore;
 mod exec_listmove;
+mod exec_msetnx;
 mod exec_mutated;
 mod exec_notify;
 mod exec_op;

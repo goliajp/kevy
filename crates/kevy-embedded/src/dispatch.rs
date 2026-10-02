@@ -31,6 +31,7 @@ mod idx_query;
 mod keyspace;
 mod misc;
 mod mpop;
+mod msetnx;
 mod read_across;
 mod set;
 mod shared;
@@ -70,6 +71,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         || mpop::dispatch(s, up, argv, out)
         || read_across::dispatch(s, up, argv, out)
         || smove::dispatch(s, up, argv, out)
+        || msetnx::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
         || shared::dispatch(s, up, argv, out)
@@ -190,6 +192,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "LPUSHX",
     "MGET",
     "MSET",
+    "MSETNX",
     "RPUSHX",
     "SET",
     "SETNX",

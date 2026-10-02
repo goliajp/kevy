@@ -30,7 +30,15 @@ fn events<A: ArgvView + ?Sized>(
     if reply.first() == Some(&b'-') || matches!(effect, Effect::Unchanged | Effect::Skip) {
         return Some(Notify::Suppress);
     }
-    let one = |class, event, key: &[u8]| Some(Notify::Events(vec![(class, event, key.to_vec())]));
+    popped(cmd, args, effect).or_else(|| written(cmd, args, reply))
+}
+
+fn one(class: NotifyKind, event: &'static str, key: &[u8]) -> Option<Notify> {
+    Some(Notify::Events(vec![(class, event, key.to_vec())]))
+}
+
+/// The pops: the end they took from, on the key they took from.
+fn popped<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, effect: &Effect) -> Option<Notify> {
     match (cmd, effect) {
         (b"BLPOP", _) => one(NotifyKind::List, "lpop", &args[1]),
         (b"BRPOP", _) => one(NotifyKind::List, "rpop", &args[1]),
@@ -47,22 +55,35 @@ fn events<A: ArgvView + ?Sized>(
                 kevy_verbs::mpop::parse_zmpop(args, at).ok()?.end == kevy_store::ListEnd::Left;
             one(NotifyKind::Zset, if min { "zpopmin" } else { "zpopmax" }, &frame[1])
         }
+        _ => None,
+    }
+}
+
+/// The other writes whose events are not their verb on argument 1.
+fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<Notify> {
+    match cmd {
         // an empty range removes the destination, which is a `del`
-        (b"ZRANGESTORE", _) if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
-        (b"SMOVE", _) => Some(Notify::Events(vec![
+        b"ZRANGESTORE" if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
+        b"SMOVE" => Some(Notify::Events(vec![
             (NotifyKind::Set, "srem", args[1].to_vec()),
             (NotifyKind::Set, "sadd", args[2].to_vec()),
         ])),
-        (b"LPUSHX", _) => one(NotifyKind::List, "lpush", &args[1]),
-        (b"RPUSHX", _) => one(NotifyKind::List, "rpush", &args[1]),
+        b"MSETNX" => Some(Notify::Events(
+            (1..args.len())
+                .step_by(2)
+                .map(|i| (NotifyKind::String, "set", args[i].to_vec()))
+                .collect(),
+        )),
+        b"LPUSHX" => one(NotifyKind::List, "lpush", &args[1]),
+        b"RPUSHX" => one(NotifyKind::List, "rpush", &args[1]),
         // every field-TTL setter is an `hexpire`, unless its deadline had
         // passed and the fields went, which is an `hdel` (code 2)
-        (b"HEXPIRE" | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT", _) => {
+        b"HEXPIRE" | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" => {
             let deleted = reply.windows(4).any(|w| w == b":2\r\n");
             one(NotifyKind::Hash, if deleted { "hdel" } else { "hexpire" }, &args[1])
         }
-        (b"LMOVE" | b"BLMOVE", _) => moved(args, &args[3], &args[4]),
-        (b"RPOPLPUSH" | b"BRPOPLPUSH", _) => moved(args, b"RIGHT", b"LEFT"),
+        b"LMOVE" | b"BLMOVE" => moved(args, &args[3], &args[4]),
+        b"RPOPLPUSH" | b"BRPOPLPUSH" => moved(args, b"RIGHT", b"LEFT"),
         _ => None,
     }
 }
