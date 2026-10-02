@@ -53,4 +53,8 @@ pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
 /// and the everysec DATASYNC. Low bits carry the chunk sequence number
 /// (0 = the fsync) instead of a conn id — the AOF has no connection.
 pub(crate) const OP_AOF: u64 = 10 << OP_SHIFT;
+/// A peer messaged this ring to wake it (`IORING_OP_MSG_RING`).
+pub(crate) const OP_MSG_WAKE: u64 = 11 << OP_SHIFT;
+/// A wake message this shard sent did not arrive; low bits name the peer.
+pub(crate) const OP_MSG_FAIL: u64 = 12 << OP_SHIFT;
 pub(crate) const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;

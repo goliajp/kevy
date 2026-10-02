@@ -243,11 +243,7 @@ impl IoUring {
     /// its next poll spin.
     // LOC-WAIVER: per-iter busy-poll submit hot body; bulk of the length is enter-skip contract comments.
     pub fn submit_and_wait(&mut self, wait_nr: u32) -> io::Result<u32> {
-        // SAFETY: `sq_ktail` is the kernel-published tail ptr.
-        let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };
-        let to_submit = self.sq_tail.wrapping_sub(prev);
-        // SAFETY: publishing our local tail to the kernel-shared atomic.
-        unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
+        let to_submit = self.publish_tail();
         if self.sq_flags.is_some() {
             // Store-load, the one pair acquire/release does not order:
             // the tail store above and the `sq_flags` load below are
@@ -321,13 +317,7 @@ impl IoUring {
                 return Ok(to_submit);
             }
         }
-        // E1.5: when the ring is self-registered (IORING_REGISTER_RING_FDS),
-        // pass the registered index instead of the raw fd. The kernel skips
-        // its per-syscall fget/fput on the ring.
-        let (syscall_fd, extra_flags) = match self.enter_ring {
-            Some((idx, flag)) => (ffi::arg(idx), flag),
-            None => (c_long::from(self.ring_fd), 0),
-        };
+        let (syscall_fd, extra_flags) = self.enter_fd();
         enter_flags |= extra_flags;
         // Retried on EINTR like every other syscall loop in the tree
         // (the pollers, the socket reads, the accept loop): a signal
@@ -356,16 +346,58 @@ impl IoUring {
                 return Err(e);
             }
         };
-        // Real enter happened — the skip counter resets.
-        self.iters_since_enter = 0;
-        self.check_dropped()?;
+        self.entered()?;
         Ok(ret as u32)
     }
 
-    /// Whether the kernel has completions parked on its overflow list.
-    ///
-    /// Relaxed: this is a hint the kernel republishes, and the enter it
-    /// triggers is what actually orders anything.
+    /// Publish the local SQ tail to the kernel; the number of new entries.
+    pub(crate) fn publish_tail(&mut self) -> u32 {
+        // SAFETY: `sq_ktail` is the kernel-published tail ptr.
+        let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };
+        // SAFETY: publishing our local tail to the kernel-shared atomic.
+        unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
+        self.sq_tail.wrapping_sub(prev)
+    }
+
+    /// The fd argument for `io_uring_enter` and the flag that goes with it:
+    /// the registered index when the ring is self-registered
+    /// (IORING_REGISTER_RING_FDS), which spares the kernel an fget/fput
+    /// per syscall, else the raw fd.
+    pub(crate) fn enter_fd(&self) -> (c_long, u32) {
+        match self.enter_ring {
+            Some((idx, flag)) => (ffi::arg(idx), flag),
+            None => (c_long::from(self.ring_fd), 0),
+        }
+    }
+
+    /// A real enter happened: the skip counter resets, and any refused
+    /// submission is reported.
+    pub(crate) fn entered(&mut self) -> io::Result<()> {
+        self.iters_since_enter = 0;
+        self.check_dropped()
+    }
+
+    /// This ring's fd: the target to give [`IoUring::prep_msg_ring`] on
+    /// another ring of the same process.
+    pub fn raw_fd(&self) -> i32 {
+        self.ring_fd
+    }
+
+    /// Whether the kernel delivers [`IoUring::prep_msg_ring`] messages:
+    /// sends one to this ring and waits for it. Call on a fresh ring,
+    /// before anything else is queued — it consumes every completion.
+    pub fn msg_ring_works(&mut self) -> bool {
+        const DELIVERED: u64 = 0x6d73_6721;
+        const REFUSED: u64 = 0x6d73_6758;
+        if !self.prep_msg_ring(self.ring_fd, DELIVERED, REFUSED) || self.submit_and_wait(1).is_err()
+        {
+            return false;
+        }
+        let mut delivered = false;
+        self.for_each_completion(|c| delivered |= c.user_data == DELIVERED && c.res == 0);
+        delivered
+    }
+
     /// The kernel has completion work queued for this ring
     /// (`IORING_SQ_TASKRUN`, raised only under `IORING_SETUP_TASKRUN_FLAG`).
     fn taskrun_pending(&self) -> bool {
@@ -375,6 +407,10 @@ impl IoUring {
         flags & crate::ffi::IORING_SQ_TASKRUN != 0
     }
 
+    /// Whether the kernel has completions parked on its overflow list.
+    ///
+    /// Relaxed: this is a hint the kernel republishes, and the enter it
+    /// triggers is what actually orders anything.
     fn cq_overflowed(&self) -> bool {
         // SAFETY: `flags_word` points inside the SQ mapping, which lives
         // as long as this ring.

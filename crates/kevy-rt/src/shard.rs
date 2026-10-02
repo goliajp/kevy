@@ -76,6 +76,10 @@ pub(crate) struct Shard<C: Commands> {
     /// re-pushed (in order) by `flush_backlog` once the peer drains.
     pub(crate) backlog: Vec<VecDeque<Inbound>>,
     pub(crate) wakers: Vec<Arc<Waker>>,
+    /// Each shard's io_uring fd once it accepts ring messages, else -1:
+    /// the io_uring reactor wakes a parked peer through its ring.
+    #[cfg(target_os = "linux")]
+    pub(crate) ring_fds: Arc<[std::sync::atomic::AtomicI32]>,
     // Fx-hashed: looked up per event, and per command through
     // `conn_slot_hint`; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.

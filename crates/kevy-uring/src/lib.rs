@@ -56,6 +56,7 @@ mod prep;
 mod register;
 mod ring;
 mod setup;
+mod wait;
 
 #[cfg(test)]
 mod ring_tests;
