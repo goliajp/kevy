@@ -124,11 +124,7 @@ fn parse_multibulk_borrowed(
             Some(b'$') => {}
             Some(_) => return Err(ProtocolError::Malformed("expected bulk string")),
         }
-        let header = match small_header(buf, p + 1) {
-            Some(got) => Some(got),
-            None => parse_bulk_len(buf, p)?,
-        };
-        let Some((len, data_start)) = header else {
+        let Some((len, data_start)) = bulk_header(buf, p)? else {
             return Ok(None);
         };
         let data_end = data_start + len;
@@ -142,6 +138,16 @@ fn parse_multibulk_borrowed(
         p = data_end + 2;
     }
     Ok(Some((argv, p)))
+}
+
+/// The `$<len>\r\n` at `p`: the short form read directly, any other by
+/// the general parser.
+#[inline(always)]
+fn bulk_header(buf: &[u8], p: usize) -> Result<Option<(usize, usize)>, ProtocolError> {
+    match small_header(buf, p + 1) {
+        Some(got) => Ok(Some(got)),
+        None => parse_bulk_len(buf, p),
+    }
 }
 
 /// A one- or two-digit number at `at` and its CRLF, as nearly every count
