@@ -140,6 +140,15 @@ const SCRIPT: &[(&str, &[&str])] = &[
     ("HEXPIREAT h 1 FIELDS 1 f", &["hdel(h)"]),
     ("HEXPIRE h 0 FIELDS 1 g", &["hdel(h)", "del(h)"]),
     ("HEXPIRE nokey 10 FIELDS 1 f", &[]),
+    ("RPUSH src 3 1 2", &["rpush(src)"]),
+    ("SORT src STORE sd", &["sortstore(sd)"]),
+    ("SORT src STORE sd2 LIMIT 5 1", &[]),
+    ("SET sd3 x", &["set(sd3)"]),
+    ("SORT src STORE sd3 LIMIT 5 1", &["del(sd3)"]),
+    ("SORT src STORE sd DESC GET # GET #", &["sortstore(sd)"]),
+    ("SORT_RO src", &[]),
+    ("SADD ss b a c", &["sadd(ss)"]),
+    ("SORT ss STORE sd5 BY nosort", &["sortstore(sd5)"]),
 ];
 
 fn run_script(nshards: usize) {

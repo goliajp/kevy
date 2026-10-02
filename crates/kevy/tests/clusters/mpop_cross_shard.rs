@@ -318,6 +318,30 @@ fn zrangestore_places_the_range_on_the_destinations_shard() {
     assert_eq!(r, b"-ERR syntax error\r\n");
 }
 
+/// `SORT … STORE` whose destination lives on another shard than its source
+/// lands the list there, replaces whatever the destination held, and
+/// removes it for an empty result.
+#[test]
+fn sort_store_places_the_list_on_the_destinations_shard() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let k = apart("so", 2);
+    let (src, dst) = (b(&k[0]), b(&k[1]));
+    call(&mut c, &[b"RPUSH", src, b"3", b"1", b"2"]);
+    call(&mut c, &[b"SET", dst, b"was-a-string"]);
+    assert_eq!(call(&mut c, &[b"SORT", src, b"DESC", b"STORE", dst]), b":3\r\n");
+    assert_eq!(
+        call(&mut c, &[b"LRANGE", dst, b"0", b"-1"]),
+        b"*3\r\n$1\r\n3\r\n$1\r\n2\r\n$1\r\n1\r\n"
+    );
+    assert_eq!(call(&mut c, &[b"SORT", src, b"LIMIT", b"9", b"1", b"STORE", dst]), b":0\r\n");
+    assert_eq!(call(&mut c, &[b"EXISTS", dst]), b":0\r\n", "an empty result removes dst");
+    call(&mut c, &[b"RPUSH", src, b"x"]);
+    let r = call(&mut c, &[b"SORT", src, b"STORE", dst]);
+    assert_eq!(r, b"-ERR One or more scores can't be converted into double\r\n");
+    assert_eq!(call(&mut c, &[b"EXISTS", dst]), b":0\r\n", "a refused sort writes nothing");
+}
+
 /// `SMOVE` between sets on different shards, in Redis's order of checks.
 #[test]
 fn smove_moves_a_member_between_shards_in_redis_order() {

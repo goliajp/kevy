@@ -473,6 +473,45 @@ check HINCRBY ldt g 2
 check HTTL ldt FIELDS 2 f g
 check RPUSH ldl a
 check INCRBYFLOAT ldl x
+check RPUSH srt 3 1 2 10 1.5 -2
+check SORT srt
+check SORT srt DESC
+check SORT srt ALPHA
+check SORT srt ALPHA DESC
+check SORT srt LIMIT 1 2
+check SORT srt LIMIT -1 2
+check SORT srt LIMIT 10 2
+check SORT srt LIMIT 1
+check SORT srt LIMIT a 1
+check SORT srt BY nosort
+check SORT srt BY nosort DESC LIMIT 1 2
+check SORT srt GET '#' GET '#'
+check SORT srt ASC DESC
+check SORT srt BAD
+check SORT srt STORE srtd
+check LRANGE srtd 0 -1
+check SORT srtnone STORE srtd
+check EXISTS srtd
+check RPUSH srtbad 1 x
+check SORT srtbad
+check SORT srtbad ALPHA
+check RPUSH srtties 1 01 1.0 1e0 -0 0
+check SORT srtties
+check SORT srtties DESC
+check SADD srts 5 3 9 1
+check SORT srts
+check SORT srts DESC LIMIT 0 2
+check SORT srts BY nosort STORE srtsd
+check LRANGE srtsd 0 -1
+check ZADD srtz 1 c 2 a 3 b
+check SORT srtz ALPHA
+check SORT srtz BY nosort DESC LIMIT 0 2
+check SORT srtz
+check SET srtstr x
+check SORT srtstr
+check SORT_RO srt LIMIT 0 3
+check SORT_RO srt STORE x
+check SORT
 check BITFIELD bf1 OVERFLOW BAD
 check BITFIELD bf1 GET u8
 check BITFIELD bf1 BAD u8 0
