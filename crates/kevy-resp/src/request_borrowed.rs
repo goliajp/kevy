@@ -269,7 +269,7 @@ mod tests {
                 checked += 1;
             }
             for at in 0..frame.len().min(24) {
-                for b in [b'-', b'+', b'x', b'\r', b'\n', b'0', b'9', b'$', b'*'] {
+                for b in *b"-+x\r\n09$*" {
                     let mut bad = frame.clone();
                     bad[at] = b;
                     let (want, got) = (owned(&bad), borrowed(&bad));
