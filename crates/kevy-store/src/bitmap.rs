@@ -80,78 +80,89 @@ impl Store {
         self.insert_entry(SmallBytes::from_slice(key), Entry::new(new_val, ttl_ns));
     }
 
-    /// `BITCOUNT key [start end [BYTE|BIT]]` — count set bits.
-    /// `start`/`end` are byte offsets (inclusive, negative-from-tail
-    /// like Redis). `None` for both = whole string.
+    /// `BITCOUNT key [start end]` — count set bits over a byte range
+    /// (inclusive, negative from the end). `None` = the whole string.
     pub fn bitcount(&mut self, key: &[u8], range: Option<(i64, i64)>) -> Result<u64, StoreError> {
-        let bytes = match self.get(key)? {
-            Some(cow) => cow,
-            None => return Ok(0),
-        };
-        if bytes.is_empty() {
-            return Ok(0);
-        }
-        let len = bytes.len() as i64;
-        let (s, e) = match range {
-            None => (0, (len - 1) as usize),
-            Some((start, end)) => {
-                let norm =
-                    |x: i64| -> i64 { if x < 0 { (len + x).max(0) } else { x.min(len - 1) } };
-                let s = norm(start);
-                let e = norm(end);
-                if s > e {
-                    return Ok(0);
-                }
-                (s as usize, e as usize)
-            }
-        };
-        Ok(bytes[s..=e].iter().map(|b| u64::from(b.count_ones())).sum())
+        self.bitcount_in(key, range.map(|(s, e)| (s, e, BitUnit::Byte)))
     }
 
-    /// `BITPOS key bit [start [end]]` — return the position (bit
-    /// index, MSB-first) of the first bit equal to `bit` (0 or 1)
-    /// in the byte range `[start, end]` (inclusive, Redis-style
-    /// negative indexing). Returns `None` (Redis `-1`) when not
-    /// found. Errors with `OutOfRange` if `bit` > 1.
+    /// `BITCOUNT key [start end [BYTE | BIT]]`: the set bits in the range,
+    /// counted in bytes or in bits as Redis counts them.
+    ///
+    /// ```
+    /// use kevy_store::{BitUnit, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"foobar".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.bitcount_in(b"k", Some((1, 1, BitUnit::Byte))).unwrap(), 6);
+    /// assert_eq!(s.bitcount_in(b"k", Some((5, 30, BitUnit::Bit))).unwrap(), 17);
+    /// ```
+    pub fn bitcount_in(
+        &mut self,
+        key: &[u8],
+        range: Option<(i64, i64, BitUnit)>,
+    ) -> Result<u64, StoreError> {
+        let Some(bytes) = self.get(key)? else { return Ok(0) };
+        // two negatives the wrong way round count nothing, before either
+        // is read against the length (BITPOS has no such rule)
+        if range.is_some_and(|(s, e, _)| s < 0 && e < 0 && s > e) {
+            return Ok(0);
+        }
+        let bits = bytes.len() as i64 * 8;
+        let Some((from, to)) = bit_span(bits, range) else { return Ok(0) };
+        let (first, last) = ((from / 8) as usize, (to / 8) as usize);
+        Ok((first..=last)
+            .map(|i| u64::from((bytes[i] & span_mask(i, from, to)).count_ones()))
+            .sum())
+    }
+
+    /// `BITPOS key bit [start [end]]` over a byte range — see
+    /// [`Self::bitpos_in`].
     pub fn bitpos(
         &mut self,
         key: &[u8],
         bit: u8,
         range: Option<(i64, i64)>,
     ) -> Result<Option<u64>, StoreError> {
+        let (start, end) = range.map_or((None, None), |(s, e)| (Some(s), Some(e)));
+        self.bitpos_in(key, bit, start, end, BitUnit::Byte)
+    }
+
+    /// `BITPOS key bit [start [end [BYTE | BIT]]]`: the first bit equal to
+    /// `bit` (0 or 1) in the range, MSB first; `None` is Redis's `-1`.
+    /// Looking for a 0 with no end given, a string of ones answers the bit
+    /// just past it, since the string reads as zero-padded beyond its end.
+    ///
+    /// ```
+    /// use kevy_store::{BitUnit, SetCondition, Store};
+    /// let mut s = Store::new();
+    /// s.set(b"k", b"\xff\xf0\x00".to_vec(), None, SetCondition::Always);
+    /// assert_eq!(s.bitpos_in(b"k", 1, Some(7), Some(15), BitUnit::Bit).unwrap(), Some(7));
+    /// assert_eq!(s.bitpos_in(b"k", 0, Some(0), Some(3), BitUnit::Bit).unwrap(), None);
+    /// ```
+    pub fn bitpos_in(
+        &mut self,
+        key: &[u8],
+        bit: u8,
+        start: Option<i64>,
+        end: Option<i64>,
+        unit: BitUnit,
+    ) -> Result<Option<u64>, StoreError> {
         if bit > 1 {
             return Err(StoreError::OutOfRange);
         }
-        let bytes = match self.get(key)? {
-            Some(cow) => cow,
-            None => return Ok(if bit == 0 { Some(0) } else { None }),
+        let Some(bytes) = self.get(key)? else {
+            return Ok((bit == 0).then_some(0));
         };
-        if bytes.is_empty() {
-            return Ok(if bit == 0 { Some(0) } else { None });
-        }
-        let len = bytes.len() as i64;
-        let (s, e) = match range {
-            None => (0usize, (len - 1) as usize),
-            Some((start, end)) => {
-                let norm =
-                    |x: i64| -> i64 { if x < 0 { (len + x).max(0) } else { x.min(len - 1) } };
-                let s = norm(start);
-                let e = norm(end);
-                if s > e {
-                    return Ok(None);
-                }
-                (s as usize, e as usize)
-            }
-        };
-        for (i, &b) in bytes[s..=e].iter().enumerate() {
-            let target_mask = if bit == 1 { b } else { !b };
-            if target_mask != 0 {
-                let bit_in_byte = target_mask.leading_zeros() as u64;
-                let byte_idx = (s + i) as u64;
-                return Ok(Some(byte_idx * 8 + bit_in_byte));
+        let bits = bytes.len() as i64 * 8;
+        let range = (start.unwrap_or(0), end.unwrap_or(-1), unit);
+        let Some((from, to)) = bit_span(bits, Some(range)) else { return Ok(None) };
+        for i in (from / 8) as usize..=(to / 8) as usize {
+            let b = if bit == 1 { bytes[i] } else { !bytes[i] } & span_mask(i, from, to);
+            if b != 0 {
+                return Ok(Some(i as u64 * 8 + u64::from(b.leading_zeros())));
             }
         }
-        Ok(None)
+        Ok((bit == 0 && end.is_none()).then_some(to as u64 + 1))
     }
 
     /// `GETRANGE key start end` — substring with Redis-style
@@ -208,6 +219,44 @@ impl Store {
     }
 }
 
+/// The unit of a `BITCOUNT` / `BITPOS` range.
+///
+/// ```
+/// use kevy_store::BitUnit;
+/// assert_ne!(BitUnit::Byte, BitUnit::Bit);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BitUnit {
+    /// Offsets count bytes, as Redis's default.
+    Byte,
+    /// Offsets count bits, MSB first.
+    Bit,
+}
+
+/// The inclusive bit range `[start, end]` of a string `bits` long, read
+/// as Redis reads it: negative from the end, floored at 0, the end capped
+/// at the last bit. `None` (no range) is the whole string; an empty
+/// result is `None`.
+fn bit_span(bits: i64, range: Option<(i64, i64, BitUnit)>) -> Option<(i64, i64)> {
+    let Some((start, end, unit)) = range else {
+        return (bits > 0).then_some((0, bits - 1));
+    };
+    let len = if unit == BitUnit::Bit { bits } else { bits / 8 };
+    let from_end = |x: i64| if x < 0 { len.saturating_add(x).max(0) } else { x };
+    let (s, e) = (from_end(start), from_end(end).min(len - 1));
+    if s > e {
+        return None;
+    }
+    Some(if unit == BitUnit::Bit { (s, e) } else { (s * 8, e * 8 + 7) })
+}
+
+/// The bits of byte `i` that fall inside `[from, to]`.
+fn span_mask(i: usize, from: i64, to: i64) -> u8 {
+    let lo = (from - i as i64 * 8).clamp(0, 8) as u32;
+    let hi = (i as i64 * 8 + 7 - to).clamp(0, 8) as u32;
+    (0xffu16 >> lo) as u8 & (0xffu16 << hi) as u8
+}
+
 // ── BITOP: the operator, and the byte arithmetic ───────────────────
 //
 // Both live here rather than in a facade because neither knows what a
@@ -256,9 +305,54 @@ pub enum BitOp {
     /// assert_eq!(BitOp::Not.combine(&[vec![0x0f]], 1), vec![0xf0]);
     /// ```
     Not,
+    /// The bits of the first source set in none of the others:
+    /// `X ∧ ¬(Y1 ∨ Y2 …)`.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::Diff.combine(&[vec![0xf0], vec![0x3c]], 1), vec![0xc0]);
+    /// ```
+    Diff,
+    /// The bits set in some other source and not in the first:
+    /// `¬X ∧ (Y1 ∨ Y2 …)`.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::Diff1.combine(&[vec![0xf0], vec![0x3c]], 1), vec![0x0c]);
+    /// ```
+    Diff1,
+    /// The bits of the first source set in some other: `X ∧ (Y1 ∨ Y2 …)`.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// assert_eq!(BitOp::AndOr.combine(&[vec![0xf0], vec![0x3c]], 1), vec![0x30]);
+    /// ```
+    AndOr,
+    /// The bits set in exactly one source.
+    ///
+    /// ```
+    /// use kevy_store::BitOp;
+    /// let srcs = [vec![0xf0], vec![0x3c], vec![0x0f]];
+    /// assert_eq!(BitOp::One.combine(&srcs, 1), vec![0xc3]);
+    /// ```
+    One,
 }
 
 impl BitOp {
+    /// The least number of source keys the operator takes: NOT takes one
+    /// and only one, DIFF / DIFF1 / ANDOR at least two, the rest one.
+    ///
+    /// ```
+    /// assert_eq!(kevy_store::BitOp::Diff.min_sources(), 2);
+    /// ```
+    #[must_use]
+    pub fn min_sources(self) -> usize {
+        match self {
+            BitOp::Diff | BitOp::Diff1 | BitOp::AndOr => 2,
+            _ => 1,
+        }
+    }
+
     /// Combine the source strings under this operator into the `max_len`-byte
     /// destination value (shorter sources zero-padded).
     ///
@@ -295,6 +389,10 @@ impl BitOp {
                     *byte = 0xff;
                 }
             }
+            BitOp::Diff | BitOp::Diff1 | BitOp::AndOr => {
+                self.first_against_rest(srcs_bytes, &mut out)
+            }
+            BitOp::One => exactly_one(srcs_bytes, &mut out),
             // AND, OR, XOR. NOT returned above, so the catch-alls below are
             // XOR — written as `_` rather than `Not => unreachable!()`,
             // which was four arms that can never run and four regions that
@@ -317,5 +415,33 @@ impl BitOp {
             }
         }
         out
+    }
+
+    /// DIFF, DIFF1 and ANDOR: the first source against the OR of the rest.
+    fn first_against_rest(self, srcs_bytes: &[Vec<u8>], out: &mut [u8]) {
+        let none = Vec::new();
+        let (first, rest) = srcs_bytes.split_first().unwrap_or((&none, &[]));
+        for (i, b) in out.iter_mut().enumerate() {
+            let x = first.get(i).copied().unwrap_or(0);
+            let any = rest.iter().fold(0, |acc, s| acc | s.get(i).copied().unwrap_or(0));
+            *b = match self {
+                BitOp::Diff => x & !any,
+                BitOp::Diff1 => !x & any,
+                _ => x & any,
+            };
+        }
+    }
+}
+
+/// ONE: the bits set in exactly one source. `out` holds the bits seen once
+/// so far, `more` those seen twice or more.
+fn exactly_one(srcs_bytes: &[Vec<u8>], out: &mut [u8]) {
+    let mut more = vec![0u8; out.len()];
+    for s in srcs_bytes {
+        for (i, (once, more)) in out.iter_mut().zip(&mut more).enumerate() {
+            let sb = s.get(i).copied().unwrap_or(0);
+            *more |= *once & sb;
+            *once = (*once ^ sb) & !*more;
+        }
     }
 }

@@ -91,7 +91,7 @@ mod entry;
 mod entry_weight;
 mod error;
 mod float_incr;
-pub use bitmap::BitOp;
+pub use bitmap::{BitOp, BitUnit};
 pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;

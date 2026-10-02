@@ -63,9 +63,9 @@ cannot have.
 | Verb | Arity | Flags | Complexity | Redis | Summary |
 |---|---|---|---|---|---|
 | `APPEND key value` | 3 | write | O(1) amortised while the value is <= 64 B; O(N) per call once it exceeds that (the Arc payload is copied out and re-boxed on every append), so building a large string by repeated APPEND is O(N^2) | full | Append bytes to a string value; returns the new length. |
-| `BITOP AND\|OR\|XOR\|NOT destkey key [key ...]` | -4 | write | O(N) over the longest source; on a multi-shard server each source is read on its own shard and the result written on the destination's | differs: the DIFF / DIFF1 / ANDOR / ONE operators of Redis 8.2 are a syntax error | Combine strings bitwise into a destination key. |
-| `BITCOUNT key [start end]` | -2 | readonly | O(N) over the counted bytes | differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets | Count set bits in a string, optionally over a byte range. |
-| `BITPOS key bit [start [end]]` | -3 | readonly | O(N) over the scanned bytes | differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets | Return the position of the first bit set to 0 or 1. |
+| `BITOP AND \| OR \| XOR \| NOT \| DIFF \| DIFF1 \| ANDOR \| ONE destkey key [key ...]` | -4 | write | O(N) over the longest source; on a multi-shard server each source is read on its own shard and the result written on the destination's | differs: when the keys live on different shards each source is read on its own shard and the result placed on the destination's, so the write is not atomic with the reads; co-locate the keys with a {hashtag} for Redis's atomic form | Combine strings bitwise into a destination key. |
+| `BITCOUNT key [start end [BYTE \| BIT]]` | -2 | readonly | O(N) over the counted bytes | full | Count set bits in a string, optionally over a byte or bit range. |
+| `BITPOS key bit [start [end [BYTE \| BIT]]]` | -3 | readonly | O(N) over the scanned bytes | full | Return the position of the first bit set to 0 or 1. |
 | `DIGEST key` | 2 | readonly | O(N) over the value's bytes | full | Return the XXH3 digest of a string value as 16 hex digits. |
 | `GETBIT key offset` | 3 | readonly | O(1) | full | Return the bit at the given offset of a string. |
 | `GETEX key [EX seconds \| PX milliseconds \| EXAT unix-time-seconds \| PXAT unix-time-milliseconds \| PERSIST]` | -2 | write | O(1) | full | Read a key and set its expiry in the same call. |
