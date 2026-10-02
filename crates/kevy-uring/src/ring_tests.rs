@@ -434,3 +434,30 @@ fn read_file_batch_round_trips_and_chunks_past_the_sq() {
     }
     let _ = std::fs::remove_file(&path);
 }
+
+/// A message wakes a ring blocked in a wait, carries its tag, and leaves
+/// no completion behind on the sender.
+#[test]
+fn a_message_wakes_a_waiting_ring_and_costs_the_sender_no_completion() {
+    let (Some(mut a), Some(mut b)) = (ring_or_skip(8), ring_or_skip(8)) else {
+        return;
+    };
+    if !b.msg_ring_works() {
+        eprintln!("SKIP: kernel has no IORING_OP_MSG_RING with CQE_SKIP");
+        return;
+    }
+    let target = b.raw_fd();
+    let waiter = std::thread::spawn(move || {
+        b.submit_and_wait(1).unwrap();
+        let mut got = Vec::new();
+        b.for_each_completion(|c| got.push((c.user_data, c.res)));
+        got
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(a.prep_msg_ring(target, 0xfeed, 0xbad));
+    a.submit_and_wait(0).unwrap();
+    assert_eq!(waiter.join().unwrap(), vec![(0xfeed, 0)]);
+    let mut on_sender = 0;
+    a.for_each_completion(|_| on_sender += 1);
+    assert_eq!(on_sender, 0, "the sender must get no completion");
+}

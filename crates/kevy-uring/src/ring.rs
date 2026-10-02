@@ -366,6 +366,27 @@ impl IoUring {
     ///
     /// Relaxed: this is a hint the kernel republishes, and the enter it
     /// triggers is what actually orders anything.
+    /// This ring's fd: the target to give [`IoUring::prep_msg_ring`] on
+    /// another ring of the same process.
+    pub fn raw_fd(&self) -> i32 {
+        self.ring_fd
+    }
+
+    /// Whether the kernel delivers [`IoUring::prep_msg_ring`] messages:
+    /// sends one to this ring and waits for it. Call on a fresh ring,
+    /// before anything else is queued — it consumes every completion.
+    pub fn msg_ring_works(&mut self) -> bool {
+        const DELIVERED: u64 = 0x6d73_6721;
+        const REFUSED: u64 = 0x6d73_6758;
+        if !self.prep_msg_ring(self.ring_fd, DELIVERED, REFUSED) || self.submit_and_wait(1).is_err()
+        {
+            return false;
+        }
+        let mut delivered = false;
+        self.for_each_completion(|c| delivered |= c.user_data == DELIVERED && c.res == 0);
+        delivered
+    }
+
     /// The kernel has completion work queued for this ring
     /// (`IORING_SQ_TASKRUN`, raised only under `IORING_SETUP_TASKRUN_FLAG`).
     fn taskrun_pending(&self) -> bool {

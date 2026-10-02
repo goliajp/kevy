@@ -118,6 +118,13 @@ pub const IORING_SQ_TASKRUN: u32 = 1 << 2;
 // ---- Operation opcodes (subset we use) ------------------------------------
 
 pub const IORING_OP_NOP: u8 = 0;
+/// **Linux 5.18+**. Post a completion into another ring (`fd` = that
+/// ring's fd, `off` = the completion's `user_data`, `len` = its `res`).
+pub const IORING_OP_MSG_RING: u8 = 40;
+/// `IORING_OP_MSG_RING` command (in `addr`): pass data, not a file.
+pub const IORING_MSG_DATA: u64 = 0;
+/// **Linux 6.0+**, in the SQE's op flags: no completion for the sender.
+pub const IORING_MSG_RING_CQE_SKIP: u32 = 1 << 0;
 pub const IORING_OP_TIMEOUT: u8 = 11;
 pub const IORING_OP_ACCEPT: u8 = 13;
 /// `IORING_OP_ASYNC_CANCEL` — cancel a previously-armed SQE. The SQE's
