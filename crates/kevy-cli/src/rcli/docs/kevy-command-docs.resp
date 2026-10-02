@@ -5607,15 +5607,15 @@ geo
 $6
 syntax
 $143
-GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
+GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key | STOREDIST key]
 $10
 complexity
 $196
 O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination
 $6
 compat
-$108
-differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+$340
+differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1
@@ -5639,15 +5639,15 @@ geo
 $6
 syntax
 $139
-GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
+GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key | STOREDIST key]
 $10
 complexity
 $89
 O(log N + C) — the seeked nine-cell fetch, same as GEORADIUS; the anchor lookup is O(1)
 $6
 compat
-$108
-differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+$340
+differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1
@@ -5678,8 +5678,8 @@ $197
 O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)
 $6
 compat
-$85
-differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error
+$4
+full
 $5
 flags
 *1
@@ -5710,8 +5710,8 @@ $87
 O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard
 $6
 compat
-$238
-differs: STOREDIST stores the distance in the unit the query asked for (Redis does the same); the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read
+$385
+differs: the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1

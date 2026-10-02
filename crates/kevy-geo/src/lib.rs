@@ -182,19 +182,31 @@ pub fn decode_score(score: f64) -> (f64, f64) {
 /// assert!((d - 166_274.0).abs() < 100.0, "got {d}");
 /// ```
 ///
+/// The last digit is Redis's: x86-64 Redis 8.10.2 stores 56.4412578701582
+/// for this pair (in km) with `GEOSEARCHSTORE … STOREDIST`.
+///
+/// ```
+/// let d = kevy_geo::haversine_meters(15.0, 37.0, 15.087_267_458_438_873, 37.502_668_423_331_62);
+/// assert_eq!(d / 1000.0, 56.441_257_870_158_2);
+/// ```
+///
 /// A point against itself is zero, not an epsilon.
 ///
 /// ```
 /// assert_eq!(kevy_geo::haversine_meters(1.0, 2.0, 1.0, 2.0), 0.0);
 /// ```
 pub fn haversine_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
-    let phi1 = lat1.to_radians();
-    let phi2 = lat2.to_radians();
-    let dphi = (lat2 - lat1).to_radians();
-    let dlam = (lon2 - lon1).to_radians();
-    let a = (dphi * 0.5).sin().powi(2) + phi1.cos() * phi2.cos() * (dlam * 0.5).sin().powi(2);
-    let c = 2.0 * a.sqrt().clamp(0.0, 1.0).asin();
-    EARTH_RADIUS_METERS * c
+    // each angle to radians before any difference, in Redis's order, so
+    // the last digit of a stored distance is Redis's too
+    let v = ((lon2.to_radians() - lon1.to_radians()) / 2.0).sin();
+    if v == 0.0 {
+        // the same meridian: the distance is the latitudes' alone
+        return EARTH_RADIUS_METERS * (lat2.to_radians() - lat1.to_radians()).abs();
+    }
+    let (lat1r, lat2r) = (lat1.to_radians(), lat2.to_radians());
+    let u = ((lat2r - lat1r) / 2.0).sin();
+    let a = u * u + lat1r.cos() * lat2r.cos() * v * v;
+    2.0 * EARTH_RADIUS_METERS * a.sqrt().min(1.0).asin()
 }
 
 /// Encode `(lon, lat)` as the 11-character base32 geohash string Redis
