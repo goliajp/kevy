@@ -336,6 +336,11 @@ impl<C: Commands> Shard<C> {
                 crate::block_xshard::build_serve_entries(&self.commands, args, kind, &keys);
             self.park_blocked_xshard(conn_id, kind, entries, deadline_ms, proto);
         }
+        // a blocked client's later commands wait for it, as Redis's do: the
+        // parked command is the last one dispatched
+        if let Some(seq) = self.conns.get(&conn_id).map(|c| c.next_seq - 1) {
+            self.hold_if_pending(conn_id, seq);
+        }
     }
 
     /// Post-`dispatch_into` work for a write — runs after the inline fast
