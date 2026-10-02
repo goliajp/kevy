@@ -346,7 +346,7 @@ fn help_hints_and_completion_come_from_the_servers_reference() {
     );
     assert!(get.stdout.ends_with("  \x1b[33mgroup:\x1b[0m string\r\n\r\n"), "{:?}", get.stdout);
     // kevy's note on a command that differs from Redis is part of its help.
-    assert!(cli(&["-p", &p, "help", "hscan"], b"", &[]).stdout.contains("\x1b[33mcompat:\x1b[0m "));
+    assert!(cli(&["-p", &p, "help", "xadd"], b"", &[]).stdout.contains("\x1b[33mcompat:\x1b[0m "));
     let group = cli(&["-p", &p, "?", "@string"], b"", &[]).stdout;
     assert!(group.contains("\x1b[1mINCRBY\x1b[0m") && !group.contains("group:"), "{group:?}");
     assert_eq!(cli(&["-p", &p, "help", "nosuch"], b"", &[]).stdout, "\r\n");
