@@ -37,6 +37,27 @@ pub(crate) fn may_skip_enter(overflowed: bool, to_submit: u32, wait_nr: u32, sqp
     !overflowed && to_submit == 0 && wait_nr == 0 && !sqpoll
 }
 
+/// Empty iterations between forced enters when the kernel reports
+/// pending completion work through `IORING_SQ_TASKRUN`: the flag says
+/// when an enter is needed, so this only bounds the cost of a flag the
+/// kernel failed to raise.
+pub(crate) const ENTER_SAFETY_ITERS: u32 = 512;
+
+/// Whether an empty iteration (nothing to submit, nothing to wait for)
+/// still has to enter: `iters` empty iterations have passed since the last
+/// enter. With the task-run flag the kernel says when; without it, every
+/// `skip_threshold`-th iteration enters so deferred completions run.
+pub(crate) fn empty_iteration_enters(
+    iters: u32,
+    taskrun_flag: Option<bool>,
+    skip_threshold: u32,
+) -> bool {
+    match taskrun_flag {
+        Some(pending) => pending || iters >= ENTER_SAFETY_ITERS,
+        None => iters >= skip_threshold,
+    }
+}
+
 /// The `io_uring_enter` flags for this call.
 ///
 /// `GETEVENTS` when the caller is waiting for a completion, and also
@@ -63,7 +84,9 @@ pub(crate) fn dropped_error(lost: u32) -> io::Result<()> {
 
 #[cfg(test)]
 mod enter_policy_tests {
-    use super::{dropped_error, enter_flags_for, may_skip_enter};
+    use super::{
+        ENTER_SAFETY_ITERS, dropped_error, empty_iteration_enters, enter_flags_for, may_skip_enter,
+    };
     use crate::ffi::IORING_ENTER_GETEVENTS;
 
     /// The quiet iteration this engine spends most of its life in, and
@@ -75,6 +98,18 @@ mod enter_policy_tests {
         assert!(!may_skip_enter(false, 1, 0, false), "a submission must be delivered");
         assert!(!may_skip_enter(false, 0, 1, false), "a waiter must be served");
         assert!(!may_skip_enter(false, 0, 0, true), "SQPOLL has its own skip");
+    }
+
+    /// With the task-run flag the kernel decides; the iteration bound only
+    /// catches a flag that never came. Without it, every N-th iteration.
+    #[test]
+    fn an_empty_iteration_enters_when_work_waits_or_a_bound_is_reached() {
+        assert!(!empty_iteration_enters(1, Some(false), 2));
+        assert!(!empty_iteration_enters(ENTER_SAFETY_ITERS - 1, Some(false), 2));
+        assert!(empty_iteration_enters(1, Some(true), 2), "flagged work runs at once");
+        assert!(empty_iteration_enters(ENTER_SAFETY_ITERS, Some(false), 2), "the safety bound");
+        assert!(!empty_iteration_enters(1, None, 2));
+        assert!(empty_iteration_enters(2, None, 2), "no flag: every second iteration");
     }
 
     /// The overflow list is flushed only on an enter that asks for
