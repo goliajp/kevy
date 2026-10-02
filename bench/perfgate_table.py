@@ -8,7 +8,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "tools"))
 import perfreport as pr  # noqa: E402
 
-RATIO_COLS = ("ops", "instr", "cycles", "sys", "p95_us")
+RATIO_COLS = ("ops", "instr", "cycles", "sys", "llc", "p95_us")
 GATED = ("ops", "instr", "cycles", "p95_us")
 UTIL_MIN = 0.90
 CLIENT_MAX = 0.90
@@ -71,16 +71,17 @@ def ratio_table(results, cfg):
 def absolute_table(results):
     print("\n## medians per side\n")
     print(f"{'angle':<14}{'side':>5}{'ops/s':>10}{'instr/op':>10}{'user':>8}{'kernel':>8}"
-          f"{'cyc/op':>9}{'sys/op':>8}{'p95 µs':>8}{'rss MB':>8}")
+          f"{'cyc/op':>9}{'sys/op':>8}{'llc/op':>8}{'p95 µs':>8}{'rss MB':>8}")
     for angle, pairs in results.items():
         for s, name in ((0, "A"), (1, "B")):
             obs = [p[s] for p in pairs]
             m = {k: medians(obs, k) for k in ("ops", "instr", "instr_u", "instr_k", "cycles",
-                                              "sys", "p95_us", "rss")}
+                                              "sys", "llc", "p95_us", "rss")}
             print(f"{angle if s == 0 else '':<14}{name:>5}{pr.fmt_abs(m['ops'], 'ops'):>10}"
                   f"{pr.fmt_abs(m['instr'], 'instr'):>10}{pr.fmt_abs(m['instr_u'], 'instr'):>8}"
                   f"{pr.fmt_abs(m['instr_k'], 'instr'):>8}{pr.fmt_abs(m['cycles'], 'cycles'):>9}"
-                  f"{pr.fmt_abs(m['sys'], 'sys'):>8}{pr.fmt_abs(m['p95_us'], 'p95_us'):>8}"
+                  f"{pr.fmt_abs(m['sys'], 'sys'):>8}{pr.fmt_abs(m['llc'], 'llc'):>8}"
+                  f"{pr.fmt_abs(m['p95_us'], 'p95_us'):>8}"
                   f"{pr.fmt_abs(m['rss'], 'rss'):>8}")
 
 
