@@ -107,6 +107,14 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             kevy_verbs::cmd::bzmpop(store, args, out, RespVersion::V3);
             true
         }
+        b"ZINTER" | b"ZUNION" | b"ZDIFF" => {
+            kevy_verbs::cmd::zcombine(store, args, out, RespVersion::V3);
+            true
+        }
+        b"LCS" => {
+            kevy_verbs::cmd::lcs(store, args, out, RespVersion::V3);
+            true
+        }
         b"ZMSCORE" => {
             kevy_verbs::cmd::zmscore(store, args, out, RespVersion::V3);
             true

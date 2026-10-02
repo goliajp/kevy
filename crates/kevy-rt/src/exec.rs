@@ -110,6 +110,9 @@ impl<C: Commands> Shard<C> {
         // keys that share a shard run there as sent: Redis's atomic form
         let route = match route {
             Route::FirstHit { numkeys } if self.one_shard(args, 2..2 + numkeys) => Route::Single(2),
+            Route::ReadAcross { first, count } if self.one_shard(args, first..first + count) => {
+                Route::Single(first)
+            }
             route => route,
         };
         match route {
@@ -123,6 +126,16 @@ impl<C: Commands> Shard<C> {
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::BitOpStore => self.start_bitop(conn_id, seq, args),
             Route::Copy => self.start_copy(conn_id, seq, args),
+            Route::ReadAcross { first, count } => {
+                self.start_read_across(
+                    conn_id,
+                    seq,
+                    args,
+                    first..first + count,
+                    is_quit,
+                    cluster_conn,
+                );
+            }
             Route::FirstHit { numkeys } => {
                 self.start_first_hit(conn_id, seq, proto, args, numkeys, is_quit, cluster_conn);
             }

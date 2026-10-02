@@ -36,10 +36,12 @@ pub mod geo;
 mod hash;
 mod hash_ttl;
 mod keyspace;
+mod lcs;
 mod list;
 mod list_move;
 pub mod mpop;
 pub mod multikey;
+mod multiread;
 mod record;
 mod record_group;
 mod record_read;
@@ -333,6 +335,9 @@ pub fn exec<A: ArgvView + ?Sized>(
         return Some(e);
     }
     if let Some(e) = set::exec(verb, store, args, out) {
+        return Some(e);
+    }
+    if let Some(e) = multiread::exec(verb, store, args, out) {
         return Some(e);
     }
     if let Some(e) = mpop::exec(verb, store, args, out) {

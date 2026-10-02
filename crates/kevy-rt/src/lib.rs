@@ -135,6 +135,7 @@ mod exec_op;
 mod exec_propagate;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
+mod exec_read_across;
 mod exec_rename;
 mod exec_replwait;
 mod exec_scan;

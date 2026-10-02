@@ -148,6 +148,7 @@ registry! {
     b"INCR" WR,
     b"INCRBY" WR,
     b"INCRBYFLOAT" WR,
+    b"LCS" RD,
     b"LINDEX" RD,
     b"LINSERT" WR,
     b"LLEN" RD,
@@ -180,6 +181,7 @@ registry! {
     b"SETEX" WR,
     b"SETNX" WR,
     b"SETRANGE" WR,
+    b"SINTERCARD" RD,
     b"SISMEMBER" RD,
     b"SMEMBERS" RD,
     b"SPOP" WR,
@@ -225,7 +227,9 @@ registry! {
     b"ZADD" WR,
     b"ZCARD" RD,
     b"ZCOUNT" RD,
+    b"ZDIFF" RD,
     b"ZINCRBY" WR,
+    b"ZINTER" RD,
     b"ZMPOP" WR,
     b"ZMSCORE" RD,
     b"ZPOPMAX" WR,
@@ -243,6 +247,7 @@ registry! {
     b"ZREVRANK" RD,
     b"ZSCAN" RD,
     b"ZSCORE" RD,
+    b"ZUNION" RD,
 }
 
 /// Look up an uppercase verb in [`VERBS`].

@@ -11,6 +11,7 @@
 //! ```
 
 pub use crate::mpop::{blmpop, bzmpop, lmpop, zmpop};
+pub use crate::multiread::{lcs, zcombine};
 #[cfg(feature = "streams-geo")]
 pub use crate::stream::xinfo;
 #[cfg(feature = "streams-geo")]

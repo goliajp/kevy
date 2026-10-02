@@ -138,6 +138,7 @@ impl<C: Commands> Shard<C> {
                             Ok(pairs) => Gathered::Scored(pairs),
                             Err(_) => Gathered::WrongType,
                         },
+                        GatherKind::Value => Gathered::Value(self.store.clone_with_ttl(&k)),
                     };
                     results.push((k, g));
                 }
