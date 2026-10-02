@@ -6,10 +6,10 @@ use std::time::Duration;
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
-use kevy_store::{SetCondition, Store};
+use kevy_store::Store;
 
-use crate::args::{arg_i64, upper_verb};
-use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, emit_int_result, store_err, wrong_args};
+use crate::args::arg_i64;
+use crate::reply::{ERR_NOT_INT, emit_int_result, store_err, wrong_args};
 use crate::{Effect, changed};
 
 /// One string command; `None` = the verb is not in this group.
@@ -25,7 +25,8 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             get(store, args, out);
             Effect::Read
         }
-        b"SET" => set(store, args, out),
+        b"SET" => crate::set_options::set(store, args, out),
+        b"DIGEST" => crate::digest::exec(store, args, out),
         b"APPEND" => {
             if args.len() == 3 {
                 emit_int_result(store.append(&args[1], &args[2]).map(|n| n as i64), out);
@@ -101,7 +102,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             setrange(store, args, out);
             Effect::Write
         }
-        b"GETEX" => getex(store, args, out),
+        b"GETEX" => crate::set_options::getex(store, args, out),
         _ => return None,
     })
 }
@@ -115,61 +116,6 @@ fn get<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
         Ok(None) => encode_null_bulk(out),
         Err(e) => store_err(out, e),
     }
-}
-
-/// `SET key value [EX s | PX ms] [NX | XX]`, as one store call: the
-/// condition, the value and the deadline land together.
-///
-/// ```
-/// use kevy_verbs::Effect;
-/// let mut store = kevy_store::Store::new();
-/// let argv = kevy_resp::Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec(), b"NX".to_vec()]);
-/// let mut out = Vec::new();
-/// assert_eq!(kevy_verbs::cmd::set(&mut store, &argv, &mut out), Effect::Write);
-/// assert_eq!(kevy_verbs::cmd::set(&mut store, &argv, &mut out), Effect::Unchanged);
-/// assert_eq!(out, b"+OK\r\n$-1\r\n");
-/// ```
-pub fn set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
-    if args.len() < 3 {
-        wrong_args(out, "set");
-        return Effect::Unchanged;
-    }
-    let mut expire: Option<Duration> = None;
-    let mut cond = SetCondition::Always;
-    let mut i = 3;
-    let mut buf = [0u8; 32];
-    while i < args.len() {
-        match upper_verb(&args[i], &mut buf) {
-            // NX and XX together is a syntax error, as in Redis
-            b"NX" if cond != SetCondition::IfPresent => cond = SetCondition::IfAbsent,
-            b"XX" if cond != SetCondition::IfAbsent => cond = SetCondition::IfPresent,
-            opt @ (b"EX" | b"PX") => {
-                let Some(raw) = args.get(i + 1) else {
-                    encode_error(out, ERR_SYNTAX);
-                    return Effect::Unchanged;
-                };
-                let Some(n) = arg_i64(raw).filter(|&n| n > 0) else {
-                    encode_error(out, "ERR invalid expire time in 'set' command");
-                    return Effect::Unchanged;
-                };
-                let ms = if opt == b"EX" { n.saturating_mul(1000) } else { n };
-                expire = Some(Duration::from_millis(ms as u64));
-                i += 1;
-            }
-            _ => {
-                encode_error(out, ERR_SYNTAX);
-                return Effect::Unchanged;
-            }
-        }
-        i += 1;
-    }
-    let done = store.set_slice(&args[1], &args[2], expire, cond);
-    if done {
-        encode_simple_string(out, "OK");
-    } else {
-        encode_null_bulk(out); // the NX / XX condition was not met
-    }
-    changed(done)
 }
 
 /// `SETEX` / `PSETEX key ttl value`.
@@ -276,38 +222,4 @@ fn setrange<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
         return encode_error(out, "ERR offset is out of range");
     }
     emit_int_result(store.setrange(&args[1], off as u64, &args[3]).map(|n| n as i64), out);
-}
-
-/// `GETEX key [EX seconds | PX milliseconds]` — read, and set the
-/// deadline in the same call. The bare form is a plain read.
-fn getex<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
-    match args.len() {
-        2 => get(store, args, out),
-        4 => {
-            let ex = args[2].eq_ignore_ascii_case(b"EX");
-            if !ex && !args[2].eq_ignore_ascii_case(b"PX") {
-                encode_error(out, ERR_SYNTAX);
-                return Effect::Unchanged;
-            }
-            let Some(n) = arg_i64(&args[3]).filter(|&n| n > 0) else {
-                encode_error(out, "ERR invalid expire time in 'getex' command");
-                return Effect::Unchanged;
-            };
-            let ms = if ex { n.saturating_mul(1000) } else { n };
-            // read first, and only move the deadline when there was a value
-            match store.get(&args[1]) {
-                Ok(Some(v)) => {
-                    let v = v.to_vec();
-                    store.expire(&args[1], Duration::from_millis(ms as u64));
-                    encode_bulk(out, &v);
-                    return Effect::Write;
-                }
-                Ok(None) => encode_null_bulk(out),
-                Err(e) => store_err(out, e),
-            }
-        }
-        0 | 1 => wrong_args(out, "getex"),
-        _ => encode_error(out, ERR_SYNTAX),
-    }
-    Effect::Unchanged
 }

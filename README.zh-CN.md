@@ -372,7 +372,7 @@ valkey 和 Redis 回答不同时，kevy 的回答必须是两者之一。完整�
 构建，但终端用户通常用的是上面那些表面。
 
 **给 AI agent 与工具**：[`llms.txt`](llms.txt)（机器优先的索引）·
-[verb 参考](docs/verb-reference.md)（全部 250 个 verb，由服务器
+[verb 参考](docs/verb-reference.md)（全部 251 个 verb，由服务器
 自身的元数据生成——与 `COMMAND DOCS` 返回的是同一批行）。
 
 ## 主题指南

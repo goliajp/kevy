@@ -408,7 +408,7 @@ published so the workspace builds reproducibly, but end users typically
 reach for the surfaces above.
 
 **For AI agents & tools**: [`llms.txt`](llms.txt) (machine-first index) ·
-[verb reference](docs/verb-reference.md) (all 250 verbs, generated from the
+[verb reference](docs/verb-reference.md) (all 251 verbs, generated from the
 server's own metadata — the same rows `COMMAND DOCS` serves).
 
 ## Topic guides

@@ -182,6 +182,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "EXPIRETIME",
     "GET",
     "GETDEL",
+    "DIGEST",
     "GETEX",
     "GETRANGE",
     "GETSET",

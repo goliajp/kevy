@@ -32,6 +32,7 @@ pub mod args;
 mod bitfield;
 mod bitmap;
 pub mod cmd;
+mod digest;
 #[cfg(feature = "streams-geo")]
 pub mod geo;
 mod hash;
@@ -49,6 +50,7 @@ mod record_group;
 mod record_read;
 pub mod reply;
 mod set;
+mod set_options;
 pub mod sort;
 #[cfg(feature = "streams-geo")]
 mod stream;

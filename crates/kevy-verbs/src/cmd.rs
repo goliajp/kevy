@@ -14,12 +14,12 @@
 pub use crate::geo::geo_search;
 pub use crate::mpop::{blmpop, bzmpop, lmpop, zmpop};
 pub use crate::multiread::{lcs, zcombine};
+pub use crate::set_options::set;
 #[cfg(feature = "streams-geo")]
 pub use crate::stream::xinfo;
 #[cfg(feature = "streams-geo")]
 pub use crate::stream::xreadgroup_refusal;
 pub use crate::stream_resp3::stream_resp3;
-pub use crate::strings::set;
 pub use crate::zrange::zrange;
 pub use crate::zset::parse_zadd_flags;
 pub use crate::zset_pick::{
