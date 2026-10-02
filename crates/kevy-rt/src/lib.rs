@@ -125,6 +125,7 @@ mod exec_crossslot;
 mod exec_dispatch;
 mod exec_ext;
 mod exec_feed;
+mod exec_first_hit;
 mod exec_fold;
 mod exec_geostore;
 mod exec_listmove;

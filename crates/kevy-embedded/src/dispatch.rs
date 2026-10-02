@@ -30,6 +30,7 @@ mod idx_create;
 mod idx_query;
 mod keyspace;
 mod misc;
+mod mpop;
 mod set;
 mod shared;
 mod strings;
@@ -64,6 +65,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let handled = strings::dispatch(s, up, argv, out)
         || set::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
+        || mpop::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
         || shared::dispatch(s, up, argv, out)
@@ -213,6 +215,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "LINDEX",
     "LINSERT",
     "LLEN",
+    "LMPOP",
     "LPOP",
     "LPUSH",
     "LRANGE",
@@ -243,6 +246,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "ZINCRBY",
     "ZINTERCARD",
     "ZINTERSTORE",
+    "ZMPOP",
     "ZMSCORE",
     "ZPOPMAX",
     "ZPOPMIN",

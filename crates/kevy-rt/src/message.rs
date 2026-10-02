@@ -253,6 +253,13 @@ pub(crate) enum Op {
         argv: Argv,
         write: bool,
     },
+    /// One key's try of a [`crate::Route::FirstHit`] pop: `argv` is the
+    /// command naming that key alone, run in the waiting conn's protocol
+    /// as a write. Reply: [`Part::Reply`], null when the key held nothing.
+    FirstHitTry {
+        argv: Argv,
+        proto: RespVersion,
+    },
     /// The check an `XREADGROUP` split across shards runs on each
     /// stream's shard before any is read: `argv` is the same
     /// single-stream rewrite [`Op::XReadOne`] would run, only checked

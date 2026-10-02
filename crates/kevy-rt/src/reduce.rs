@@ -134,6 +134,7 @@ fn materialize_shape(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::RenameOrchestrator { .. }
         | Agg::ListMoveOrchestrator { .. }
         | Agg::CopyOrchestrator { .. }
+        | Agg::FirstHit { .. }
         | Agg::BitOpGather { .. }
         | Agg::ZStoreGather { .. }
         | Agg::GeoStore { .. }

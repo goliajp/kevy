@@ -311,8 +311,8 @@ impl<C: Commands> Shard<C> {
         // fast path: that path's wake serves the replay through a LOCAL
         // dispatch, which is the very thing that loses the element. Force it
         // through the arbiter, whose serve runs the orchestrator.
-        let xshard_dst = kind == crate::BlockKind::Brpoplpush
-            && args.len() == 4
+        let xshard_dst = matches!(kind, crate::BlockKind::Brpoplpush | crate::BlockKind::Blmove)
+            && args.len() > 2
             && !keys.is_empty()
             && self.shard_of(&args[2]) != self.shard_of(&keys[0]);
 

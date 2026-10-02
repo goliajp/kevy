@@ -13,6 +13,7 @@ mod copy_replace_records;
 mod list_move_cross_shard;
 mod lua_cluster;
 mod lua_multishard;
+mod mpop_cross_shard;
 mod multi_mget_ryow;
 mod scope_misdirected_e2e;
 mod scope_move_e2e;

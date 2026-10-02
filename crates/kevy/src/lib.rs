@@ -44,6 +44,7 @@ use std::sync::atomic::AtomicBool;
 mod catalog_record;
 mod cmd;
 mod cmd_block;
+mod cmd_block_mpop;
 mod cmd_block_serve;
 mod cmd_class;
 mod cmd_command;

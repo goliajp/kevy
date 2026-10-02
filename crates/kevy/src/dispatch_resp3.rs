@@ -91,6 +91,22 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             kevy_verbs::cmd::zrevrank(store, args, out, RespVersion::V3);
             true
         }
+        b"BZPOPMIN" => {
+            kevy_verbs::cmd::bzpopmin(store, args, out, RespVersion::V3);
+            true
+        }
+        b"BZPOPMAX" => {
+            kevy_verbs::cmd::bzpopmax(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZMPOP" => {
+            kevy_verbs::cmd::zmpop(store, args, out, RespVersion::V3);
+            true
+        }
+        b"BZMPOP" => {
+            kevy_verbs::cmd::bzmpop(store, args, out, RespVersion::V3);
+            true
+        }
         b"ZMSCORE" => {
             kevy_verbs::cmd::zmscore(store, args, out, RespVersion::V3);
             true

@@ -182,6 +182,7 @@ impl<C: Commands> Shard<C> {
                 }
                 // Cross-shard COPY: step 1's clone, then step 2's verdict.
                 (Agg::CopyOrchestrator { read, .. }, Part::CopyRead(r)) => *read = Some(r),
+                (Agg::FirstHit { got, .. }, Part::Reply(b)) => *got = Some(b),
                 (Agg::CopyOrchestrator { stored, .. }, Part::CopyPutDone { stored: st }) => {
                     *stored = Some(st);
                 }
@@ -208,6 +209,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::RenameOrchestrator { .. }
                         | Agg::ListMoveOrchestrator { .. }
                         | Agg::CopyOrchestrator { .. }
+                        | Agg::FirstHit { .. }
                         | Agg::BitOpGather { .. }
                         | Agg::ZStoreGather { .. }
                         | Agg::GeoStore { .. }
@@ -233,6 +235,9 @@ impl<C: Commands> Shard<C> {
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ListMoveOrchestrator { .. } => self.finalize_list_move_agg(conn_id, seq, agg),
                 Agg::CopyOrchestrator { .. } => self.finalize_copy_agg(conn_id, seq, agg),
+                Agg::FirstHit { tries, next, got } => {
+                    self.finalize_first_hit(conn_id, seq, tries, next, got);
+                }
                 Agg::BitOpGather { .. } => self.finalize_bitop_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),

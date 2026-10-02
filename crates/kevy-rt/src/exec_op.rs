@@ -421,6 +421,9 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::FirstHitTry { argv, proto } => {
+                self.run_dispatch(&argv, proto, crate::exec_first_hit::FIRST_HIT_META)
+            }
             Op::XReadCheck { index, argv } => Part::XReadElement {
                 index,
                 element: self.commands.xreadgroup_refusal(&mut self.store, &argv),

@@ -339,6 +339,23 @@ pub enum Route {
         #[doc = include_str!("route_docs/xreadgather_group.md")]
         group: Option<XGroupCtx>,
     },
+    /// A pop naming `numkeys` keys from argument 2 on, the count itself at
+    /// argument 1, that takes from the first key holding something —
+    /// `ZMPOP` / `LMPOP`. Keys on one shard run there as sent, atomically;
+    /// keys apart are tried in order, each as the same command naming that
+    /// key alone, and the first reply that is not null answers.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `ZMPOP 2 a b MIN`: two keys at arguments 2 and 3.
+    /// let route = Route::FirstHit { numkeys: 2 };
+    /// assert_ne!(route, Route::Single(2));
+    /// ```
+    FirstHit {
+        /// How many keys follow the count.
+        numkeys: usize,
+    },
 }
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`

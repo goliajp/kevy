@@ -107,6 +107,11 @@ impl<C: Commands> Shard<C> {
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
         }
+        // keys that share a shard run there as sent: Redis's atomic form
+        let route = match route {
+            Route::FirstHit { numkeys } if self.one_shard(args, 2..2 + numkeys) => Route::Single(2),
+            route => route,
+        };
         match route {
             Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
             Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
@@ -118,6 +123,9 @@ impl<C: Commands> Shard<C> {
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::BitOpStore => self.start_bitop(conn_id, seq, args),
             Route::Copy => self.start_copy(conn_id, seq, args),
+            Route::FirstHit { numkeys } => {
+                self.start_first_hit(conn_id, seq, proto, args, numkeys, is_quit, cluster_conn);
+            }
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::ListMove { from, to } => {
                 let (from_left, to_left) =
@@ -147,9 +155,15 @@ impl<C: Commands> Shard<C> {
                             crate::BlockKind::Blpop
                             | crate::BlockKind::Brpop
                             | crate::BlockKind::Bzpopmin
-                            | crate::BlockKind::Brpoplpush,
+                            | crate::BlockKind::Bzpopmax
+                            | crate::BlockKind::Brpoplpush
+                            | crate::BlockKind::Blmove,
                         ..
                     } => Some(1),
+                    crate::BlockHint::Block {
+                        kind: crate::BlockKind::Bzmpop | crate::BlockKind::Blmpop,
+                        ..
+                    } => Some(3),
                     _ => None,
                 };
                 let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: 0 };

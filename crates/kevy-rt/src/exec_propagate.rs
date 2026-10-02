@@ -105,6 +105,7 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn served_key_idx(kind: BlockKind, argc: usize) -> usize {
     match kind {
         BlockKind::XReadBlock | BlockKind::XReadGroupBlock => argc.saturating_sub(2),
+        BlockKind::Bzmpop | BlockKind::Blmpop => 3,
         _ => 1,
     }
 }
