@@ -244,15 +244,23 @@ fn tier1_set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
     // Hoist the write gate (maxmemory set, or the memory guard refusing)
     // out of the precheck/evict calls so the default case is a single
     // not-taken branch.
-    if store.precheck_needed() {
+    let start = out.len();
+    let effect = if store.precheck_needed() {
         if store.precheck_for_write().is_err() {
             encode_error(out, oom_reply(store));
+            if kevy_rt::propagation::notify_wanted() {
+                crate::notify_policy::note(b"SET", args, &Effect::Unchanged, b"-", store);
+            }
             return;
         }
-        kevy_verbs::cmd::set(store, args, out);
+        let e = kevy_verbs::cmd::set(store, args, out);
         store.try_evict_after_write();
+        e
     } else {
-        kevy_verbs::cmd::set(store, args, out);
+        kevy_verbs::cmd::set(store, args, out)
+    };
+    if kevy_rt::propagation::notify_wanted() {
+        crate::notify_policy::note(b"SET", args, &effect, &out[start..], store);
     }
     // Tiering's demotion twin: internally gated on `tier.is_some()`.
     store.try_demote_after_write();
@@ -280,7 +288,7 @@ fn exec_shared<A: ArgvView + ?Sized>(
     if kevy_rt::propagation::notify_wanted()
         && let Some(e) = &effect
     {
-        crate::notify_policy::note(cmd, args, e, &out[start..]);
+        crate::notify_policy::note(cmd, args, e, &out[start..], store);
     }
     match effect {
         None => false,
