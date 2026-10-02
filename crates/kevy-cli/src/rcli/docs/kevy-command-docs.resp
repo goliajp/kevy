@@ -5542,8 +5542,8 @@ $3
 geo
 $6
 syntax
-$31
-GEOHASH key member [member ...]
+$24
+GEOHASH key [member ...]
 $10
 complexity
 $4
@@ -5574,8 +5574,8 @@ $3
 geo
 $6
 syntax
-$30
-GEOPOS key member [member ...]
+$23
+GEOPOS key [member ...]
 $10
 complexity
 $4
@@ -5928,8 +5928,8 @@ $6
 server
 $6
 syntax
-$6
-BGSAVE
+$17
+BGSAVE [SCHEDULE]
 $10
 complexity
 $93
@@ -5982,8 +5982,8 @@ COMMAND
 *14
 $7
 summary
-$67
-Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).
+$113
+Introspect the command table: COUNT, LIST, INFO, DOCS, and where a command's keys are (GETKEYS, GETKEYSANDFLAGS).
 $5
 since
 $5
@@ -5994,16 +5994,16 @@ $6
 server
 $6
 syntax
-$82
-COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]
+$128
+COMMAND [COUNT | LIST | INFO [command ...] | DOCS [command ...] | GETKEYS command [arg ...] | GETKEYSANDFLAGS command [arg ...]]
 $10
 complexity
-$109
-bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan
+$93
+bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO: O(log V) per name. GETKEYS: O(N) arguments
 $6
 compat
-$179
-differs: COUNT / LIST / INFO / DOCS only — GETKEYS and GETKEYSANDFLAGS are absent, and the info rows hard-code first/last/step and leave ACL categories, tips and key-specs empty
+$248
+differs: LIST takes no FILTERBY and HELP is absent; DOCS answers kevy's own fields (complexity, compat). An INFO row of a command Redis also has is Redis 8.10.2's, key specs and subcommands included, even for the subcommands kevy does not implement
 $5
 flags
 *1

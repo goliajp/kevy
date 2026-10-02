@@ -65,7 +65,7 @@ fn command_docs_covers_every_meta_row_and_nothing_else() {
     let mut args = kevy_resp::Argv::with_capacity(2, 16);
     args.push(b"COMMAND");
     args.push(b"LIST");
-    crate::cmd_command::cmd_command(&args, &mut out);
+    crate::cmd_command::cmd_command(&args, &mut out, kevy_resp::RespVersion::V2);
     let text = String::from_utf8_lossy(&out);
     for m in VERB_META {
         assert!(
@@ -231,7 +231,7 @@ fn kevy_cli_offline_docs_are_this_servers_command_docs() {
     let mut args = kevy_resp::Argv::with_capacity(2, 16);
     args.push(b"COMMAND");
     args.push(b"DOCS");
-    crate::cmd_command::cmd_command(&args, &mut out);
+    crate::cmd_command::cmd_command(&args, &mut out, kevy_resp::RespVersion::V2);
     let copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../kevy-cli/src/rcli/docs/kevy-command-docs.resp");
     if std::env::var_os("KEVY_BLESS_CLI_DOCS").is_some() {
