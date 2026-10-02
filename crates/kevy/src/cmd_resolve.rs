@@ -123,7 +123,10 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"DBSIZE" => Route::Dbsize,
         b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
         b"SAVE" => Route::Save,
-        b"BGSAVE" => Route::BgSave,
+        // SCHEDULE starts it now: no rewrite ever holds a save back here
+        b"BGSAVE" if args.len() == 1 || (args.len() == 2 && args[1].eq_ignore_ascii_case(b"SCHEDULE")) => {
+            Route::BgSave
+        }
         b"BGREWRITEAOF" => Route::RewriteAof,
         // MEMORY USAGE answers about a KEY, so it has to run on that key's
         // shard. Without this arm it fell through to the default
