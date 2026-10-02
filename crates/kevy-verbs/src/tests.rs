@@ -220,17 +220,20 @@ fn the_default_claim_took_and_dropped_nothing() {
 #[test]
 fn a_float_argument_takes_every_infinity_spelling_and_refuses_nan() {
     use crate::args::arg_f64;
-    for s in ["inf", "+inf", "INF", "Infinity", "+InFiNiTy", " inf "] {
+    for s in ["inf", "+inf", "INF", "Infinity", "+InFiNiTy"] {
         assert_eq!(arg_f64(s.as_bytes()), Some(f64::INFINITY), "{s:?}");
     }
     for s in ["-inf", "-INFINITY", "-Inf"] {
         assert_eq!(arg_f64(s.as_bytes()), Some(f64::NEG_INFINITY), "{s:?}");
     }
-    for s in ["nan", "NaN", "+nan", "infin", "infinityx", "", "0x1", "1_0"] {
+    for s in ["nan", "NaN", "+nan", "infin", "infinityx", "", " inf ", "1_0", "0x"] {
         assert_eq!(arg_f64(s.as_bytes()), None, "{s:?}");
     }
+    // hexadecimal, as Redis reads it through strtod
+    assert_eq!(arg_f64(b"0x1"), Some(1.0));
     assert_eq!(arg_f64(b"\xff"), None);
-    assert_eq!(arg_f64(b" -2.5e1\t"), Some(-25.0));
+    assert_eq!(arg_f64(b" -2.5e1\t"), None, "white space around a number is refused");
+    assert_eq!(arg_f64(b"-2.5e1"), Some(-25.0));
 }
 
 #[test]
