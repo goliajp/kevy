@@ -6060,16 +6060,16 @@ $6
 server
 $6
 syntax
-$80
-CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF
+$141
+CLIENT ID | GETNAME | SETNAME name | LIST [TYPE NORMAL | MASTER | REPLICA | PUBSUB] [ID client-id ...] | KILL filter | INFO | NO-EVICT ON|OFF
 $10
 complexity
 $91
 ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan
 $6
 compat
-$213
-differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown
+$255
+differs: ID / GETNAME / SETNAME / INFO / LIST (TYPE, ID) / KILL (ID, ADDR) / NO-EVICT only, and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown; replication runs over links of its own, so LIST TYPE master / replica lists none
 $5
 flags
 *2

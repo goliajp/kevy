@@ -13,7 +13,7 @@ use std::time::Duration;
 static START_GATE: Mutex<()> = Mutex::new(());
 const SHARDS: usize = 8;
 
-fn req(parts: &[&[u8]]) -> Vec<u8> {
+pub(super) fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
     for p in parts {
         v.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
@@ -23,7 +23,7 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
     v
 }
 
-fn read_reply(c: &mut std::net::TcpStream) -> Vec<u8> {
+pub(super) fn read_reply(c: &mut std::net::TcpStream) -> Vec<u8> {
     let mut out = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -51,7 +51,7 @@ fn read_reply(c: &mut std::net::TcpStream) -> Vec<u8> {
     out
 }
 
-struct Server {
+pub(super) struct Server {
     port: u16,
     dir: std::path::PathBuf,
     stop: Arc<AtomicBool>,
@@ -59,7 +59,7 @@ struct Server {
 }
 
 impl Server {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = kevy_testnet::free_port();
         let dir = kevy_tmpdir::unique_dir("pipeorder");
@@ -77,7 +77,7 @@ impl Server {
         Self { port, dir, stop, handle: Some(handle) }
     }
 
-    fn connect(&self) -> std::net::TcpStream {
+    pub(super) fn connect(&self) -> std::net::TcpStream {
         let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         s
