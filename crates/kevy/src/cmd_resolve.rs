@@ -105,6 +105,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"CLIENT" => client_route(args),
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
         | b"SHUTDOWN" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH"
+        | b"BZPOPMAX" | b"BZMPOP" | b"BLMPOP" | b"BLMOVE"
         // Replication admin: answered from the conn's own shard —
         // args[1] is a host (REPLICAOF/SLAVEOF) or absent (ROLE),
         // never a key to route by.
@@ -134,6 +135,12 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"MEMORY" => Route::Local,
         b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
         b"MGET" if args.len() >= 2 => Route::Gather(MultiOp::Mget),
+        b"ZMPOP" | b"LMPOP" => mpop_route(upper, args),
+        b"LCS" if args.len() >= 3 => Route::ReadAcross { first: 1, count: 2 },
+        b"SMOVE" => Route::SetMove,
+        b"MSETNX" => Route::MSetNx,
+        b"ZRANGESTORE" if args.len() >= 5 => Route::StoreFromCopies { first: 2, count: 1, dst: 1 },
+        b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF" => read_across_route(upper, args),
         b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
         b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),
         b"SDIFF" if args.len() >= 2 => Route::Gather(MultiOp::SDiff),
@@ -308,4 +315,39 @@ fn client_route<A: ArgvView + ?Sized>(args: &A) -> Route {
         b"KILL" if kevy_rt::ClientKillFilter::parse(args).is_some() => Route::ClientKill,
         _ => Route::Local,
     }
+}
+
+/// `ZMPOP` / `LMPOP`: one key is a plain single-key command; several may
+/// span shards. A malformed call stays local, where the command answers
+/// the precise error.
+fn mpop_route<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
+    if args.len() < 4 {
+        return Route::Local;
+    }
+    let parsed = if upper == b"ZMPOP" {
+        kevy_verbs::mpop::parse_zmpop(args, 1)
+    } else {
+        kevy_verbs::mpop::parse_lmpop(args, 1)
+    };
+    match parsed {
+        Ok(p) if p.numkeys == 1 => Route::Single(2),
+        Ok(p) => Route::FirstHit { numkeys: p.numkeys },
+        Err(_) => Route::Local,
+    }
+}
+
+/// The numkeys-counted reads computed over copies when their keys span
+/// shards. A malformed call stays local, where the command answers the
+/// precise error.
+fn read_across_route<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
+    use kevy_verbs::multikey::{parse_zcombine, parse_zdiff, parse_zintercard};
+    if args.len() < 3 {
+        return Route::Local;
+    }
+    let numkeys = match upper {
+        b"SINTERCARD" => parse_zintercard(args).map(|(n, _)| n).ok(),
+        b"ZDIFF" => parse_zdiff(args).map(|p| p.numkeys).ok(),
+        _ => parse_zcombine(args).map(|p| p.numkeys).ok(),
+    };
+    numkeys.map_or(Route::Local, |count| Route::ReadAcross { first: 2, count })
 }

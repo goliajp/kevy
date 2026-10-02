@@ -5,7 +5,7 @@
 
 use crate::Commands;
 use crate::message::{Inbound, Part, PendingSlot};
-use crate::reduce::{pubsub_message, pubsub_message_header};
+use crate::pubsub_frames::{pubsub_message, pubsub_message_header};
 use crate::shard::Shard;
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_integer, encode_null_bulk,

@@ -8,7 +8,7 @@ use kevy_store::ZAggregate;
 
 use super::{Args, emit_int, verb_name};
 use kevy_resp::encode_error;
-use kevy_verbs::multikey::{parse_zintercard, parse_zstore};
+use kevy_verbs::multikey::{parse_zdiffstore, parse_zintercard, parse_zstore};
 use kevy_verbs::reply::wrong_args;
 
 /// One zset-algebra request; `false` = verb not in this group.
@@ -33,7 +33,9 @@ fn cmd_zstore(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>, diff_form: bool, o
     if argv.len() < 4 {
         return wrong_args(out, &verb_name(argv));
     }
-    let z = match parse_zstore(&Args::new(argv), diff_form) {
+    let args = Args::new(argv);
+    let parsed = if diff_form { parse_zdiffstore(&args) } else { parse_zstore(&args) };
+    let z = match parsed {
         Ok(z) => z,
         Err(e) => return encode_error(out, e.as_wire()),
     };

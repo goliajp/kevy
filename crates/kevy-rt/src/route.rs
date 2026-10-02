@@ -339,6 +339,84 @@ pub enum Route {
         #[doc = include_str!("route_docs/xreadgather_group.md")]
         group: Option<XGroupCtx>,
     },
+    /// A pop naming `numkeys` keys from argument 2 on, the count itself at
+    /// argument 1, that takes from the first key holding something —
+    /// `ZMPOP` / `LMPOP`. Keys on one shard run there as sent, atomically;
+    /// keys apart are tried in order, each as the same command naming that
+    /// key alone, and the first reply that is not null answers.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `ZMPOP 2 a b MIN`: two keys at arguments 2 and 3.
+    /// let route = Route::FirstHit { numkeys: 2 };
+    /// assert_ne!(route, Route::Single(2));
+    /// ```
+    FirstHit {
+        /// How many keys follow the count.
+        numkeys: usize,
+    },
+    /// A read naming `count` keys from argument `first` on, answered from
+    /// one computation over them — `LCS`, `SINTERCARD`, `ZINTER`. Keys on
+    /// one shard run there as sent; keys apart are copied to the shard the
+    /// command came to and the command runs over the copies.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `LCS a b`: two keys from argument 1.
+    /// let route = Route::ReadAcross { first: 1, count: 2 };
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    ReadAcross {
+        /// Where the keys start.
+        first: usize,
+        /// How many there are.
+        count: usize,
+    },
+    /// `MSETNX key value [key value …]`. Keys on one shard run there as
+    /// sent; keys apart are first asked whether any exists, and only when
+    /// none does are the pairs set, shard by shard — not atomic across the
+    /// shards, as `MSET` is not.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// assert_ne!(Route::MSetNx, Route::MSet);
+    /// ```
+    MSetNx,
+    /// `SMOVE src dst member`. Keys on one shard run there as sent; keys
+    /// apart move the member in three steps — the destination's type, the
+    /// source's checks and removal, the destination's add — putting the
+    /// member back if the destination turned out not to be a set.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// let route = Route::SetMove;
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    SetMove,
+    /// [`Route::ReadAcross`] for a command that writes its result to the
+    /// key at `dst` — `ZRANGESTORE`. When the keys are apart the result is
+    /// computed over copies, then placed on `dst`'s shard (or `dst`
+    /// removed, when it came out empty) before the reply goes.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// // `ZRANGESTORE dst src 0 -1`: reads src (argument 2), writes dst.
+    /// let route = Route::StoreFromCopies { first: 2, count: 1, dst: 1 };
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    StoreFromCopies {
+        /// Where the keys read start.
+        first: usize,
+        /// How many there are.
+        count: usize,
+        /// The key written.
+        dst: usize,
+    },
 }
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`

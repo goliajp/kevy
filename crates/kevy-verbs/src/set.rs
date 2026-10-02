@@ -41,6 +41,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             emit_int_result(res.map(|n| n as i64), out);
             changed(removed)
         }
+        b"SMOVE" => smove(store, args, out),
         b"SCARD" => {
             if args.len() == 2 {
                 emit_int_result(store.scard(&args[1]).map(|n| n as i64), out);
@@ -173,4 +174,29 @@ fn sscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
             scan_page(out, &page);
         }
     }
+}
+
+/// `SMOVE src dst member`, both keys in this store, in Redis's order of
+/// checks: a missing source answers 0 whatever `dst` is; then each key's
+/// type; then the member.
+fn smove<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) -> Effect {
+    if args.len() != 4 {
+        wrong_args(out, "smove");
+        return Effect::Unchanged;
+    }
+    let (src, dst, member) = (&args[1], &args[2], &args[3]);
+    let moved = match (store.scard(src), store.scard(dst)) {
+        (Ok(0), _) => Ok(false),
+        (Err(e), _) | (_, Err(e)) => Err(e),
+        _ if src == dst => store.sismember(src, member),
+        _ => store.srem(src, &[member]).and_then(|n| {
+            if n == 0 {
+                return Ok(false);
+            }
+            store.sadd(dst, &[member]).map(|_| true)
+        }),
+    };
+    emit_int_result(moved.map(i64::from), out);
+    // a key moved onto itself changes nothing
+    changed(matches!(moved, Ok(true)) && src != dst)
 }

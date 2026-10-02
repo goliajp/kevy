@@ -279,8 +279,9 @@ fn mget_stays_array_on_resp3() {
     v3.write_all(&req(&[b"SET", b"b", b"2"])).unwrap();
     read_reply(&mut v3, b"+OK\r\n");
     v3.write_all(&req(&[b"MGET", b"a", b"missing", b"b"])).unwrap();
-    // Same array shape as V2: `*3\r\n$1\r\n1\r\n$-1\r\n$1\r\n2\r\n`.
-    read_reply(&mut v3, b"*3\r\n$1\r\n1\r\n$-1\r\n$1\r\n2\r\n");
+    // Same array shape as V2; the missing key is RESP3's null `_`, as
+    // Redis answers it.
+    read_reply(&mut v3, b"*3\r\n$1\r\n1\r\n_\r\n$1\r\n2\r\n");
 }
 
 #[test]

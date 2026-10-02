@@ -40,7 +40,9 @@ impl<C: Commands> Shard<C> {
             if s == self.id {
                 self.deliver_publish(&m.0, &m.1);
             } else {
+                // the flush walks only the shards this mask names
                 self.publish_batch[s].push(m.clone());
+                self.publish_batch_nonempty |= 1u64 << s;
             }
         }
     }
@@ -72,25 +74,65 @@ impl<C: Commands> Shard<C> {
     /// on the per-class flag, then fire one keyspace event for the cmd's
     /// key (`args[1]` per Redis convention — keyless cmds short-circuit
     /// inside `Commands::notify_class` returning `None`).
-    pub(crate) fn maybe_notify_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
+    pub(crate) fn maybe_notify_dispatch<A: ArgvView + ?Sized>(
+        &mut self,
+        args: &A,
+        asked: Option<crate::propagation::Notify>,
+    ) {
         if !self.notify_flags.is_active() {
             return;
         }
-        // Store-origin events first: a `new` fired by this command
-        // precedes the command's own class event on the wire.
-        self.drain_store_notify();
+        // Store-origin events first — a `new` fired by this command
+        // precedes the command's own event on the wire — except the `del`
+        // of a collection the command emptied, which follows it.
+        let mut emptied = Vec::new();
+        if self.store.has_notify_events() {
+            for (kind, key) in self.store.take_notify_events() {
+                if kind == kevy_store::KeyspaceEvent::Emptied {
+                    emptied.push(key);
+                } else {
+                    self.notify_keyspace_event(kind.name().as_bytes(), &key);
+                }
+            }
+        }
         self.drain_expired_keys();
+        match asked {
+            None => self.notify_by_verb(args),
+            Some(crate::propagation::Notify::Events(events)) => {
+                // an emptied key's `del` follows the first event that names
+                // it, as Redis interleaves them (`srem`, `del`, `sadd`)
+                for (class, event, key) in events {
+                    if class_enabled(class, &self.notify_flags) {
+                        self.notify_keyspace_event(event.as_bytes(), &key);
+                    }
+                    if let Some(at) = emptied.iter().position(|k| *k == key) {
+                        let k = emptied.swap_remove(at);
+                        self.notify_keyspace_event(b"del", &k);
+                    }
+                }
+            }
+            Some(_) => {}
+        }
+        for key in emptied {
+            self.notify_keyspace_event(b"del", &key);
+        }
+    }
+
+    /// One `event` of `class` on `key`, when that class is switched on.
+    pub(crate) fn notify_class_event(&mut self, class: NotifyKind, event: &[u8], key: &[u8]) {
+        if self.notify_flags.is_active() && class_enabled(class, &self.notify_flags) {
+            self.notify_keyspace_event(event, key);
+        }
+    }
+
+    /// A write's default event: its verb, lower-cased, on argument 1.
+    fn notify_by_verb<A: ArgvView + ?Sized>(&mut self, args: &A) {
         let Some(class) = self.commands.notify_class(args) else { return };
-        if !class_enabled(class, &self.notify_flags) {
+        if !class_enabled(class, &self.notify_flags) || args.len() < 2 {
             return;
         }
-        let Some(verb_raw) = args.first() else { return };
-        if args.len() < 2 {
-            return;
-        }
-        let key = args[1].to_vec();
-        let event = ascii_lower(verb_raw);
-        self.notify_keyspace_event(&event, &key);
+        let event = ascii_lower(&args[0]);
+        self.notify_keyspace_event(&event, &args[1]);
     }
 }
 

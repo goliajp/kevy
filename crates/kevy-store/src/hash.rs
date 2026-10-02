@@ -267,7 +267,7 @@ impl Store {
             }
         };
         if drop_key {
-            self.remove_entry(key);
+            self.remove_emptied(key);
         } else {
             self.account_delta(key, delta);
         }

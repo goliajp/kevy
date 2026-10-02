@@ -50,6 +50,7 @@ mod reply_encode_resp3;
 mod reply_parse;
 mod request;
 mod request_borrowed;
+mod resp3_nulls;
 pub mod verb_arity;
 
 pub use argv::{Argv, Command};
@@ -70,6 +71,7 @@ pub use reply_encode_resp3::{
 pub use reply_parse::{TextedReply, parse_reply, parse_reply_keeping_double_text};
 pub use request::{MAX_BULK_LEN, MAX_MULTIBULK_LEN, parse_command, parse_command_into};
 pub use request_borrowed::parse_command_borrowed;
+pub use resp3_nulls::resp3_nulls;
 
 /// Which version of RESP a connection is speaking. Negotiated via the
 /// `HELLO` command — RESP2 is the default for backwards compatibility

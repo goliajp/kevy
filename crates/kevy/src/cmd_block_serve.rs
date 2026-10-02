@@ -29,7 +29,7 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
         BlockKind::XReadGroupBlock => xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv()),
         // a blocking verb this table predates is single-key until taught
         // otherwise: replay it as sent, the trait's own default
-        _ => args.to_argv(),
+        _ => crate::cmd_block_mpop::serve_argv(args, kind, key).unwrap_or_else(|| args.to_argv()),
     }
 }
 
@@ -227,11 +227,12 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
     kind: BlockKind,
 ) -> bool {
     match kind {
+        // a key of the wrong type answers at once too, with the error
         BlockKind::Blpop | BlockKind::Brpop | BlockKind::Brpoplpush => {
-            serve_argv.get(1).is_some_and(|k| store.llen(k).is_ok_and(|n| n > 0))
+            serve_argv.get(1).is_some_and(|k| store.llen(k).map_or(true, |n| n > 0))
         }
         BlockKind::Bzpopmin => {
-            serve_argv.get(1).is_some_and(|k| store.zcard(k).is_ok_and(|n| n > 0))
+            serve_argv.get(1).is_some_and(|k| store.zcard(k).map_or(true, |n| n > 0))
         }
         BlockKind::XReadBlock => {
             // XREAD is read-only, so dispatching the replay is itself a safe
@@ -253,7 +254,7 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
         BlockKind::XReadGroupBlock => xreadgroup_ready(store, serve_argv),
         // readiness this table cannot judge: never wake spuriously, the
         // trait's default
-        _ => false,
+        _ => crate::cmd_block_mpop::ready(store, serve_argv, kind).unwrap_or(false),
     }
 }
 

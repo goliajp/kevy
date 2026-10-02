@@ -18,7 +18,7 @@
 //!   over-approximation, unlike the channel registry's bit semantics).
 
 use crate::Commands;
-use crate::reduce::pubsub_pmessage;
+use crate::pubsub_frames::pubsub_pmessage;
 use crate::shard::Shard;
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_integer, encode_null_bulk,

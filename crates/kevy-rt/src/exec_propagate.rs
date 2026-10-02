@@ -82,6 +82,8 @@ impl<C: Commands> Shard<C> {
         if !crate::propagation::take_armed() {
             return;
         }
+        // a parked command has nothing to announce yet
+        crate::propagation::take_notify();
         match crate::propagation::take_override() {
             crate::propagation::Propagate::AsIs => {}
             prop => self.record_propagation_override(prop, args),
@@ -105,6 +107,7 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn served_key_idx(kind: BlockKind, argc: usize) -> usize {
     match kind {
         BlockKind::XReadBlock | BlockKind::XReadGroupBlock => argc.saturating_sub(2),
+        BlockKind::Bzmpop | BlockKind::Blmpop => 3,
         _ => 1,
     }
 }

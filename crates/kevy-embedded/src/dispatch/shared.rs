@@ -23,9 +23,13 @@ use crate::store::{Inner, Store, commit_write, ensure_writable};
 /// two-key list moves may span shards, and the rest were never part of
 /// the embedded surface.
 pub(super) const SERVER_ONLY: &[&[u8]] = &[
+    b"BLMOVE",
+    b"BLMPOP",
     b"BLPOP",
     b"BRPOP",
     b"BRPOPLPUSH",
+    b"BZMPOP",
+    b"BZPOPMAX",
     b"BZPOPMIN",
     b"FLUSHDB",
     b"HMSET",

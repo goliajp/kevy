@@ -30,8 +30,12 @@ mod idx_create;
 mod idx_query;
 mod keyspace;
 mod misc;
+mod mpop;
+mod msetnx;
+mod read_across;
 mod set;
 mod shared;
+mod smove;
 mod strings;
 #[cfg(feature = "index")]
 mod table;
@@ -64,6 +68,10 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let handled = strings::dispatch(s, up, argv, out)
         || set::dispatch(s, up, argv, out)
         || zset_algebra::dispatch(s, up, argv, out)
+        || mpop::dispatch(s, up, argv, out)
+        || read_across::dispatch(s, up, argv, out)
+        || smove::dispatch(s, up, argv, out)
+        || msetnx::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
         || shared::dispatch(s, up, argv, out)
@@ -173,14 +181,24 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "GETEX",
     "GETRANGE",
     "GETSET",
+    "HEXPIREAT",
+    "HEXPIRETIME",
+    "HPEXPIRETIME",
+    "HSTRLEN",
     "INCR",
     "INCRBY",
     "INCRBYFLOAT",
+    "LCS",
+    "LPUSHX",
     "MGET",
     "MSET",
+    "MSETNX",
+    "RPUSHX",
     "SET",
     "SETNX",
     "SETRANGE",
+    "SINTERCARD",
+    "SMOVE",
     "STRLEN",
     // bitmap
     "BITCOUNT",
@@ -213,6 +231,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "LINDEX",
     "LINSERT",
     "LLEN",
+    "LMPOP",
     "LPOP",
     "LPUSH",
     "LRANGE",
@@ -233,28 +252,42 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "SPOP",
     "SRANDMEMBER",
     "SREM",
+    "SUBSTR",
     "SUNION",
     "SUNIONSTORE",
     // zsets
     "ZADD",
     "ZCARD",
     "ZCOUNT",
+    "ZDIFF",
     "ZDIFFSTORE",
     "ZINCRBY",
+    "ZINTER",
     "ZINTERCARD",
     "ZINTERSTORE",
+    "ZLEXCOUNT",
+    "ZMPOP",
+    "ZMSCORE",
+    "ZPOPMAX",
     "ZPOPMIN",
     "ZPOPMIN.BELOW",
+    "ZRANDMEMBER",
     "ZRANGE",
+    "ZRANGEBYLEX",
     "ZRANGEBYSCORE",
+    "ZRANGESTORE",
     "ZRANK",
     "ZREM",
+    "ZREMRANGEBYLEX",
     "ZREMRANGEBYRANK",
     "ZREMRANGEBYSCORE",
     "ZREVRANGE",
+    "ZREVRANGEBYLEX",
     "ZREVRANGEBYSCORE",
+    "ZREVRANK",
     "ZSCAN",
     "ZSCORE",
+    "ZUNION",
     "ZUNIONSTORE",
     // keyspace
     "COPY",

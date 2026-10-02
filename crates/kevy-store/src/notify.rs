@@ -61,6 +61,19 @@ pub enum KeyspaceEvent {
     /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Evicted, b"k".to_vec())]);
     /// ```
     Evicted,
+    /// A write removed a collection's last member, and the key went with
+    /// it. Published as `del`, after the event of the write that did it.
+    ///
+    /// ```
+    /// use kevy_store::{KeyspaceEvent, Store};
+    /// let mut s = Store::new();
+    /// s.set_notify_capture([KeyspaceEvent::Emptied]);
+    /// s.sadd(b"k", &[b"only".as_slice()])?;
+    /// s.srem(b"k", &[b"only".as_slice()])?;
+    /// assert_eq!(s.take_notify_events(), [(KeyspaceEvent::Emptied, b"k".to_vec())]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    Emptied,
 }
 
 impl KeyspaceEvent {
@@ -73,6 +86,7 @@ impl KeyspaceEvent {
         match self {
             Self::New => "new",
             Self::Expired => "expired",
+            Self::Emptied => "del",
             Self::Evicted => "evicted",
         }
     }
@@ -82,6 +96,7 @@ impl KeyspaceEvent {
             Self::New => CAPTURE_NEW,
             Self::Expired => CAPTURE_EXPIRED,
             Self::Evicted => CAPTURE_EVICTED,
+            Self::Emptied => CAPTURE_EMPTIED,
         }
     }
 }
@@ -89,6 +104,7 @@ impl KeyspaceEvent {
 pub(crate) const CAPTURE_NEW: u8 = 1 << 0;
 pub(crate) const CAPTURE_EXPIRED: u8 = 1 << 1;
 pub(crate) const CAPTURE_EVICTED: u8 = 1 << 2;
+pub(crate) const CAPTURE_EMPTIED: u8 = 1 << 3;
 
 impl Store {
     /// Choose which store-origin event kinds to capture, replacing the
@@ -142,6 +158,14 @@ impl Store {
         self.expired_keys.push(key.to_vec());
         if self.notify_capture & CAPTURE_EXPIRED != 0 {
             self.notify_events.push((KeyspaceEvent::Expired, key.to_vec()));
+        }
+    }
+
+    /// Remove `key`, whose collection a write just emptied.
+    pub(crate) fn remove_emptied(&mut self, key: &[u8]) {
+        self.remove_entry(key);
+        if self.notify_capture & CAPTURE_EMPTIED != 0 {
+            self.notify_events.push((KeyspaceEvent::Emptied, key.to_vec()));
         }
     }
 

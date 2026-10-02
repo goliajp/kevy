@@ -318,8 +318,7 @@ mod tests {
 
     /// The deviations we FIXED must not creep back into the table as folklore.
     /// A regression to the old behaviour would have to come here and explain
-    /// itself. ZRANK's remaining WITHSCORE compat gap is a separate, still-open
-    /// deviation and must not be silently dropped with the complexity fix.
+    /// itself.
     #[test]
     fn the_fixed_deviations_stay_fixed() {
         for name in ["SPOP", "SRANDMEMBER", "RANDOMKEY"] {
@@ -334,7 +333,7 @@ mod tests {
             zrank.complexity.contains("O(log N)"),
             "ZRANK is O(log N) now: the (score, member) tree is rank-augmented"
         );
-        assert!(zrank.compat.contains("WITHSCORE"), "the WITHSCORE gap is still open");
+        assert_eq!(zrank.compat, "full", "ZRANK takes WITHSCORE now; the gap note must not return");
         let zcount = verb_meta("ZCOUNT").expect("ZCOUNT");
         assert!(zcount.complexity.contains("O(log N)"), "ZCOUNT is two rank descents now");
         let scan = verb_meta("SCAN").expect("SCAN");

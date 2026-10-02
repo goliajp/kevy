@@ -2,7 +2,7 @@
 //! point reads, counts and removals. Range reads and pops live in
 //! `zset_range`; the multi-key algebra is not here.
 
-use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_integer, encode_null_bulk};
+use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_null_bulk};
 use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
 
 use crate::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed, upper_verb};
@@ -51,18 +51,6 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             }
             let res = store.zrem(&args[1], &rest_borrowed(args, 2));
             removed(res, out)
-        }
-        b"ZRANK" => {
-            if args.len() == 3 {
-                match store.zrank(&args[1], &args[2]) {
-                    Ok(Some(r)) => encode_integer(out, r as i64),
-                    Ok(None) => encode_null_bulk(out),
-                    Err(e) => store_err(out, e),
-                }
-            } else {
-                wrong_args(out, "zrank");
-            }
-            Effect::Read
         }
         b"ZINCRBY" => {
             if args.len() != 4 {

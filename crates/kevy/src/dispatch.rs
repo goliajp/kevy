@@ -49,7 +49,16 @@ pub(crate) fn dispatch_into_resp3<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    let start = out.len();
     dispatch_with_proto(ctx, store, args, out, true);
+    resp3_tail(out, start);
+}
+
+/// The command bodies speak RESP2 nulls; RESP3 has only `_`.
+#[inline]
+fn resp3_tail(out: &mut Vec<u8>, start: usize) {
+    let n = kevy_resp::resp3_nulls(&mut out[start..]);
+    out.truncate(start + n);
 }
 
 /// The ids [`crate::cmd_resolve::kevy_resolve`] hands out. Only the tier-1
@@ -70,6 +79,9 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
     proto_v3: bool,
     out: &mut Vec<u8>,
 ) {
+    if proto_v3 {
+        return dispatch_verb_v3(ctx, store, args, verb, out);
+    }
     if verb == VERB_GET {
         tier1_get(store, args, out);
     } else if verb == VERB_SET {
@@ -77,8 +89,32 @@ pub(crate) fn dispatch_verb_into<A: ArgvView + ?Sized>(
             tier1_set(store, args, out);
         }
     } else {
-        dispatch_with_proto(ctx, store, args, out, proto_v3);
+        dispatch_with_proto(ctx, store, args, out, false);
     }
+}
+
+/// [`dispatch_verb_into`] for a RESP3 conn, kept out of line so the RESP2
+/// path carries none of its work.
+#[cold]
+#[inline(never)]
+fn dispatch_verb_v3<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    args: &A,
+    verb: VerbId,
+    out: &mut Vec<u8>,
+) {
+    let start = out.len();
+    if verb == VERB_GET {
+        tier1_get(store, args, out);
+    } else if verb == VERB_SET {
+        if !scope_redirect(ctx, args, out) {
+            tier1_set(store, args, out);
+        }
+    } else {
+        dispatch_with_proto(ctx, store, args, out, true);
+    }
+    resp3_tail(out, start);
 }
 
 /// Shared body: parse verb, OOM-precheck, try the (V3-or-V2) override
@@ -239,7 +275,14 @@ fn exec_shared<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    match kevy_verbs::exec(store, cmd, args, out) {
+    let start = out.len();
+    let effect = kevy_verbs::exec(store, cmd, args, out);
+    if kevy_rt::propagation::notify_wanted()
+        && let Some(e) = &effect
+    {
+        crate::notify_policy::note(cmd, args, e, &out[start..]);
+    }
+    match effect {
         None => false,
         Some(Effect::Record(frame)) => {
             record_instead(kevy_rt::propagation::Propagate::Replace(frame));

@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (209 total)
+## Verbs (238 total)
 
 ### scan
 
@@ -120,6 +120,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `GETRANGE key start end` [readonly] — Return a byte range of a string value.
   - complexity: O(M) over the returned bytes
   - compat: full
+- `LCS key1 key2 [LEN] [IDX] [MINMATCHLEN min-match-len] [WITHMATCHLEN]` [readonly] — Return the longest common subsequence of two strings, its length, or its matching ranges.
+  - complexity: O(N*M) — the lengths of the two strings
+  - compat: full
 - `SETBIT key offset value` [write] — Set the bit at the given offset, returning its old value.
   - complexity: O(1) amortised; O(N) on the call that grows the value out to the offset
   - compat: full
@@ -156,6 +159,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `MSET key value [key value ...]` [write] — Set multiple key/value pairs atomically per shard.
   - complexity: O(N) pairs, one O(1) SET each
   - compat: differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic
+- `MSETNX key value [key value ...]` [write] — Set multiple key/value pairs, only if none of the keys exists.
+  - complexity: O(N) pairs
+  - compat: differs: keys on different shards are checked and then set, so another client may create one of them in between; co-locate the keys with a {hashtag} for Redis's atomic form
 - `PSETEX key milliseconds value` [write] — Set a key's value with a TTL in milliseconds.
   - complexity: O(1)
   - compat: full
@@ -171,6 +177,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `STRLEN key` [readonly] — Return the length of a key's string value.
   - complexity: O(1)
   - compat: full
+- `SUBSTR key start end` [readonly] — Return a byte range of a string value; the old name of GETRANGE.
+  - complexity: O(M) over the returned bytes
+  - compat: full
 
 ### hash
 
@@ -182,7 +191,13 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `HEXPIRE key seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in seconds.
   - complexity: O(F) fields in the FIELDS clause
-  - compat: differs: the FIELDS parse error reads 'Mandatory keyword FIELDS is missing' where Redis says 'Mandatory argument FIELDS'
+  - compat: full
+- `HEXPIREAT key unix-time-seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-second deadlines.
+  - complexity: O(F) fields
+  - compat: full
+- `HEXPIRETIME key FIELDS numfields field [field ...]` [readonly] — Return per-field absolute expiries in Unix seconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: full
 - `HGET key field` [readonly] — Return the value of a hash field.
   - complexity: O(1)
   - compat: full
@@ -212,13 +227,13 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `HPERSIST key FIELDS numfields field [field ...]` [write] — Remove per-field TTLs from a hash.
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it
+  - compat: full
 - `HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in milliseconds.
   - complexity: O(F) fields
-  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+  - compat: full
 - `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
   - complexity: O(F) fields
-  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+  - compat: full
 - `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
   - complexity: O(N) — the whole hash is copied and returned in one batch
   - compat: differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
@@ -228,18 +243,30 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `HSETNX key field value` [write] — Set a hash field only if it does not exist.
   - complexity: O(1)
   - compat: full
+- `HPEXPIRETIME key FIELDS numfields field [field ...]` [readonly] — Return per-field absolute expiries in Unix milliseconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: full
 - `HPTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+  - compat: full
+- `HSTRLEN key field` [readonly] — Return the length of a hash field's value (0 when absent).
+  - complexity: O(1)
+  - compat: full
 - `HTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing).
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+  - compat: full
 - `HVALS key` [readonly] — Return all values of a hash.
   - complexity: O(N) fields
   - compat: full
 
 ### list
 
+- `BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout` [write,blocking] — Blocking LMOVE: move an element between two lists, waiting for the source to have one.
+  - complexity: O(1) to serve
+  - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT count]` [write,blocking] — Blocking LMPOP: pop from the first non-empty list, waiting for one.
+  - complexity: O(N + M) — N keys tried, M elements popped
+  - compat: differs: same multi-key priority deviation as BLPOP
 - `BLPOP key [key ...] timeout` [write,blocking] — Blocking left pop across one or more lists (effect logged as LPOP).
   - complexity: O(1) to serve; the park is O(1) and waiters are woken FIFO per key
   - compat: differs: on a multi-shard server the multi-key form does not honour Redis's left-to-right key priority — keys on the connection's own shard are served before remote ones
@@ -258,6 +285,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` [write] — Atomically move an element between two lists.
   - complexity: O(1)
   - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
+- `LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count]` [write] — Pop elements from the first non-empty list among the keys.
+  - complexity: O(N + M) — N keys tried, M elements popped
+  - compat: differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
 - `LPOP key [count]` [write] — Pop one or more elements from the head of a list.
   - complexity: O(C) elements popped
   - compat: differs: LPOP key 0 on an existing key replies a nil array where Redis replies an empty array
@@ -266,6 +296,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `LPUSH key element [element ...]` [write] — Prepend one or more elements to a list.
   - complexity: O(M) values, O(1) amortised each
+  - compat: full
+- `LPUSHX key element [element ...]` [write] — Prepend elements to a list only if it exists.
+  - complexity: O(N) elements pushed
   - compat: full
 - `LRANGE key start stop` [readonly] — Return a range of list elements.
   - complexity: O(M) elements returned — the start offset is skipped in O(1) (Redis is O(S+M))
@@ -291,6 +324,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `RPUSH key element [element ...]` [write] — Append one or more elements to a list.
   - complexity: O(M) values, O(1) amortised each
   - compat: full
+- `RPUSHX key element [element ...]` [write] — Append elements to a list only if it exists.
+  - complexity: O(N) elements pushed
+  - compat: full
 
 ### set
 
@@ -309,6 +345,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SINTER key [key ...]` [readonly] — Return the intersection of the given sets (cross-shard gather).
   - complexity: O(sum of the source cardinalities) — there is NO smallest-set-first ordering, so SINTER huge tiny costs O(huge) where Redis costs O(tiny * k)
   - compat: full
+- `SINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the size of the intersection of the given sets, counting at most LIMIT.
+  - complexity: O(N*M) worst case — N the smallest set, M the keys
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `SINTERSTORE destination key [key ...]` [write] — Store the intersection of the given sets into destination.
   - complexity: O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm
   - compat: full
@@ -318,6 +357,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SMEMBERS key` [readonly] — Return all members of a set.
   - complexity: O(N) members
   - compat: full
+- `SMOVE source destination member` [write] — Move a member from one set to another.
+  - complexity: O(1)
+  - compat: differs: when the two keys live on different shards the member is removed from one and then added to the other, so the move is not atomic; co-locate the keys with a {hashtag} for Redis's atomic form
 - `SPOP key [count]` [write] — Remove and return one or more random members of a set.
   - complexity: O(count) expected — each member is drawn by probing a random slot and taking the first occupied one
   - compat: full
@@ -339,6 +381,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 
 ### zset
 
+- `BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT count]` [write,blocking] — Blocking ZMPOP: pop from the first non-empty sorted set, waiting for one.
+  - complexity: O(K) + O(M log N) — K keys tried, M members popped
+  - compat: differs: same multi-key priority deviation as BLPOP
+- `BZPOPMAX key [key ...] timeout` [write,blocking] — Blocking pop of the highest-scored member across one or more sorted sets.
+  - complexity: O(log N) per pop; the park is O(1)
+  - compat: full
 - `BZPOPMIN key [key ...] timeout` [write,blocking] — Blocking pop of the lowest-scored member across one or more sorted sets.
   - complexity: O(log N) per pop; the park is O(1)
   - compat: full
@@ -351,17 +399,32 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZCOUNT key min max` [readonly] — Count members with scores within the given bounds.
   - complexity: O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned
   - compat: full
+- `ZDIFF numkeys key [key ...] [WITHSCORES]` [readonly] — Return the difference of the first sorted set and the rest.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZDIFFSTORE destination numkeys key [key ...]` [write] — Store the difference of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R); each source is extracted whole on its own shard
   - compat: full
 - `ZINCRBY key increment member` [write] — Increment a member's score in a sorted set.
   - complexity: O(log N)
   - compat: full
+- `ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]` [readonly] — Return the intersection of the given sorted sets.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the cardinality of the intersection of the given sorted sets.
   - complexity: O(sum of the source cardinalities) — LIMIT does not short-circuit the gather, only the combine
   - compat: full
 - `ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the intersection of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R)
+  - compat: full
+- `ZMPOP numkeys key [key ...] MIN|MAX [COUNT count]` [write] — Pop members from the first non-empty sorted set among the keys.
+  - complexity: O(K) + O(M log N) — K keys tried, M members popped
+  - compat: differs: keys on different shards are tried one after another, so the pop is not atomic across them; co-locate the keys with a {hashtag} for Redis's atomic form
+- `ZMSCORE key member [member ...]` [readonly] — Return the scores of several members.
+  - complexity: O(M) — one hash lookup per member
+  - compat: full
+- `ZPOPMAX key [count]` [write] — Pop up to count members with the highest scores.
+  - complexity: O(M log N)
   - compat: full
 - `ZPOPMIN key [count]` [write] — Pop up to count members with the lowest scores.
   - complexity: O(M log N)
@@ -369,17 +432,32 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZPOPMIN.BELOW key below [count]` [write,extension] — kevy extension: pop up to count lowest members with score strictly below the threshold (delayed-job primitive).
   - complexity: O(M log N) — take_while stops at the first score at or above the threshold, so it never walks past the due prefix
   - compat: kevy-only: a delayed-job primitive (score = due time); no Redis analogue
-- `ZRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range.
-  - complexity: O(log N + M) — one rank descent seeks to start, then the M requested members are walked
-  - compat: differs: only the legacy 'key start stop [WITHSCORES]' form is accepted — the Redis 6.2 BYSCORE / BYLEX / REV / LIMIT arguments are a syntax error
+- `ZLEXCOUNT key min max` [readonly] — Count the members between two member bounds.
+  - complexity: O(log² N) — two binary searches over ranks
+  - compat: full
+- `ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]` [readonly] — Return members by rank, score or member range, either way.
+  - complexity: O(log N + M) — one rank descent seeks to start, then the M requested members are walked; BYLEX finds its ends by binary search over ranks
+  - compat: full
 - `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds.
   - complexity: O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk
   - compat: full
-- `ZRANK key member` [readonly] — Return a member's rank, ordered from the lowest score.
+- `ZRANDMEMBER key [count [WITHSCORES]]` [readonly] — Return random members, distinct for a positive count and possibly repeated for a negative one.
+  - complexity: O(M log N) — each pick is one rank descent
+  - compat: full
+- `ZRANGEBYLEX key min max [LIMIT offset count]` [readonly] — Return members between two member bounds.
+  - complexity: O(log² N + M)
+  - compat: full
+- `ZRANGESTORE dst src min max [BYSCORE | BYLEX] [REV] [LIMIT offset count]` [write] — Store a range of a sorted set — by rank, score or member — into destination.
+  - complexity: O(log N + M) members stored
+  - compat: differs: when the two keys live on different shards the range is read from a copy of src and placed on dst's shard, so the store is not atomic with the read
+- `ZRANK key member [WITHSCORE]` [readonly] — Return a member's rank, ordered from the lowest score.
   - complexity: O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree
-  - compat: differs: the Redis 7.2 WITHSCORE option is not supported
+  - compat: full
 - `ZREM key member [member ...]` [write] — Remove one or more members from a sorted set.
   - complexity: O(M log N)
+  - compat: full
+- `ZREMRANGEBYLEX key min max` [write] — Remove the members between two member bounds.
+  - complexity: O(log² N + M log N)
   - compat: full
 - `ZREMRANGEBYRANK key start stop` [write] — Remove members within the given rank range.
   - complexity: O(log N + M log N) — a rank descent seeks to start, then M member deletes
@@ -390,6 +468,12 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds, highest first.
   - complexity: O(log N + M) — a seeked forward walk of the M matches, then the result is reversed
   - compat: full
+- `ZREVRANGEBYLEX key max min [LIMIT offset count]` [readonly] — Return members between two member bounds, highest first.
+  - complexity: O(log² N + M)
+  - compat: full
+- `ZREVRANK key member [WITHSCORE]` [readonly] — Return a member's rank, ordered from the highest score.
+  - complexity: O(log N)
+  - compat: full
 - `ZREVRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range, highest score first.
   - complexity: O(N + M) — the set is read in rank order and reversed, then the M requested members are taken
   - compat: full
@@ -399,6 +483,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZSCORE key member` [readonly] — Return a member's score.
   - complexity: O(1) — a hash lookup
   - compat: full
+- `ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]` [readonly] — Return the union of the given sorted sets.
+  - complexity: O(L + R log R) — L members across the inputs, R in the result
+  - compat: differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them
 - `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the union of the given sorted sets into destination.
   - complexity: O(sum of the source cardinalities + R log R)
   - compat: full

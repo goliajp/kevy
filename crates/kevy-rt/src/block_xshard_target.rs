@@ -82,7 +82,7 @@ impl<C: Commands> Shard<C> {
         // -- the origin holds RESP bytes, not an element.
         let kind = self.xwaiters.kind_of(key, origin, conn);
         if let Some(k) = kind
-            && let Some(undo) = self.commands.block_restore_argv(&mut self.store, k, key)
+            && let Some(undo) = self.commands.block_restore_for(&mut self.store, k, &argv, key)
         {
             self.xwaiters.escrow_put(origin, conn, undo);
         }

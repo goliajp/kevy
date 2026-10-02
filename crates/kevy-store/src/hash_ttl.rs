@@ -223,18 +223,37 @@ impl Store {
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,
     /// else remaining ms.
     pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
-        self.purge_hash_ttl(key);
         let now = now_unix_ms();
+        self.per_field_deadline(key, fields, |d| d.saturating_sub(now) as i64)
+    }
+
+    /// The unix-ms deadline per field: `-2` key/field missing, `-1` no TTL.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// s.hexpire_at(b"h", &[b"f"], 4_102_444_800_999, kevy_store::HExpireCond::Always)?;
+    /// assert_eq!(s.hexpire_time(b"h", &[b"f", b"x"])?, [4_102_444_800_999, -2]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn hexpire_time(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
+        self.per_field_deadline(key, fields, |d| d as i64)
+    }
+
+    fn per_field_deadline(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+        shown: impl Fn(u64) -> i64,
+    ) -> Result<Vec<i64>, StoreError> {
+        self.purge_hash_ttl(key);
         let mut out = Vec::with_capacity(fields.len());
         for f in fields {
             if !self.hash_has_field(key, f)? {
                 out.push(-2);
                 continue;
             }
-            match self.hfttl.get(key).and_then(|m| m.get(*f)) {
-                Some(&d) => out.push(d.saturating_sub(now) as i64),
-                None => out.push(-1),
-            }
+            out.push(self.hfttl.get(key).and_then(|m| m.get(*f)).map_or(-1, |&d| shown(d)));
         }
         Ok(out)
     }

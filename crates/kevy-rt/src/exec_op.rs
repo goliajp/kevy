@@ -138,6 +138,7 @@ impl<C: Commands> Shard<C> {
                             Ok(pairs) => Gathered::Scored(pairs),
                             Err(_) => Gathered::WrongType,
                         },
+                        GatherKind::Value => Gathered::Value(self.store.clone_with_ttl(&k)),
                     };
                     results.push((k, g));
                 }
@@ -420,6 +421,17 @@ impl<C: Commands> Shard<C> {
             Op::SlowlogReset => {
                 self.slowlog.buf.clear();
                 Part::Ok
+            }
+            Op::SetMoveCheck(key) => Part::Int(i64::from(self.store.scard(&key).is_ok())),
+            Op::SetMoveTake { src, member, dst_is_set } => {
+                self.op_set_move_take(&src, &member, dst_is_set)
+            }
+            Op::SetMovePut { key, member } => self.op_set_move_put(&key, &member),
+            Op::StoreValue { key, value, event, class } => {
+                self.op_store_value(key, value, &event, class)
+            }
+            Op::FirstHitTry { argv, proto } => {
+                self.run_dispatch(&argv, proto, crate::exec_first_hit::FIRST_HIT_META)
             }
             Op::XReadCheck { index, argv } => Part::XReadElement {
                 index,

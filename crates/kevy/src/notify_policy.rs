@@ -1,0 +1,101 @@
+//! The keyspace events a shared-layer write publishes when they are not
+//! its verb on argument 1: none for a write that changed nothing, and for
+//! the pops and moves the events of what they did — the end popped, the
+//! key it came from, the push before the pop of a move — as Redis names
+//! them.
+
+use kevy_resp::ArgvView;
+use kevy_rt::NotifyKind;
+use kevy_rt::propagation::{Notify, set_notify};
+use kevy_verbs::Effect;
+
+/// Ask the runtime for this write's events, when not its default.
+#[cold]
+pub(crate) fn note<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, effect: &Effect, reply: &[u8]) {
+    if let Some(n) = events(cmd, args, effect, reply) {
+        set_notify(n);
+    }
+}
+
+fn events<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    args: &A,
+    effect: &Effect,
+    reply: &[u8],
+) -> Option<Notify> {
+    // a read is never announced, and no post-write step would take its ask
+    if matches!(effect, Effect::Read) {
+        return None;
+    }
+    if reply.first() == Some(&b'-') || matches!(effect, Effect::Unchanged | Effect::Skip) {
+        return Some(Notify::Suppress);
+    }
+    popped(cmd, args, effect).or_else(|| written(cmd, args, reply))
+}
+
+fn one(class: NotifyKind, event: &'static str, key: &[u8]) -> Option<Notify> {
+    Some(Notify::Events(vec![(class, event, key.to_vec())]))
+}
+
+/// The pops: the end they took from, on the key they took from.
+fn popped<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, effect: &Effect) -> Option<Notify> {
+    match (cmd, effect) {
+        (b"BLPOP", _) => one(NotifyKind::List, "lpop", &args[1]),
+        (b"BRPOP", _) => one(NotifyKind::List, "rpop", &args[1]),
+        (b"BZPOPMIN", _) => one(NotifyKind::Zset, "zpopmin", &args[1]),
+        (b"BZPOPMAX", _) => one(NotifyKind::Zset, "zpopmax", &args[1]),
+        // the key a multi-key pop took from is the one its record names
+        (b"LMPOP" | b"BLMPOP", Effect::Record(frame)) => {
+            let event = if frame[0] == b"LPOP" { "lpop" } else { "rpop" };
+            one(NotifyKind::List, event, &frame[1])
+        }
+        (b"ZMPOP" | b"BZMPOP", Effect::Record(frame)) => {
+            let at = if cmd == b"ZMPOP" { 1 } else { 2 };
+            let min =
+                kevy_verbs::mpop::parse_zmpop(args, at).ok()?.end == kevy_store::ListEnd::Left;
+            one(NotifyKind::Zset, if min { "zpopmin" } else { "zpopmax" }, &frame[1])
+        }
+        _ => None,
+    }
+}
+
+/// The other writes whose events are not their verb on argument 1.
+fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<Notify> {
+    match cmd {
+        // an empty range removes the destination, which is a `del`
+        b"ZRANGESTORE" if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
+        b"SMOVE" => Some(Notify::Events(vec![
+            (NotifyKind::Set, "srem", args[1].to_vec()),
+            (NotifyKind::Set, "sadd", args[2].to_vec()),
+        ])),
+        b"MSETNX" => Some(Notify::Events(
+            (1..args.len())
+                .step_by(2)
+                .map(|i| (NotifyKind::String, "set", args[i].to_vec()))
+                .collect(),
+        )),
+        b"LPUSHX" => one(NotifyKind::List, "lpush", &args[1]),
+        b"RPUSHX" => one(NotifyKind::List, "rpush", &args[1]),
+        // every field-TTL setter is an `hexpire`, unless its deadline had
+        // passed and the fields went, which is an `hdel` (code 2)
+        b"HEXPIRE" | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" => {
+            let deleted = reply.windows(4).any(|w| w == b":2\r\n");
+            one(NotifyKind::Hash, if deleted { "hdel" } else { "hexpire" }, &args[1])
+        }
+        b"LMOVE" | b"BLMOVE" => moved(args, &args[3], &args[4]),
+        b"RPOPLPUSH" | b"BRPOPLPUSH" => moved(args, b"RIGHT", b"LEFT"),
+        _ => None,
+    }
+}
+
+/// A move announces the push onto the destination, then the pop off the
+/// source.
+fn moved<A: ArgvView + ?Sized>(args: &A, from: &[u8], to: &[u8]) -> Option<Notify> {
+    let left = |end: &[u8]| end.eq_ignore_ascii_case(b"LEFT");
+    let push = if left(to) { "lpush" } else { "rpush" };
+    let pop = if left(from) { "lpop" } else { "rpop" };
+    Some(Notify::Events(vec![
+        (NotifyKind::List, push, args[2].to_vec()),
+        (NotifyKind::List, pop, args[1].to_vec()),
+    ]))
+}
