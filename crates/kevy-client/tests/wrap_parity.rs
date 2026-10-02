@@ -25,7 +25,7 @@ struct Server {
 impl Server {
     fn start() -> Self {
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         let dir = kevy_tmpdir::unique_dir("client-parity");
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();

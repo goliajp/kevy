@@ -50,7 +50,7 @@ struct Srv {
 
 impl Srv {
     fn start(tag: &str) -> Srv {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = kevy_testnet::free_port();
         let bin = server_bin::kevy_server();
         let dir =
             std::env::temp_dir().join(format!("kevy-sqlcli-srv-{tag}-{}", std::process::id()));
