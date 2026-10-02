@@ -140,4 +140,7 @@ pub(super) const ROWS: &[VerbMeta] = &[
     v("STRLEN",      "string", 2,  R, "Return the length of a key's string value.", "1.0.0", "STRLEN key",
       "O(1)",
       "full"),
+    v("SUBSTR",      "string", 4,  R, "Return a byte range of a string value; the old name of GETRANGE.", "7.6.0", "SUBSTR key start end",
+      "O(M) over the returned bytes",
+      "full"),
 ];

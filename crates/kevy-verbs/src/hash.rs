@@ -30,7 +30,8 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             hset(store, args, true, out);
             Effect::Write
         }
-        b"HEXPIRE" | b"HPEXPIRE" | b"HPEXPIREAT" | b"HTTL" | b"HPTTL" | b"HPERSIST" => {
+        b"HEXPIRE" | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" | b"HTTL" | b"HPTTL"
+        | b"HEXPIRETIME" | b"HPEXPIRETIME" | b"HPERSIST" => {
             return hash_ttl::exec(cmd, store, args, out);
         }
         b"HSETNX" => {
@@ -52,6 +53,17 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 }
             } else {
                 wrong_args(out, "hget");
+            }
+            Effect::Read
+        }
+        b"HSTRLEN" => {
+            if args.len() == 3 {
+                match store.hget(&args[1], &args[2]) {
+                    Ok(v) => kevy_resp::encode_integer(out, v.map_or(0, <[u8]>::len) as i64),
+                    Err(e) => store_err(out, e),
+                }
+            } else {
+                wrong_args(out, "hstrlen");
             }
             Effect::Read
         }
