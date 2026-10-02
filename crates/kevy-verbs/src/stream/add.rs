@@ -9,7 +9,8 @@
 
 use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_integer, encode_null_bulk};
 use kevy_store::{
-    MissingStream, Store, StreamId, TrimMode, XAddIdSpec, now_unix_ms, parse_xadd_id,
+    MissingStream, Store, StreamId, TrimMode, TrimRefs, TrimTo, Trimmed, XAddIdSpec, now_unix_ms,
+    parse_xadd_id,
 };
 
 use super::opts::{BAD_ID, Trim, TrimParser};
@@ -55,9 +56,13 @@ pub(super) fn cmd_xadd<A: ArgvView + ?Sized>(
     let trimmed = parsed.trim.map(|t| trim(store, &args[1], t));
     encode_bulk(out, crate::aof::id_bytes(&mut [0u8; 41], id));
     let generated = !matches!(parsed.id, XAddIdSpec::Explicit(_));
-    match parsed.trim {
-        Some(t) if t.mode != TrimMode::Exact => {
-            let kept = trimmed.filter(|n| *n > 0).map_or(u64::MAX, |_| stream_len(store, &args[1]));
+    match (parsed.trim, trimmed) {
+        (Some(t), Some(done)) if t.mode != TrimMode::Exact && t.refs != TrimRefs::KeepRef => {
+            let kept = stream_len(store, &args[1]);
+            Effect::Record(add_record(args, parsed.id_at, id, trim_record(&t, &done, kept)))
+        }
+        (Some(t), Some(done)) if t.mode != TrimMode::Exact => {
+            let kept = if done.removed > 0 { stream_len(store, &args[1]) } else { u64::MAX };
             Effect::RecordAdd(parsed.id_at, id, kept)
         }
         _ if generated => Effect::RecordId(parsed.id_at, id),
@@ -112,8 +117,50 @@ fn parse_xadd_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XAddParsed, CmdErro
     Ok(XAddParsed { missing, id_at: i, trim, id })
 }
 
-fn trim(store: &mut Store, key: &[u8], t: Trim) -> u64 {
-    store.xtrim(key, t.to, t.mode).unwrap_or(0)
+fn trim(store: &mut Store, key: &[u8], t: Trim) -> Trimmed {
+    store.xtrim_refs(key, t.to, t.mode, t.refs).unwrap_or_default()
+}
+
+/// The exact trim an approximate one made, to record in its place:
+/// `MAXLEN = <length it left>` (with `DELREF` when it dropped
+/// references), and for `ACKED` the trim itself made exact, or a `MINID`
+/// at the node its `LIMIT` stopped at. Nothing when it removed nothing.
+fn trim_record(t: &Trim, done: &Trimmed, kept: u64) -> Vec<Vec<u8>> {
+    if done.removed == 0 {
+        return Vec::new();
+    }
+    let id = |id: StreamId| crate::aof::id_bytes(&mut [0u8; 41], id).to_vec();
+    let word = |w: &str| w.as_bytes().to_vec();
+    match (t.refs, done.cut_at, t.to) {
+        (TrimRefs::Acked, Some(at), _) => vec![word("MINID"), word("="), id(at), word("ACKED")],
+        (TrimRefs::Acked, None, TrimTo::MaxLen(n)) => {
+            vec![word("MAXLEN"), word("="), n.to_string().into_bytes(), word("ACKED")]
+        }
+        (TrimRefs::Acked, None, TrimTo::MinId(m)) => {
+            vec![word("MINID"), word("="), id(m), word("ACKED")]
+        }
+        (TrimRefs::DelRef, ..) => {
+            vec![word("MAXLEN"), word("="), kept.to_string().into_bytes(), word("DELREF")]
+        }
+        _ => vec![word("MAXLEN"), word("="), kept.to_string().into_bytes()],
+    }
+}
+
+/// `XADD key [NOMKSTREAM] <trim> <the ID it gave> field value ...`.
+fn add_record<A: ArgvView + ?Sized>(
+    args: &A,
+    id_at: usize,
+    id: StreamId,
+    trim: Vec<Vec<u8>>,
+) -> Vec<Vec<u8>> {
+    let mut f = vec![args[0].to_vec(), args[1].to_vec()];
+    if (2..id_at).any(|i| args[i].eq_ignore_ascii_case(b"NOMKSTREAM")) {
+        f.push(b"NOMKSTREAM".to_vec());
+    }
+    f.extend(trim);
+    f.push(crate::aof::id_bytes(&mut [0u8; 41], id).to_vec());
+    f.extend((id_at + 1..args.len()).map(|i| args[i].to_vec()));
+    f
 }
 
 fn stream_len(store: &mut Store, key: &[u8]) -> u64 {
@@ -137,25 +184,21 @@ pub(super) fn cmd_xtrim<A: ArgvView + ?Sized>(
             return Effect::Write;
         }
     };
-    let n = match store.xtrim(&args[1], t.to, t.mode) {
-        Ok(n) => n,
+    let done = match store.xtrim_refs(&args[1], t.to, t.mode, t.refs) {
+        Ok(d) => d,
         Err(e) => {
             store_err(out, e);
             return Effect::Write;
         }
     };
-    encode_integer(out, n as i64);
-    match (t.mode != TrimMode::Exact, n) {
+    encode_integer(out, done.removed as i64);
+    match (t.mode != TrimMode::Exact, done.removed) {
         (_, 0) => Effect::Unchanged,
         (true, _) => {
-            let kept = stream_len(store, &args[1]).to_string().into_bytes();
-            Effect::Record(vec![
-                b"XTRIM".to_vec(),
-                args[1].to_vec(),
-                b"MAXLEN".to_vec(),
-                b"=".to_vec(),
-                kept,
-            ])
+            let kept = stream_len(store, &args[1]);
+            let mut frame = vec![b"XTRIM".to_vec(), args[1].to_vec()];
+            frame.extend(trim_record(&t, &done, kept));
+            Effect::Record(frame)
         }
         (false, _) => Effect::Write,
     }

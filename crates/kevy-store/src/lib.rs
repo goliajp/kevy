@@ -187,8 +187,8 @@ pub use stream::{
     APPROX_TRIM_LIMIT, AckMode, AutoclaimResult, ClaimMode, ConsumerGroup, ConsumerState,
     EntryBatch, GroupBatch, GroupCreateMode, LoadedGroup, LoadedPelEntry, LoadedStreamEntry,
     MissingStream, PelEntry, PendingExtended, PendingExtendedRow, PendingSummary, ReadGroupId,
-    StreamData, StreamId, StreamIdError, TrimMode, TrimTo, XAddIdSpec, XClaimOpts, now_unix_ms,
-    parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
+    StreamData, StreamId, StreamIdError, TrimMode, TrimRefs, TrimTo, Trimmed, XAddIdSpec,
+    XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
 };
 pub use string::{GetReply, GetShared};
 pub use util::glob_match;

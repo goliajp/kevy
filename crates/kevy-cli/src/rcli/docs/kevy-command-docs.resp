@@ -5026,16 +5026,16 @@ $6
 stream
 $6
 syntax
-$101
-XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]
+$128
+XADD key [NOMKSTREAM] [KEEPREF | DELREF | ACKED] [MAXLEN|MINID [=|~] threshold [LIMIT count]] id|* field value [field value ...]
 $10
 complexity
 $126
 O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute
 $6
 compat
-$374
-differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit); Redis 8.10's KEEPREF / DELREF / ACKED and IDMP / IDMPAUTO options are not parsed
+$410
+differs: answers as valkey 9.1 does, an approximate '~' trim included: it removes only whole nodes of the stream's layout (at most 100 entries or 4 KB of fields each, the fixed stream-node-max-entries / stream-node-max-bytes defaults), up to LIMIT entries (10000 unless given, 0 for no limit). With DELREF or ACKED it goes entry by entry, as Redis 8.10 does. Redis 8.10's IDMP / IDMPAUTO options are not parsed
 $5
 flags
 *1
@@ -5446,16 +5446,16 @@ $6
 stream
 $6
 syntax
-$52
-XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]
+$79
+XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count] [KEEPREF | DELREF | ACKED]
 $10
 complexity
-$38
-O(R log N + N*F) for R evicted entries
+$110
+O(R log N + N*F) for R evicted entries; DELREF adds O(R log P) per group, ACKED O(G log P) per entry looked at
 $6
 compat
-$163
-differs: answers as valkey 9.1 does, an approximate '~' trim removing only whole nodes as XADD's does; Redis 8.10's KEEPREF / DELREF / ACKED options are not parsed
+$174
+differs: answers as valkey 9.1 does, an approximate '~' KEEPREF trim removing only whole nodes as XADD's does; with DELREF or ACKED it goes entry by entry, as Redis 8.10 does
 $5
 flags
 *1

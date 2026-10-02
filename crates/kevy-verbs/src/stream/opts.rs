@@ -4,7 +4,7 @@
 
 use kevy_resp::{ArgvView, CmdError};
 use kevy_store::{
-    APPROX_TRIM_LIMIT, StreamId, TrimMode, TrimTo, parse_range_end, parse_range_start,
+    APPROX_TRIM_LIMIT, StreamId, TrimMode, TrimRefs, TrimTo, parse_range_end, parse_range_start,
 };
 
 pub(super) const BAD_ID: &str = "ERR Invalid stream ID specified as stream command argument";
@@ -28,6 +28,7 @@ pub(super) fn strict_i64(b: &[u8]) -> Option<i64> {
 pub(super) struct Trim {
     pub(super) to: TrimTo,
     pub(super) mode: TrimMode,
+    pub(super) refs: TrimRefs,
 }
 
 /// `MAXLEN|MINID [=|~] threshold` and `LIMIT n`, met in any order.
@@ -35,6 +36,7 @@ pub(super) struct Trim {
 pub(super) struct TrimParser {
     trim: Option<(TrimTo, bool)>,
     limit: Option<usize>,
+    refs: Option<TrimRefs>,
 }
 
 impl TrimParser {
@@ -46,6 +48,14 @@ impl TrimParser {
         i: usize,
     ) -> Result<Option<usize>, CmdError> {
         let tok = &args[i];
+        // one of KEEPREF / DELREF / ACKED; a second is no option at all
+        if let Some(r) = refs_word(tok) {
+            if self.refs.is_some() {
+                return Ok(None);
+            }
+            self.refs = Some(r);
+            return Ok(Some(1));
+        }
         // an option is one only when a value follows it
         let Some(next) = args.get(i + 1) else {
             return Ok(None);
@@ -99,10 +109,22 @@ impl TrimParser {
                 } else {
                     TrimMode::Exact
                 };
-                Ok(Some(Trim { to, mode }))
+                Ok(Some(Trim { to, mode, refs: self.refs.unwrap_or_default() }))
             }
         }
     }
+}
+
+/// `KEEPREF` / `DELREF` / `ACKED`, in any case.
+fn refs_word(tok: &[u8]) -> Option<TrimRefs> {
+    [
+        (&b"KEEPREF"[..], TrimRefs::KeepRef),
+        (b"DELREF", TrimRefs::DelRef),
+        (b"ACKED", TrimRefs::Acked),
+    ]
+    .into_iter()
+    .find(|(w, _)| tok.eq_ignore_ascii_case(w))
+    .map(|(_, r)| r)
 }
 
 /// The start of an interval: `-`, `+`, an ID, or `(` and an ID to start
