@@ -69,6 +69,8 @@ class Server:
                 tail = (data / "server.log").read_text(errors="replace").splitlines()[-5:]
                 die(f"server did not come up: {' '.join(argv)}\n" + "\n".join(tail))
             time.sleep(0.1)
+        if topo.get("pin_shards"):
+            pin_shards(self.proc.pid, cpus)
 
     def stop(self):
         if self.proc.poll() is None:
@@ -84,6 +86,21 @@ class Server:
         deadline = time.time() + 2
         while any(listening(p) for p in self.ports) and time.time() < deadline:
             time.sleep(0.01)
+
+
+def pin_shards(pid, cpus):
+    """Each `kevy-shard-N` thread on its own server cpu. Left to the
+    scheduler, two shards share a core now and then and the same build
+    lands in two throughput modes ~9% apart (onekey_get, 2026-10-02)."""
+    for task in pathlib.Path(f"/proc/{pid}/task").iterdir():
+        name = (task / "comm").read_text().strip()
+        if name.startswith("kevy-shard-"):
+            os.sched_setaffinity(int(task.name), {cpus[int(name[11:]) % len(cpus)]})
+
+
+def names_shards(binary):
+    """Whether the build names its shard threads (older ones do not)."""
+    return b"kevy-shard-" in pathlib.Path(binary).read_bytes()
 
 
 def listening(port):
@@ -230,6 +247,8 @@ def main():
     if unknown:
         die(f"unknown angle(s) {' '.join(unknown)}; known: {' '.join(ang.ANGLES)}")
     topo = topology()
+    # both sides or neither, so pinning never separates them
+    topo["pin_shards"] = all(names_shards(s["bin"]) for s in sides)
     os.sched_setaffinity(0, topo["cli_list"])
     pt.header(a.mode, sides, topo, a.rounds, a.windows, a.secs)
     preflight(topo)

@@ -129,9 +129,12 @@ impl<C: Commands> Runtime<C> {
         let mut handles = Vec::with_capacity(n);
         for shard in shards {
             let stop = stop.clone();
-            handles.push(std::thread::spawn(move || {
+            // named so `top -H`, `ps -T` and an affinity tool can tell the
+            // shards from the helper threads
+            let name = format!("kevy-shard-{}", shard.id);
+            handles.push(std::thread::Builder::new().name(name).spawn(move || {
                 crate::runtime_thread::run_shard_thread(shard, stop, use_uring, uring_forced)
-            }));
+            })?);
         }
         // the first shard error, which stopped every shard
         let mut first: io::Result<()> = Ok(());
