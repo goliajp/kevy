@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (219 total)
+## Verbs (226 total)
 
 ### scan
 
@@ -171,6 +171,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `STRLEN key` [readonly] — Return the length of a key's string value.
   - complexity: O(1)
   - compat: full
+- `SUBSTR key start end` [readonly] — Return a byte range of a string value; the old name of GETRANGE.
+  - complexity: O(M) over the returned bytes
+  - compat: full
 
 ### hash
 
@@ -182,7 +185,13 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `HEXPIRE key seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in seconds.
   - complexity: O(F) fields in the FIELDS clause
-  - compat: differs: the FIELDS parse error reads 'Mandatory keyword FIELDS is missing' where Redis says 'Mandatory argument FIELDS'
+  - compat: full
+- `HEXPIREAT key unix-time-seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-second deadlines.
+  - complexity: O(F) fields
+  - compat: full
+- `HEXPIRETIME key FIELDS numfields field [field ...]` [readonly] — Return per-field absolute expiries in Unix seconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: full
 - `HGET key field` [readonly] — Return the value of a hash field.
   - complexity: O(1)
   - compat: full
@@ -212,13 +221,13 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: full
 - `HPERSIST key FIELDS numfields field [field ...]` [write] — Remove per-field TTLs from a hash.
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it
+  - compat: full
 - `HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in milliseconds.
   - complexity: O(F) fields
-  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+  - compat: full
 - `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
   - complexity: O(F) fields
-  - compat: differs: same FIELDS error-text deviation as HEXPIRE
+  - compat: full
 - `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
   - complexity: O(N) — the whole hash is copied and returned in one batch
   - compat: differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
@@ -228,12 +237,18 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `HSETNX key field value` [write] — Set a hash field only if it does not exist.
   - complexity: O(1)
   - compat: full
+- `HPEXPIRETIME key FIELDS numfields field [field ...]` [readonly] — Return per-field absolute expiries in Unix milliseconds (-1 no TTL, -2 missing).
+  - complexity: O(F) fields
+  - compat: full
 - `HPTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+  - compat: full
+- `HSTRLEN key field` [readonly] — Return the length of a hash field's value (0 when absent).
+  - complexity: O(1)
+  - compat: full
 - `HTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing).
   - complexity: O(F) fields
-  - compat: differs: silently accepts a stray NX|XX|GT|LT token before FIELDS where Redis rejects it
+  - compat: full
 - `HVALS key` [readonly] — Return all values of a hash.
   - complexity: O(N) fields
   - compat: full
@@ -276,6 +291,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `LPUSH key element [element ...]` [write] — Prepend one or more elements to a list.
   - complexity: O(M) values, O(1) amortised each
   - compat: full
+- `LPUSHX key element [element ...]` [write] — Prepend elements to a list only if it exists.
+  - complexity: O(N) elements pushed
+  - compat: full
 - `LRANGE key start stop` [readonly] — Return a range of list elements.
   - complexity: O(M) elements returned — the start offset is skipped in O(1) (Redis is O(S+M))
   - compat: full
@@ -299,6 +317,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
   - compat: differs: a cross-shard move is not atomic — see BRPOPLPUSH
 - `RPUSH key element [element ...]` [write] — Append one or more elements to a list.
   - complexity: O(M) values, O(1) amortised each
+  - compat: full
+- `RPUSHX key element [element ...]` [write] — Append elements to a list only if it exists.
+  - complexity: O(N) elements pushed
   - compat: full
 
 ### set
