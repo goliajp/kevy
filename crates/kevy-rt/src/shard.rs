@@ -157,6 +157,9 @@ pub(crate) struct Shard<C: Commands> {
     /// `request_batch.iter().all(Vec::is_empty)` scan from the
     /// `run_uring` main-loop self-time hot block.
     pub(crate) request_batch_nonempty: u64,
+    /// Conns holding their later commands behind a multi-step cross-shard
+    /// command (see `crate::exec_hold`); checked once per reactor pass.
+    pub(crate) held: Vec<u64>,
     /// Bitmap of `publish_batch[dst]`'s that are non-empty. Mirror of
     /// `request_batch_nonempty` for the pub/sub fan-out path.
     pub(crate) publish_batch_nonempty: u64,

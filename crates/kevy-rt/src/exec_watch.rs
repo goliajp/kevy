@@ -104,9 +104,9 @@ impl<C: Commands> Shard<C> {
         for (shard, pairs) in by_shard {
             self.send_check_watch(conn_id, header_seq, shard, pairs);
         }
-        // `n` is implicit in the slot layout — keep it bound so future
-        // edits that touch slot counts have a single source of truth.
-        let _ = n;
+        // the queued commands go out only once the check answers: the
+        // conn's later commands wait for the transaction's last reply
+        self.hold_if_pending(conn_id, header_seq + n as u64);
     }
 
     /// Push the header slot + `queued.len()` placeholder slots into the

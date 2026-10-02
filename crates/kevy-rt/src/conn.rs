@@ -78,6 +78,9 @@ pub(crate) struct Conn {
     /// on this conn until a wake (write to a watched key) or a tick-driven
     /// timeout clears the flag.
     pub(crate) blocked: bool,
+    /// The seq of a multi-step cross-shard command this conn's later
+    /// commands wait behind until it is answered; see `crate::exec_hold`.
+    pub(crate) hold: Option<u64>,
     /// Accepted on this shard's per-shard cluster listener (vs the shared
     /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for
     /// wrong-shard single-key commands instead of transparent forwarding.
@@ -172,6 +175,7 @@ impl Conn {
             client_name: Vec::new(),
             proto: RespVersion::default(),
             blocked: false,
+            hold: None,
             cluster: false,
             relayed: false,
             pending_write: false,

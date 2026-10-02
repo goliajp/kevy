@@ -73,6 +73,23 @@ fn preallocate_for_big_arg_tail(buf: &mut Vec<u8>) {
 }
 
 impl<C: Commands> Shard<C> {
+    /// [`Self::resume_held`] for the io_uring reactor: the writes go out
+    /// on the next arm visit.
+    pub(crate) fn uring_resume_held(&mut self, io: &mut KevyMap<u64, UringConn>) {
+        for cid in self.take_released() {
+            let w0 = self.always_hold_w0();
+            self.aof_begin_fsync_window();
+            let outcome = self.dispatch_held_input(cid);
+            self.aof_end_group_logged();
+            self.uring_stamp_hold(w0, cid, io);
+            if outcome.is_some_and(|o| o.protocol_error) {
+                self.protocol_error(cid);
+                self.uring_mark_closing(cid, io);
+            }
+            self.mark_arm_pending(cid, io);
+        }
+    }
+
     /// A multishot recv completed: dispatch every complete command parsed
     /// directly out of the kernel-picked buffer when possible (avoiding
     /// the pbuf→conn.input memcpy), fall back to append-then-parse when

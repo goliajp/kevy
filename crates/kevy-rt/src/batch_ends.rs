@@ -47,6 +47,10 @@ impl<C: Commands> Shard<C> {
     /// group-commit window around the batch.
     pub(crate) fn dispatch_batch(&mut self, conn_id: u64, buf: &[u8]) -> BatchOutcome {
         let mut off = 0usize;
+        // a held conn's input waits whole (see `crate::exec_hold`)
+        if self.is_held(conn_id) {
+            return BatchOutcome { consumed: 0, protocol_error: false, conn_gone: false };
+        }
         loop {
             match parse_command_borrowed(&buf[off..]) {
                 Ok(Some((argv, consumed))) => {
@@ -63,14 +67,22 @@ impl<C: Commands> Shard<C> {
                     self.route_hint = None;
                     drop(argv);
                     off += consumed;
-                    if crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
-                        .is_none()
-                    {
-                        return BatchOutcome {
-                            consumed: off,
-                            protocol_error: false,
-                            conn_gone: true,
-                        };
+                    match crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id) {
+                        None => {
+                            return BatchOutcome {
+                                consumed: off,
+                                protocol_error: false,
+                                conn_gone: true,
+                            };
+                        }
+                        Some(c) if c.hold.is_some() => {
+                            return BatchOutcome {
+                                consumed: off,
+                                protocol_error: false,
+                                conn_gone: false,
+                            };
+                        }
+                        Some(_) => {}
                     }
                 }
                 Ok(None) => {

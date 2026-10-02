@@ -70,6 +70,24 @@ impl<C: Commands> Shard<C> {
         self.flush_conn(conn_id)
     }
 
+    /// Dispatch the input of every held conn whose command is answered
+    /// (see `crate::exec_hold`), then flush what it wrote.
+    pub(crate) fn resume_held(&mut self) -> io::Result<()> {
+        for conn_id in self.take_released() {
+            let w0 = self.always_hold_w0();
+            self.aof_begin_fsync_window();
+            let outcome = self.dispatch_held_input(conn_id);
+            self.aof_end_group()?;
+            self.epoll_stamp_hold(w0, conn_id);
+            let Some(outcome) = outcome else { continue };
+            if outcome.protocol_error {
+                self.protocol_error(conn_id);
+            }
+            self.flush_conn(conn_id)?;
+        }
+        Ok(())
+    }
+
     /// Drain the readable socket into `conn.input` (until WouldBlock / EOF /
     /// error; EOF and errors flag the conn closing). Returns `false` when
     /// the conn no longer exists. Extracted verbatim from
