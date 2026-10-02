@@ -13,6 +13,7 @@ Valgrind has no io_uring support, so the server runs its epoll reactor
 (KEVY_IO_URING=0): the command path is the same code, the reactor is not.
 """
 
+import os
 import pathlib
 import re
 import shutil
@@ -25,6 +26,8 @@ import perfgate_angles as ang
 import perfgate_measure as pm
 
 TOP = 25
+# well past a shard's tick (100 ms), which runs slower under valgrind
+TICK_WAIT = 1.0
 LINE = re.compile(r"^\s*([\d,]+)\s+(?:\([\s\d.]+%\)\s+)?(\S.*)$")
 HASH = re.compile(r"::h[0-9a-f]{16}\b")
 
@@ -93,12 +96,20 @@ def one(side, angle, ops, port, work):
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_up(proc, port)
-        if warm_cmd:
+        if warm_cmd in ang.ANGLES:
+            ang.warm(warm_cmd, port, 1)
+        elif warm_cmd:
             ang.run_quiet(ang.bench(port, *warm_cmd.split(), n=100_000, keyspace=100_000, pipe=16))
+        conns = int(os.environ.get("KEVY_CG_CONNS", ang.CALLGRIND_CONNS.get(angle, 4)))
+        # each shard publishes its command count on its tick, so the count
+        # is read once every shard has ticked since the last command
+        time.sleep(TICK_WAIT)
         c0 = int(pm.info_field(port, "total_commands_processed"))
         control(proc.pid, "-i", "on")
-        ang.run_quiet(ang.bench(port, *load_cmd.split(), n=ops, keyspace=100_000, conns=4, pipe=16))
+        ang.run_quiet(ang.bench(port, *load_cmd.split(), n=ops, keyspace=100_000, conns=conns,
+                                pipe=16))
         control(proc.pid, "-d")
+        time.sleep(TICK_WAIT)
         c1 = int(pm.info_field(port, "total_commands_processed"))
     finally:
         proc.terminate()
@@ -139,10 +150,11 @@ def run(sides, angles, ops, port):
         s["name"] = name
         print(f"# {name}: {s['label']} — {s['version']} — {s['bin']}")
     print(f"# callgrind, one shard (two for the x angles), epoll reactor, {ops} requests per angle "
-          "(-c 4 -P 16), counted from the first request to the last")
+          "(-P 16, -c 4 unless the angle sets it), counted from the first request to the last")
     with tempfile.TemporaryDirectory(prefix="perfgate-cg-") as d:
         for angle in angles:
-            got = [one(s, angle, ops, port, pathlib.Path(d)) for s in sides]
+            n = min(ops, ang.CALLGRIND_OPS.get(angle, ops))
+            got = [one(s, angle, n, port, pathlib.Path(d)) for s in sides]
             table(angle, *got)
     return 0
 
