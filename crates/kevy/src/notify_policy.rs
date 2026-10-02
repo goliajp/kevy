@@ -74,6 +74,7 @@ fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<N
                 .map(|i| (NotifyKind::String, "set", args[i].to_vec()))
                 .collect(),
         )),
+        b"BITFIELD" => one(NotifyKind::String, "setbit", &args[1]),
         b"LPUSHX" => one(NotifyKind::List, "lpush", &args[1]),
         b"RPUSHX" => one(NotifyKind::List, "rpush", &args[1]),
         // every field-TTL setter is an `hexpire`, unless its deadline had

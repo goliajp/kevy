@@ -61,6 +61,7 @@ fn resolve_general<A: ArgvView + ?Sized>(
         b"EXEC" => TxnKind::Exec,
         b"DISCARD" => TxnKind::Discard,
         b"WATCH" => TxnKind::Watch,
+        b"RESET" if args.len() == 1 => TxnKind::Reset,
         _ => TxnKind::Other,
     };
 
@@ -138,6 +139,8 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         b"ZMPOP" | b"LMPOP" => mpop_route(upper, args),
         b"LCS" if args.len() >= 3 => Route::ReadAcross { first: 1, count: 2 },
         b"SMOVE" => Route::SetMove,
+        b"PUBSUB" => Route::PubSub,
+        b"RESET" => Route::Local,
         b"MSETNX" => Route::MSetNx,
         b"ZRANGESTORE" if args.len() >= 5 => Route::StoreFromCopies { first: 2, count: 1, dst: 1 },
         b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF" => read_across_route(upper, args),

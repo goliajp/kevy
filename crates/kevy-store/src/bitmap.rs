@@ -63,17 +63,21 @@ impl Store {
         } else {
             owned[byte_idx] &= !(1u8 << bit_idx);
         }
-        // Store back. Always use the byte-array encoding (never int).
+        self.set_bytes_keep_ttl(key, owned);
+        Ok(prev)
+    }
+
+    /// Store `owned` as `key`'s string, in the byte-array encoding (never
+    /// int), keeping any TTL the key had.
+    pub(crate) fn set_bytes_keep_ttl(&mut self, key: &[u8], owned: Vec<u8>) {
         let new_val = if owned.is_empty() {
             Value::Str(SmallBytes::from_slice(&[]))
         } else {
             Value::ArcBulk(Arc::new(owned.into_boxed_slice()))
         };
-        // Take any existing TTL, re-attach to the new entry. Entry
-        // stores `expire_at_ns: Option<NonZeroU64>` (absolute ns).
+        // Entry stores `expire_at_ns: Option<NonZeroU64>` (absolute ns).
         let ttl_ns = self.live_entry(key).and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
         self.insert_entry(SmallBytes::from_slice(key), Entry::new(new_val, ttl_ns));
-        Ok(prev)
     }
 
     /// `BITCOUNT key [start end [BYTE|BIT]]` — count set bits.

@@ -47,6 +47,8 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"PEXPIREAT" => expireat(store, args, 1, "pexpireat", out),
         b"TTL" => ttl(store, args, true, "ttl", out),
         b"PTTL" => ttl(store, args, false, "pttl", out),
+        b"EXPIRETIME" => expire_time(store, args, true, "expiretime", out),
+        b"PEXPIRETIME" => expire_time(store, args, false, "pexpiretime", out),
         b"PERSIST" => {
             if args.len() != 2 {
                 wrong_args(out, "persist");
@@ -146,6 +148,24 @@ fn ttl<A: ArgvView + ?Sized>(
         wrong_args(out, cmd);
     } else {
         let ms = store.pttl(&args[1]);
+        encode_integer(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
+    }
+    Effect::Read
+}
+
+/// `EXPIRETIME` / `PEXPIRETIME key`: the absolute Unix deadline, `-1`
+/// without a TTL, `-2` for a missing key; seconds round to the nearest.
+fn expire_time<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    in_secs: bool,
+    cmd: &str,
+    out: &mut Vec<u8>,
+) -> Effect {
+    if args.len() != 2 {
+        wrong_args(out, cmd);
+    } else {
+        let ms = store.pexpire_time(&args[1]);
         encode_integer(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
     }
     Effect::Read

@@ -68,13 +68,14 @@ impl Store {
         if !self.reap(key, now) || !self.map.contains_key(key) {
             return false;
         }
-        let wall_now = crate::now_unix_ms();
-        if deadline_ms <= wall_now {
+        let wall_now = crate::stream::now_unix_ns();
+        let deadline_ns = deadline_ms.saturating_mul(1_000_000);
+        if deadline_ns <= wall_now {
             // Past deadline: delete now, just like Redis EXPIREAT in the past.
             self.remove_entry(key);
             return true;
         }
-        let remaining = Duration::from_millis(deadline_ms - wall_now);
+        let remaining = Duration::from_nanos(deadline_ns - wall_now);
         if let Some(e) = self.map.get_mut(key) {
             let had = e.expire_at_ns.is_some();
             e.expire_at_ns = pack_deadline(deadline_at(now, remaining));

@@ -314,6 +314,20 @@ pub fn now_unix_ms() -> u64 {
     crate::clock::wall_now_unix_ms()
 }
 
+/// Wall-clock nanoseconds since the epoch, as finely as the clock gives
+/// them: an absolute deadline set and read back through it lands on the
+/// millisecond it was given.
+#[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
+pub(crate) fn now_unix_ns() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+}
+
+/// [`now_unix_ns`] from the host-fed millisecond clock.
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) fn now_unix_ns() -> u64 {
+    crate::clock::wall_now_unix_ms().saturating_mul(1_000_000)
+}
+
 pub(super) fn stream_entry_weight(fields: &[(SmallBytes, SmallBytes)]) -> u64 {
     // BTreeMap slot + Vec header + each (field, value) cell + their heap.
     BTREE_SLOT_BYTES
