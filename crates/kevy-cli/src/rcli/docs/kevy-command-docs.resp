@@ -2308,8 +2308,8 @@ HSCAN
 *14
 $7
 summary
-$57
-Iterate a hash's fields and values (single-batch cursor).
+$35
+Iterate a hash's fields and values.
 $5
 since
 $5
@@ -2320,16 +2320,16 @@ $4
 hash
 $6
 syntax
-$46
-HSCAN key cursor [MATCH pattern] [COUNT count]
+$57
+HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]
 $10
 complexity
-$59
-O(N) — the whole hash is copied and returned in one batch
+$143
+O(1) per call, a small hash whole; a large one about COUNT entries a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$166
-differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
+$4
+full
 $5
 flags
 *1
@@ -3726,8 +3726,8 @@ SSCAN
 *14
 $7
 summary
-$46
-Iterate a set's members (single-batch cursor).
+$24
+Iterate a set's members.
 $5
 since
 $5
@@ -3742,12 +3742,12 @@ $46
 SSCAN key cursor [MATCH pattern] [COUNT count]
 $10
 complexity
-$58
-O(N) — the whole set is copied and returned in one batch
+$142
+O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$133
-differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored
+$4
+full
 $5
 flags
 *1
@@ -4854,8 +4854,8 @@ ZSCAN
 *14
 $7
 summary
-$64
-Iterate a sorted set's members and scores (single-batch cursor).
+$42
+Iterate a sorted set's members and scores.
 $5
 since
 $5
@@ -4870,12 +4870,12 @@ $46
 ZSCAN key cursor [MATCH pattern] [COUNT count]
 $10
 complexity
-$38
-O(N) — the whole set is materialised
+$142
+O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
 $6
 compat
-$115
-differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
+$4
+full
 $5
 flags
 *1

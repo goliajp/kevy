@@ -4,10 +4,8 @@
 use kevy_resp::{ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error};
 use kevy_store::{LexBound, Store, StoreError};
 
-use crate::args::{arg_f64, arg_i64, scan_match};
-use crate::reply::{
-    ERR_NOT_FLOAT, ERR_NOT_INT, ERR_SYNTAX, fmt_score, scan_page, store_err, wrong_args,
-};
+use crate::args::{arg_f64, arg_i64};
+use crate::reply::{ERR_NOT_FLOAT, fmt_score, store_err, wrong_args};
 use crate::{Effect, changed};
 
 /// One range or pop command; `None` = the verb is not in this group.
@@ -32,7 +30,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"ZREMRANGEBYLEX" => lex(store, args, out, true),
         b"ZPOPMIN.BELOW" => zpopmin_below(store, args, out),
         b"ZSCAN" => {
-            zscan(store, args, out);
+            crate::collection_scan::scan(store, args, crate::collection_scan::Kind::ZSet, out);
             Effect::Read
         }
         _ => return None,
@@ -143,31 +141,4 @@ fn zpopmin_below<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Ve
         return Effect::Unchanged;
     };
     popped(store.zpopmin_below(&args[1], below, count), out)
-}
-
-/// `ZSCAN key cursor [MATCH pattern] [COUNT n]` — every member in one
-/// batch, member then score.
-fn zscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 3 {
-        return wrong_args(out, "zscan");
-    }
-    if arg_i64(&args[2]).is_none() {
-        return encode_error(out, ERR_NOT_INT);
-    }
-    let Some(pat) = scan_match(args, 3) else {
-        return encode_error(out, ERR_SYNTAX);
-    };
-    match store.zrange(&args[1], 0, -1) {
-        Err(e) => store_err(out, e),
-        Ok(items) => {
-            let mut page: Vec<Vec<u8>> = Vec::with_capacity(items.len() * 2);
-            for (m, sc) in items {
-                if pat.as_ref().is_none_or(|p| kevy_store::glob_match(p, &m)) {
-                    page.push(m);
-                    page.push(fmt_score(sc));
-                }
-            }
-            scan_page(out, &page);
-        }
-    }
 }

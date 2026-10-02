@@ -140,27 +140,6 @@ pub fn rest_borrowed<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<&[u8]> 
     (from..args.len()).map(|i| &args[i]).collect()
 }
 
-/// The `[MATCH pattern] [COUNT n]` tail of `HSCAN` / `SSCAN` / `ZSCAN`
-/// from `start` on. COUNT is checked and then ignored: these scans
-/// answer in one batch. `None` = a syntax error.
-pub(crate) fn scan_match<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option<Option<Vec<u8>>> {
-    let mut pat = None;
-    let mut i = start;
-    while i < args.len() {
-        let tok = &args[i];
-        let val = args.get(i + 1)?;
-        if tok.eq_ignore_ascii_case(b"MATCH") {
-            pat = Some(val.to_vec());
-        } else if tok.eq_ignore_ascii_case(b"COUNT") {
-            arg_i64(val)?;
-        } else {
-            return None;
-        }
-        i += 2;
-    }
-    Some(pat)
-}
-
 /// The options of `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`.
 ///
 /// ```
@@ -246,6 +225,14 @@ pub enum ScanOptsError {
     /// assert_eq!(scan_opts(&kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"LIMIT".to_vec(), b"5".to_vec()])), Err(ScanOptsError::Syntax));
     /// ```
     Syntax,
+    /// `NOVALUES`, which only `HSCAN` takes.
+    ///
+    /// ```
+    /// use kevy_verbs::args::{ScanOptsError, scan_opts};
+    /// let argv = kevy_resp::Argv::from(vec![b"SCAN".to_vec(), b"0".to_vec(), b"NOVALUES".to_vec()]);
+    /// assert_eq!(scan_opts(&argv), Err(ScanOptsError::NoValues));
+    /// ```
+    NoValues,
 }
 
 impl ScanOptsError {
@@ -260,6 +247,7 @@ impl ScanOptsError {
             Self::InvalidCursor => "ERR invalid cursor",
             Self::NotInteger => "ERR value is not an integer or out of range",
             Self::Syntax => "ERR syntax error",
+            Self::NoValues => "ERR NOVALUES option can only be used in HSCAN",
         }
     }
 }
@@ -289,6 +277,9 @@ pub fn scan_opts<A: ArgvView + ?Sized>(args: &A) -> Result<ScanOpts, ScanOptsErr
     let mut i = 2;
     while i < args.len() {
         let opt = &args[i];
+        if opt.eq_ignore_ascii_case(b"NOVALUES") {
+            return Err(ScanOptsError::NoValues);
+        }
         let Some(val) = args.get(i + 1) else {
             return Err(ScanOptsError::Syntax);
         };

@@ -267,9 +267,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
   - complexity: O(F) fields
   - compat: full
-- `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
-  - complexity: O(N) — the whole hash is copied and returned in one batch
-  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored
+- `HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]` [readonly] — Iterate a hash's fields and values.
+  - complexity: O(1) per call, a small hash whole; a large one about COUNT entries a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `HSET key field value [field value ...]` [write] — Set one or more hash fields; returns the number of new fields.
   - complexity: O(M) pairs
   - compat: full
@@ -405,9 +405,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `SREM key member [member ...]` [write] — Remove one or more members from a set.
   - complexity: O(M) members
   - compat: full
-- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members (single-batch cursor).
-  - complexity: O(N) — the whole set is copied and returned in one batch
-  - compat: differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored
+- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members.
+  - complexity: O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `SUNION key [key ...]` [readonly] — Return the union of the given sets (cross-shard gather).
   - complexity: O(sum of the source cardinalities)
   - compat: full
@@ -513,9 +513,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `ZREVRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range, highest score first.
   - complexity: O(N + M) — the set is read in rank order and reversed, then the M requested members are taken
   - compat: full
-- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores (single-batch cursor).
-  - complexity: O(N) — the whole set is materialised
-  - compat: differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored
+- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores.
+  - complexity: O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep
+  - compat: full
 - `ZSCORE key member` [readonly] — Return a member's score.
   - complexity: O(1) — a hash lookup
   - compat: full

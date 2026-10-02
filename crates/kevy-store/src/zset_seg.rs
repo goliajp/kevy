@@ -86,6 +86,11 @@ pub struct SegZSetData {
 }
 
 impl SegZSetData {
+    /// The member → score index, which a `ZSCAN` sweep pages through.
+    pub(crate) fn by_member(&self) -> &SegMap<f64> {
+        &self.by_member
+    }
+
     #[inline]
     /// Members across every segment, as a running count.
     ///

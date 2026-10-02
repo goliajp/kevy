@@ -114,7 +114,7 @@ cannot have.
 | `HPERSIST key FIELDS numfields field [field ...]` | -5 | write | O(F) fields | full | Remove per-field TTLs from a hash. |
 | `HPEXPIRE key milliseconds [NX\|XX\|GT\|LT] FIELDS numfields field [field ...]` | -6 | write | O(F) fields | full | Set per-field TTLs on a hash, in milliseconds. |
 | `HPEXPIREAT key unix-time-milliseconds [NX\|XX\|GT\|LT] FIELDS numfields field [field ...]` | -6 | write | O(F) fields | full | Set per-field expiries as absolute Unix-millisecond deadlines. |
-| `HSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(N) — the whole hash is copied and returned in one batch | differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored | Iterate a hash's fields and values (single-batch cursor). |
+| `HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]` | -3 | readonly | O(1) per call, a small hash whole; a large one about COUNT entries a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep | full | Iterate a hash's fields and values. |
 | `HSET key field value [field value ...]` | -4 | write | O(M) pairs | full | Set one or more hash fields; returns the number of new fields. |
 | `HSETNX key field value` | 4 | write | O(1) | full | Set a hash field only if it does not exist. |
 | `HPEXPIRETIME key FIELDS numfields field [field ...]` | -5 | readonly | O(F) fields | full | Return per-field absolute expiries in Unix milliseconds (-1 no TTL, -2 missing). |
@@ -168,7 +168,7 @@ cannot have.
 | `SPOP key [count]` | -2 | write | O(count) expected — each member is drawn by probing a random slot and taking the first occupied one | full | Remove and return one or more random members of a set. |
 | `SRANDMEMBER key [count]` | -2 | readonly | O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling | full | Return one or more random members of a set without removing them. A negative count allows repeats. |
 | `SREM key member [member ...]` | -3 | write | O(M) members | full | Remove one or more members from a set. |
-| `SSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(N) — the whole set is copied and returned in one batch | differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored | Iterate a set's members (single-batch cursor). |
+| `SSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep | full | Iterate a set's members. |
 | `SUNION key [key ...]` | -2 | readonly | O(sum of the source cardinalities) | full | Return the union of the given sets (cross-shard gather). |
 | `SUNIONSTORE destination key [key ...]` | -3 | write | O(sum of the source cardinalities) + O(result) | full | Store the union of the given sets into destination. |
 
@@ -208,7 +208,7 @@ cannot have.
 | `ZREVRANGEBYLEX key max min [LIMIT offset count]` | -4 | readonly | O(log² N + M) | full | Return members between two member bounds, highest first. |
 | `ZREVRANK key member [WITHSCORE]` | -3 | readonly | O(log N) | full | Return a member's rank, ordered from the highest score. |
 | `ZREVRANGE key start stop [WITHSCORES]` | -4 | readonly | O(N + M) — the set is read in rank order and reversed, then the M requested members are taken | full | Return members by rank range, highest score first. |
-| `ZSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(N) — the whole set is materialised | differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored | Iterate a sorted set's members and scores (single-batch cursor). |
+| `ZSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(1) per call, a small set whole; a large one about COUNT members a call (a sharded one, a whole bucket of up to about 500), O(N) over a sweep | full | Iterate a sorted set's members and scores. |
 | `ZSCORE key member` | 3 | readonly | O(1) — a hash lookup | full | Return a member's score. |
 | `ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM\|MIN\|MAX] [WITHSCORES]` | -3 | readonly | O(L + R log R) — L members across the inputs, R in the result | differs: keys on different shards are copied to the shard the command came to and combined there, so the answer is not a point-in-time snapshot across them | Return the union of the given sorted sets. |
 | `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM\|MIN\|MAX]` | -4 | write | O(sum of the source cardinalities + R log R) | full | Store the union of the given sorted sets into destination. |

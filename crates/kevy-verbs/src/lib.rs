@@ -32,6 +32,7 @@ pub mod args;
 mod bitfield;
 mod bitmap;
 pub mod cmd;
+mod collection_scan;
 mod digest;
 #[cfg(feature = "streams-geo")]
 pub mod geo;
