@@ -5,7 +5,7 @@
 //! search core consumes, then either emit the GEOSEARCH-style reply
 //! or perform a STORE / STOREDIST write into a destination ZSet.
 
-use kevy_resp::{ArgvView, CmdError, encode_error, encode_integer};
+use kevy_resp::{ArgvView, CmdError, RespVersion, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::Effect;
@@ -22,8 +22,9 @@ pub(super) fn cmd_georadius<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
     read_only: bool,
+    proto: RespVersion,
 ) -> Effect {
-    run_radius(store, out, plan_radius(args, false), read_only)
+    run_radius(store, out, plan_radius(args, false), read_only, proto)
 }
 
 /// `GEORADIUSBYMEMBER key member radius unit [...]` — legacy.
@@ -32,8 +33,9 @@ pub(super) fn cmd_georadiusbymember<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
     read_only: bool,
+    proto: RespVersion,
 ) -> Effect {
-    run_radius(store, out, plan_radius(args, true), read_only)
+    run_radius(store, out, plan_radius(args, true), read_only, proto)
 }
 
 /// Parse a legacy `GEORADIUS[BYMEMBER]` argv into `(source key, options +
@@ -72,14 +74,16 @@ fn run_radius(
     out: &mut Vec<u8>,
     planned: Result<(Vec<u8>, LegacyRadiusParsed), CmdError>,
     read_only: bool,
+    proto: RespVersion,
 ) -> Effect {
-    let (key, parsed) = match planned {
+    let (key, mut parsed) = match planned {
         Ok(p) => p,
         Err(msg) => {
             encode_error(out, msg.as_wire());
             return Effect::Read;
         }
     };
+    parsed.opts.proto = proto;
     if read_only && parsed.store_dst.is_some() {
         encode_error(out, "ERR can't store result in the _RO variant");
         return Effect::Read;

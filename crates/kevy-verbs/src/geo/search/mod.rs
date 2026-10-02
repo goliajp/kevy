@@ -13,7 +13,10 @@ mod parse;
 pub(super) use parse::{parse_legacy_radius, parse_opts, parse_opts_at};
 
 use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges};
-use kevy_resp::{ArgvView, CmdError, encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_resp::{
+    ArgvView, CmdError, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
+    encode_integer,
+};
 use kevy_store::{ScoreBound, Store};
 
 use crate::reply::{store_err, wrong_args};
@@ -23,12 +26,17 @@ use super::score_to_point;
 /// `GEOSEARCH key <FROMMEMBER member|FROMLONLAT lon lat>
 /// <BYRADIUS r unit|BYBOX w h unit> [ASC|DESC] [COUNT n [ANY]]
 /// [WITHCOORD] [WITHDIST] [WITHHASH]`
-pub(super) fn cmd_geosearch<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_geosearch<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     if args.len() < 4 {
         return wrong_args(out, "geosearch");
     }
     let opts = match parse_opts(args) {
-        Ok(o) => o,
+        Ok(o) => Opts { proto, ..o },
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let key = args[1].to_vec();
@@ -145,6 +153,9 @@ pub(super) struct Opts {
     /// metric distance to dst as the ZSet score instead of the
     /// geohash. GEOSEARCH ignores this field.
     pub(super) storedist: bool,
+    /// The protocol the reply is written in: RESP3 sends coordinates as
+    /// doubles.
+    pub(super) proto: RespVersion,
 }
 
 // ───────────── candidate collection ─────────────
@@ -344,8 +355,19 @@ fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
         if opts.with_coord {
             let (lon, lat) = decode_score(h.score);
             encode_array_len(out, 2);
-            encode_bulk(out, format!("{lon:.17}").as_bytes());
-            encode_bulk(out, format!("{lat:.17}").as_bytes());
+            emit_coord(out, lon, opts.proto);
+            emit_coord(out, lat, opts.proto);
         }
     }
+}
+
+/// A coordinate as Redis replies with it: the double's text, as a bulk
+/// string under RESP2 and a double under RESP3.
+pub(super) fn emit_coord(out: &mut Vec<u8>, v: f64, proto: RespVersion) {
+    if proto == RespVersion::V3 {
+        return encode_double(out, v);
+    }
+    let mut text = Vec::with_capacity(24);
+    kevy_resp::write_double(&mut text, v);
+    encode_bulk(out, &text);
 }
