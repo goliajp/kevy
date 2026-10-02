@@ -16,8 +16,8 @@
 use kevy_resp::{Argv, ArgvView, CmdError};
 use kevy_store::{Store, StoreError};
 
-use super::radius::{legacy_store_dst, plan_radius};
-use super::search::{GeoError, SearchError, plan_geosearchstore, search_pairs};
+use super::radius::legacy_store_dst;
+use super::search::{Form, GeoError, plan, search_pairs};
 
 /// `(source, destination)` of a geo command that writes a destination
 /// key; `None` for every other shape, including the query-only forms.
@@ -107,6 +107,28 @@ pub enum StoreSearchError {
     /// assert_eq!(r.unwrap_err().to_wire(), "ERR invalid longitude,latitude pair 200.000000,38.000000");
     /// ```
     BadCenter(BadCenter),
+    /// A GEOSEARCHSTORE with no `FROMMEMBER` / `FROMLONLAT`, the verb as it
+    /// was typed: Redis's reply names it so.
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let r = store_search(&mut kevy_store::Store::new(), &argv("geosearchstore d s BYRADIUS 1 km COUNT 1"));
+    /// assert_eq!(
+    ///     r.unwrap_err().to_wire(),
+    ///     "ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for geosearchstore",
+    /// );
+    /// ```
+    NoFrom([u8; 14]),
+    /// A GEOSEARCHSTORE with no `BYRADIUS` / `BYBOX`, the verb as typed.
+    ///
+    /// ```
+    /// use kevy_verbs::geo::{StoreSearchError, store_search};
+    /// let argv = |s: &str| s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>();
+    /// let r = store_search(&mut kevy_store::Store::new(), &argv("GEOSEARCHSTORE d s FROMLONLAT 1 2 COUNT 1"));
+    /// assert!(matches!(r, Err(StoreSearchError::NoShape(_))));
+    /// ```
+    NoShape([u8; 14]),
 }
 
 /// A longitude / latitude pair off the map, as given.
@@ -148,6 +170,8 @@ impl StoreSearchError {
     pub fn to_wire(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::BadCenter(c) => super::search::bad_pair(c.lon, c.lat).into(),
+            Self::NoFrom(verb) => GeoError::NoFrom.text(verb),
+            Self::NoShape(verb) => GeoError::NoShape.text(verb),
             _ => self.as_wire().into(),
         }
     }
@@ -163,8 +187,10 @@ impl StoreSearchError {
             Self::Refused(e) => e.as_wire(),
             Self::NoMember => "ERR could not decode requested zset member",
             Self::Store(e) => e.as_wire(),
-            // the pair itself is in `to_wire`
+            // the pair itself, and the verb, are in `to_wire`
             Self::BadCenter(_) => "ERR invalid longitude,latitude pair",
+            Self::NoFrom(_) => "ERR exactly one of FROMMEMBER or FROMLONLAT can be specified",
+            Self::NoShape(_) => "ERR exactly one of BYRADIUS and BYBOX can be specified",
         }
     }
 }
@@ -187,7 +213,7 @@ impl std::error::Error for StoreSearchError {
         match self {
             Self::Refused(e) => Some(e),
             Self::Store(e) => Some(e),
-            Self::NoMember | Self::BadCenter(_) => None,
+            Self::NoMember | Self::BadCenter(_) | Self::NoFrom(_) | Self::NoShape(_) => None,
         }
     }
 }
@@ -217,21 +243,29 @@ pub fn store_search(
     for a in argv {
         args.push(a);
     }
-    let planned = match verb_of(argv).as_slice() {
-        b"GEOSEARCHSTORE" => plan_geosearchstore(&args),
-        b"GEORADIUS" => plan_radius(&args, false).map(|(src, p)| (src, p.opts)),
-        b"GEORADIUSBYMEMBER" => plan_radius(&args, true).map(|(src, p)| (src, p.opts)),
+    let form = match verb_of(argv).as_slice() {
+        b"GEOSEARCHSTORE" => Form::SearchStore,
+        b"GEORADIUS" => Form::Radius { read_only: false },
+        b"GEORADIUSBYMEMBER" => Form::ByMember { read_only: false },
         // only the three verbs above store
-        _ => Err(GeoError::Wire("ERR unknown command")),
+        _ => return Err(StoreSearchError::Refused(CmdError::Wire("ERR unknown command"))),
     };
-    let (src, opts) = planned.map_err(|e| match e {
+    let typed = || {
+        let mut verb = [0u8; 14];
+        let given = argv.first().map_or(&[][..], Vec::as_slice);
+        let n = given.len().min(14);
+        verb[..n].copy_from_slice(&given[..n]);
+        verb
+    };
+    let q = plan(store, &args, form).map_err(|e| match e {
         GeoError::Wire(s) => StoreSearchError::Refused(CmdError::Wire(s)),
         GeoError::BadCenter(lon, lat) => StoreSearchError::BadCenter(BadCenter { lon, lat }),
+        GeoError::NoMember => StoreSearchError::NoMember,
+        GeoError::Store(e) => StoreSearchError::Store(e),
+        GeoError::NoFrom => StoreSearchError::NoFrom(typed()),
+        GeoError::NoShape => StoreSearchError::NoShape(typed()),
     })?;
-    search_pairs(store, &src, &opts).map_err(|e| match e {
-        SearchError::NoMember => StoreSearchError::NoMember,
-        SearchError::Store(e) => StoreSearchError::Store(e),
-    })
+    search_pairs(store, &q).map_err(StoreSearchError::Store)
 }
 
 /// Uppercased verb of an owned argv, for the ≤16-byte geo verbs.

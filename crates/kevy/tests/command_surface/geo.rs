@@ -571,11 +571,11 @@ fn georadius_ro_rejects_store() {
     ]))
     .unwrap();
     let r = read_reply(&mut c);
-    // an unknown verb is an -ERR too, so the words are what shows the
-    // variant ran and refused
+    // STORE is not an option of the _RO variant at all, so Redis answers
+    // a syntax error rather than naming the option
     assert_eq!(
         r,
-        b"-ERR can't store result in the _RO variant\r\n",
+        b"-ERR syntax error\r\n",
         "_RO variant must reject STORE: {:?}",
         String::from_utf8_lossy(&r),
     );
