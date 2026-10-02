@@ -22,7 +22,7 @@ redis-cli -p 6379 GET hello
 kevy ships in three forms, all built from the same engine:
 
 - **Server** — a Redis-wire-compatible daemon. Speaks RESP2, replies are
-  reply-checked byte-for-byte against valkey 9.1 for 129 commands.
+  reply-checked byte-for-byte against valkey 9.1 for 133 commands.
 - **Embedded library** — `kevy-embedded` is the same engine without the
   network. Drop it into a Rust binary and call `Store` directly. Pure
   Rust, zero dependencies, feature-tiered from a bare `core` KV up to
@@ -351,7 +351,7 @@ as-is across majors in the upgrade direction.
 
 ## Compatibility
 
-129 commands are reply-checked byte-for-byte against valkey 9.1,
+133 commands are reply-checked byte-for-byte against valkey 9.1,
 covering all five Redis data types (String, Hash, List, Set, Sorted
 Set) plus Streams, Pub/Sub (channel + pattern), Transactions (`MULTI` /
 `EXEC` / `WATCH` / `UNWATCH`), Blocking pops, and the standard
@@ -406,7 +406,7 @@ published so the workspace builds reproducibly, but end users typically
 reach for the surfaces above.
 
 **For AI agents & tools**: [`llms.txt`](llms.txt) (machine-first index) ·
-[verb reference](docs/verb-reference.md) (all 231 verbs, generated from the
+[verb reference](docs/verb-reference.md) (all 235 verbs, generated from the
 server's own metadata — the same rows `COMMAND DOCS` serves).
 
 ## Topic guides
