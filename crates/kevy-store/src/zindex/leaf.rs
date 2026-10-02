@@ -92,6 +92,21 @@ impl Leaf {
         lo
     }
 
+    /// How many leading entries `pred` holds for, where it holds on a
+    /// prefix.
+    pub(super) fn partition_keys(&self, pred: &impl Fn(u64, &[u8]) -> bool) -> usize {
+        let (mut lo, mut hi) = (0, self.len());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if pred(self.score(mid), self.member(mid).as_slice()) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
     /// Put an entry at sorted position `i`, into the first free slot.
     pub(super) fn insert_at(&mut self, i: usize, sk: u64, m: SmallBytes) {
         let n = self.len();

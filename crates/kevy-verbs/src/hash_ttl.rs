@@ -8,7 +8,7 @@
 use kevy_resp::{ArgvView, encode_array_len, encode_error, encode_integer};
 use kevy_store::{HExpireCond, Store, now_unix_ms};
 
-use crate::args::arg_i64;
+use crate::args::{arg_i64, with_args};
 use crate::reply::{ERR_NOT_INT, store_err, wrong_args};
 use crate::{Effect, changed};
 
@@ -38,22 +38,16 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"HPEXPIREAT" => {
             hexpire(store, args, out, "hpexpireat", Time { secs: ms, relative: false })
         }
-        b"HTTL" => read(store, args, out, "httl", |st, k, f| {
-            Ok(st
-                .hpttl(k, f)?
-                .into_iter()
-                .map(|t| if t >= 0 { (t + 500) / 1000 } else { t })
-                .collect())
+        b"HTTL" => read(store, args, out, "httl", |st, k, f, emit| {
+            st.hpttl_each(k, f, |t| emit(if t >= 0 { (t + 500) / 1000 } else { t }))
         }),
-        b"HPTTL" => read(store, args, out, "hpttl", Store::hpttl),
-        b"HEXPIRETIME" => read(store, args, out, "hexpiretime", |st, k, f| {
-            Ok(st
-                .hexpire_time(k, f)?
-                .into_iter()
-                .map(|t| if t >= 0 { (t + 999) / 1000 } else { t })
-                .collect())
+        b"HPTTL" => read(store, args, out, "hpttl", |st, k, f, emit| st.hpttl_each(k, f, emit)),
+        b"HEXPIRETIME" => read(store, args, out, "hexpiretime", |st, k, f, emit| {
+            st.hexpire_time_each(k, f, |t| emit(if t >= 0 { (t + 999) / 1000 } else { t }))
         }),
-        b"HPEXPIRETIME" => read(store, args, out, "hpexpiretime", Store::hexpire_time),
+        b"HPEXPIRETIME" => read(store, args, out, "hpexpiretime", |st, k, f, emit| {
+            st.hexpire_time_each(k, f, emit)
+        }),
         b"HPERSIST" => hpersist(store, args, out),
         _ => return None,
     })
@@ -77,8 +71,10 @@ fn deadline(raw: i64, t: Time, name: &str) -> Result<(u64, u64), String> {
 }
 
 /// A setter's `[NX|XX|GT|LT]` and `FIELDS n f…`, in either order, from
-/// argument 3: the condition and the indices of the fields.
-fn setter_tail<A: ArgvView + ?Sized>(args: &A) -> Result<(HExpireCond, Vec<usize>), String> {
+/// argument 3: the condition and where the fields are.
+fn setter_tail<A: ArgvView + ?Sized>(
+    args: &A,
+) -> Result<(HExpireCond, core::ops::Range<usize>), String> {
     let (mut cond, mut fields) = (None, None);
     let mut i = 3;
     while i < args.len() {
@@ -101,7 +97,7 @@ fn setter_tail<A: ArgvView + ?Sized>(args: &A) -> Result<(HExpireCond, Vec<usize
             if i + 2 + n > args.len() {
                 return Err("ERR wrong number of arguments".to_string());
             }
-            fields = Some((i + 2..i + 2 + n).collect::<Vec<_>>());
+            fields = Some(i + 2..i + 2 + n);
             i += 2 + n;
         } else {
             return Err(format!("ERR unknown argument: {}", String::from_utf8_lossy(a)));
@@ -112,8 +108,9 @@ fn setter_tail<A: ArgvView + ?Sized>(args: &A) -> Result<(HExpireCond, Vec<usize
     Ok((cond.unwrap_or(HExpireCond::Always), fields))
 }
 
-/// A reader's `FIELDS n f…`, exactly, from argument 2: the field indices.
-fn reader_tail<A: ArgvView + ?Sized>(args: &A) -> Result<Vec<usize>, &'static str> {
+/// A reader's `FIELDS n f…`, exactly, from argument 2: where the fields
+/// are.
+fn reader_tail<A: ArgvView + ?Sized>(args: &A) -> Result<core::ops::Range<usize>, &'static str> {
     if !args[2].eq_ignore_ascii_case(b"FIELDS") {
         return Err("ERR Mandatory argument FIELDS is missing or not at the right position");
     }
@@ -121,17 +118,29 @@ fn reader_tail<A: ArgvView + ?Sized>(args: &A) -> Result<Vec<usize>, &'static st
     if args.len() != 4 + n {
         return Err("ERR The `numfields` parameter must match the number of arguments");
     }
-    Ok((4..4 + n).collect())
+    Ok(4..4 + n)
 }
 
 fn numfields<A: ArgvView + ?Sized>(args: &A, at: usize) -> Option<usize> {
     args.get(at).and_then(arg_i64).filter(|&n| n > 0).map(|n| n as usize)
 }
 
-fn emit_codes<T: Copy + Into<i64>>(out: &mut Vec<u8>, codes: &[T]) {
-    encode_array_len(out, codes.len() as i64);
-    for c in codes {
-        encode_integer(out, (*c).into());
+/// An array of one integer per field, written as `answer` hands them
+/// over; a refusal, which comes before any, replaces the whole reply.
+fn emit_codes(
+    out: &mut Vec<u8>,
+    fields: usize,
+    answer: impl FnOnce(&mut dyn FnMut(i64)) -> Result<(), kevy_store::StoreError>,
+) -> bool {
+    let start = out.len();
+    encode_array_len(out, fields as i64);
+    match answer(&mut |c| encode_integer(out, c)) {
+        Ok(()) => true,
+        Err(e) => {
+            out.truncate(start);
+            store_err(out, e);
+            false
+        }
     }
 }
 
@@ -160,20 +169,20 @@ fn hexpire<A: ArgvView + ?Sized>(
             return Effect::Unchanged;
         }
     };
-    let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
-    match store.hexpire_as_of(&args[1], &fields, at, now, cond) {
-        Err(e) => {
-            store_err(out, e);
-            Effect::Unchanged
-        }
-        Ok(codes) => {
-            emit_codes(out, &codes);
-            changed(codes.iter().any(|&c| c == 1 || c == 2))
-        }
-    }
+    let mut any = false;
+    with_args(args, idx.clone(), |fields| {
+        emit_codes(out, idx.len(), |emit| {
+            store.hexpire_as_of_each(&args[1], fields, at, now, cond, |c| {
+                any |= c == 1 || c == 2;
+                emit(c.into());
+            })
+        })
+    });
+    changed(any)
 }
 
-type FieldRead = fn(&mut Store, &[u8], &[&[u8]]) -> Result<Vec<i64>, kevy_store::StoreError>;
+type FieldRead =
+    fn(&mut Store, &[u8], &[&[u8]], &mut dyn FnMut(i64)) -> Result<(), kevy_store::StoreError>;
 
 /// A reader: `-2` for a missing field, `-1` for one without a TTL.
 fn read<A: ArgvView + ?Sized>(
@@ -194,11 +203,9 @@ fn read<A: ArgvView + ?Sized>(
             return Effect::Read;
         }
     };
-    let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
-    match f(store, &args[1], &fields) {
-        Err(e) => store_err(out, e),
-        Ok(v) => emit_codes(out, &v),
-    }
+    with_args(args, idx.clone(), |fields| {
+        emit_codes(out, idx.len(), |emit| f(store, &args[1], fields, emit))
+    });
     Effect::Read
 }
 
@@ -215,15 +222,14 @@ fn hpersist<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>
             return Effect::Unchanged;
         }
     };
-    let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
-    match store.hpersist(&args[1], &fields) {
-        Err(e) => {
-            store_err(out, e);
-            Effect::Unchanged
-        }
-        Ok(codes) => {
-            emit_codes(out, &codes);
-            changed(codes.contains(&1))
-        }
-    }
+    let mut any = false;
+    with_args(args, idx.clone(), |fields| {
+        emit_codes(out, idx.len(), |emit| {
+            store.hpersist_each(&args[1], fields, |c| {
+                any |= c == 1;
+                emit(c.into());
+            })
+        })
+    });
+    changed(any)
 }

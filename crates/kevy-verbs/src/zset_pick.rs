@@ -6,10 +6,10 @@ use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer, encode_null, encode_null_bulk,
 };
-use kevy_store::{Store, StoreError};
+use kevy_store::{Store, ZSpan};
 
 use crate::args::arg_i64;
-use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, fmt_score, store_err, wrong_args};
+use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, store_err, wrong_args};
 use crate::{Effect, changed};
 
 const ERR_POSITIVE: &str = "ERR value is out of range, must be positive";
@@ -38,7 +38,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
 pub(crate) fn score(out: &mut Vec<u8>, s: f64, proto: RespVersion) {
     match proto {
         RespVersion::V3 => encode_double(out, s),
-        _ => encode_bulk(out, &fmt_score(s)),
+        _ => kevy_resp::encode_bulk_double(out, s),
     }
 }
 
@@ -248,22 +248,22 @@ pub fn zmscore<A: ArgvView + ?Sized>(
         wrong_args(out, "zmscore");
         return Effect::Read;
     }
-    let mut scores = Vec::with_capacity(args.len() - 2);
-    for i in 2..args.len() {
-        match store.zscore(&args[1], &args[i]) {
-            Ok(s) => scores.push(s),
-            Err(e) => {
-                store_err(out, e);
-                return Effect::Read;
-            }
+    // the key's type is the only error, and the first lookup meets it
+    let first = match store.zscore(&args[1], &args[2]) {
+        Ok(s) => s,
+        Err(e) => {
+            store_err(out, e);
+            return Effect::Read;
         }
-    }
-    encode_array_len(out, scores.len() as i64);
-    for s in scores {
-        match s {
-            Some(s) => score(out, s, proto),
-            None => absent(out, proto, false),
-        }
+    };
+    encode_array_len(out, (args.len() - 2) as i64);
+    let emit = |out: &mut Vec<u8>, s: Option<f64>| match s {
+        Some(s) => score(out, s, proto),
+        None => absent(out, proto, false),
+    };
+    emit(out, first);
+    for i in 3..args.len() {
+        emit(out, store.zscore(&args[1], &args[i]).unwrap_or(None));
     }
     Effect::Read
 }
@@ -298,38 +298,49 @@ pub fn zrandmember<A: ArgvView + ?Sized>(
             return Effect::Read;
         }
     };
-    let picked = store.zrandmember(&args[1], count.unwrap_or(1));
-    emit_picked(out, picked, count.is_none(), args.len() == 4, proto);
+    let Some(count) = count else {
+        match store.zrandmember_rank(&args[1]) {
+            Ok(Some(r)) => encode_bulk(out, at_rank(store, &args[1], r).0),
+            Ok(None) => absent(out, proto, false),
+            Err(e) => store_err(out, e),
+        }
+        return Effect::Read;
+    };
+    match store.zrandmember_ranks(&args[1], count) {
+        Ok(ranks) => emit_picked(store, &args[1], &ranks, args.len() == 4, proto, out),
+        Err(e) => store_err(out, e),
+    }
     Effect::Read
 }
 
+/// The member at a rank just picked from `key`, read in place. Nothing
+/// can move between the pick and the read; were it gone, an empty member
+/// keeps the reply whole.
+fn at_rank<'s>(store: &'s mut Store, key: &[u8], r: usize) -> (&'s [u8], f64) {
+    let one = store.zrange_select(key, ZSpan::Rank(r as i64, r as i64), false, None);
+    one.ok().and_then(|mut one| one.next()).unwrap_or((&[], 0.0))
+}
+
+/// The members at `ranks`, read in place one by one.
 fn emit_picked(
-    out: &mut Vec<u8>,
-    picked: Result<Vec<(Vec<u8>, f64)>, StoreError>,
-    single: bool,
+    store: &mut Store,
+    key: &[u8],
+    ranks: &[usize],
     withscores: bool,
     proto: RespVersion,
+    out: &mut Vec<u8>,
 ) {
-    let items = match picked {
-        Ok(items) => items,
-        Err(e) => return store_err(out, e),
-    };
-    if single {
-        return match items.first() {
-            Some((m, _)) => encode_bulk(out, m),
-            None => absent(out, proto, false),
-        };
-    }
     let nested = withscores && proto == RespVersion::V3;
     let per = if withscores && !nested { 2 } else { 1 };
-    encode_array_len(out, (items.len() * per) as i64);
-    for (m, s) in &items {
+    encode_array_len(out, (ranks.len() * per) as i64);
+    for &r in ranks {
+        let (m, s) = at_rank(store, key, r);
         if nested {
             encode_array_len(out, 2);
         }
         encode_bulk(out, m);
         if withscores {
-            score(out, *s, proto);
+            score(out, s, proto);
         }
     }
 }

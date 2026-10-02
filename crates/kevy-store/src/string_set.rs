@@ -97,7 +97,11 @@ impl Store {
     /// assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"b"[..]));
     /// ```
     pub fn set_slice_keep_ttl(&mut self, key: &[u8], value: &[u8]) {
-        self.put_keep_ttl(key.to_vec(), pick_value_for_set(value));
+        if self.clock_on() {
+            return self.put_keep_ttl(key.to_vec(), pick_value_for_set(value));
+        }
+        // the single-probe overwrite, its deadline the entry's own
+        self.set_no_evict(key, pick_value_for_set(value), Ttl::Keep, SetCondition::Always);
     }
 
     fn set_value(
@@ -116,7 +120,8 @@ impl Store {
         // to 1 probe. New-key + expired-removed paths still pay the
         // insert_entry probe (same as before).
         if !self.clock_on() {
-            return self.set_value_no_evict(key, new_value, expire, cond);
+            let at = expire.map(|d| deadline_at(now_ns(), d));
+            return self.set_no_evict(key, new_value, Ttl::At(at), cond);
         }
         self.set_value_evict(key, new_value, expire, cond)
     }
@@ -177,19 +182,13 @@ impl Store {
     /// 2-probe shape: Occupied arm mutates in place + returns owned
     /// (delta, ttl_delta); Expired arm removes via raw-entry handle + falls
     /// through to insert; Vacant arm goes to insert.
-    fn set_value_no_evict(
-        &mut self,
-        key: &[u8],
-        new_value: Value,
-        expire: Option<Duration>,
-        cond: SetCondition,
-    ) -> bool {
-        let expire_at = expire.map(|d| deadline_at(now_ns(), d));
+    fn set_no_evict(&mut self, key: &[u8], new_value: Value, ttl: Ttl, cond: SetCondition) -> bool {
+        let expire_at = ttl.over(None);
         let key_heap = crate::key_heap_bytes_for(key);
         // Hold new_value behind Option so the multi-arm consumption
         // (overwrite arm vs insert-after-expired arm) is moved-once.
         let mut value_slot = Some(new_value);
-        let outcome = self.set_probe_no_evict(key, &mut value_slot, expire_at, key_heap, cond);
+        let outcome = self.set_probe_no_evict(key, &mut value_slot, ttl, key_heap, cond);
         // Phase 2: bookkeeping + maybe insert. Borrow on self.map is gone.
         let old_value: Option<Value> = match outcome {
             SetOutcome::Refused { drop_first } => {
@@ -227,7 +226,7 @@ impl Store {
         true
     }
 
-    /// Phase 1 of [`Self::set_value_no_evict`]: probe + decide. Four
+    /// Phase 1 of [`Self::set_no_evict`]: probe + decide. Four
     /// outcomes — overwrite-finished (delta + ttl_delta + the displaced
     /// old `Value` to maybe ship to the bio thread), an expired-removed
     /// `Entry` whose `Value` ditto needs offload, needs-insert with no
@@ -237,7 +236,7 @@ impl Store {
         &mut self,
         key: &[u8],
         value_slot: &mut Option<Value>,
-        expire_at: Option<u64>,
+        ttl: Ttl,
         key_heap: u64,
         cond: SetCondition,
     ) -> SetOutcome {
@@ -267,6 +266,7 @@ impl Store {
                     // of dropping inline (a large-value latency-tail
                     // amplifier).
                     let (e, word) = occ.value_and_aux_mut();
+                    let expire_at = ttl.over(e.expire_at_ns);
                     let (delta, ttl_delta, old) =
                         overwrite_in_place(e, word, take_new_value(value_slot), expire_at);
                     SetOutcome::Updated { delta, ttl_delta, old }
@@ -292,6 +292,24 @@ impl Store {
             self.adjust_expires(-1);
         }
         self.expired_keys_total = self.expired_keys_total.saturating_add(1);
+    }
+}
+
+/// The deadline a SET leaves: the one given (none for none), or the one
+/// the entry already had.
+#[derive(Clone, Copy)]
+enum Ttl {
+    At(Option<u64>),
+    Keep,
+}
+
+impl Ttl {
+    /// The deadline written over an entry whose deadline is `had`.
+    fn over(self, had: Option<core::num::NonZeroU64>) -> Option<u64> {
+        match self {
+            Ttl::At(at) => at,
+            Ttl::Keep => had.map(core::num::NonZeroU64::get),
+        }
     }
 }
 

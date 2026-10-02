@@ -25,8 +25,30 @@ impl Store {
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,
     /// else remaining ms.
     pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
+        let mut v = Vec::with_capacity(fields.len());
+        self.hpttl_each(key, fields, |t| v.push(t))?;
+        Ok(v)
+    }
+
+    /// [`Self::hpttl`], each field's answer handed to `f` in request
+    /// order. An error comes before any answer.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let mut got = Vec::new();
+    /// s.hpttl_each(b"h", &[b"f", b"x"], |t| got.push(t))?;
+    /// assert_eq!(got, [-1, -2]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn hpttl_each(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+        f: impl FnMut(i64),
+    ) -> Result<(), StoreError> {
         let now = now_unix_ms();
-        self.per_field_deadline(key, fields, |d| d.saturating_sub(now) as i64)
+        self.per_field_deadline(key, fields, |d| d.saturating_sub(now) as i64, f)
     }
 
     /// The unix-ms deadline per field: `-2` key/field missing, `-1` no TTL.
@@ -39,7 +61,29 @@ impl Store {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn hexpire_time(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
-        self.per_field_deadline(key, fields, |d| d as i64)
+        let mut v = Vec::with_capacity(fields.len());
+        self.hexpire_time_each(key, fields, |t| v.push(t))?;
+        Ok(v)
+    }
+
+    /// [`Self::hexpire_time`], each field's answer handed to `f` in
+    /// request order. An error comes before any answer.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let mut got = Vec::new();
+    /// s.hexpire_time_each(b"h", &[b"f"], |t| got.push(t))?;
+    /// assert_eq!(got, [-1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn hexpire_time_each(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+        f: impl FnMut(i64),
+    ) -> Result<(), StoreError> {
+        self.per_field_deadline(key, fields, |d| d as i64, f)
     }
 
     fn per_field_deadline(
@@ -47,16 +91,16 @@ impl Store {
         key: &[u8],
         fields: &[&[u8]],
         shown: impl Fn(u64) -> i64,
-    ) -> Result<Vec<i64>, StoreError> {
+        mut f: impl FnMut(i64),
+    ) -> Result<(), StoreError> {
         self.purge_hash_ttl(key);
-        let mut out = Vec::with_capacity(fields.len());
-        for f in fields {
-            if !self.hash_has_field(key, f)? {
-                out.push(-2);
+        for field in fields {
+            if !self.hash_has_field(key, field)? {
+                f(-2);
                 continue;
             }
-            out.push(self.hfttl.get(key).and_then(|m| m.get(*f)).map_or(-1, |&d| shown(d)));
+            f(self.hfttl.get(key).and_then(|m| m.get(*field)).map_or(-1, |&d| shown(d)));
         }
-        Ok(out)
+        Ok(())
     }
 }

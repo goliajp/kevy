@@ -2,11 +2,11 @@
 //! point reads, counts and removals. Range reads and pops live in
 //! `zset_range`; the multi-key algebra is not here.
 
-use kevy_resp::{ArgvView, CmdError, encode_bulk, encode_error, encode_null_bulk};
+use kevy_resp::{ArgvView, CmdError, encode_error, encode_null_bulk};
 use kevy_store::{ScoreCompare, SetCondition, Store, ZaddFlags};
 
-use crate::args::{arg_f64, arg_i64, parse_score_bound, rest_borrowed, upper_verb};
-use crate::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, emit_int_result, fmt_score, store_err, wrong_args};
+use crate::args::{arg_f64, arg_i64, parse_score_bound, upper_verb, with_rest};
+use crate::reply::{ERR_NOT_FLOAT, ERR_NOT_INT, emit_int_result, store_err, wrong_args};
 use crate::{Effect, changed, zset_range};
 
 const ERR_MIN_MAX: &str = "ERR min or max is not a float";
@@ -27,7 +27,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"ZSCORE" => {
             if args.len() == 3 {
                 match store.zscore(&args[1], &args[2]) {
-                    Ok(Some(sc)) => encode_bulk(out, &fmt_score(sc)),
+                    Ok(Some(sc)) => kevy_resp::encode_bulk_double(out, sc),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
@@ -49,7 +49,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "zrem");
                 return Some(Effect::Unchanged);
             }
-            let res = store.zrem(&args[1], &rest_borrowed(args, 2));
+            let res = with_rest(args, 2, |rest| store.zrem(&args[1], rest));
             removed(res, out)
         }
         b"ZINCRBY" => {
@@ -57,7 +57,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "zincrby");
             } else if let Some(incr) = arg_f64(&args[2]) {
                 match store.zincrby(&args[1], incr, &args[3]) {
-                    Ok(sc) => encode_bulk(out, &fmt_score(sc)),
+                    Ok(sc) => kevy_resp::encode_bulk_double(out, sc),
                     Err(e) => store_err(out, e),
                 }
             } else {
@@ -205,7 +205,7 @@ fn zadd_pairs<A: ArgvView + ?Sized>(
             return encode_error(out, "ERR INCR option supports a single increment-element pair");
         }
         return match store.zadd_incr(&args[1], pairs[0].0, pairs[0].1, flags) {
-            Ok(Some(next)) => encode_bulk(out, &fmt_score(next)),
+            Ok(Some(next)) => kevy_resp::encode_bulk_double(out, next),
             Ok(None) => encode_null_bulk(out),
             Err(e) => store_err(out, e),
         };

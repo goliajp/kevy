@@ -5,7 +5,7 @@
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_null_bulk};
 use kevy_store::Store;
 
-use crate::args::{arg_i64, rest_borrowed};
+use crate::args::{arg_i64, with_rest};
 use crate::reply::{ERR_NOT_INT, emit_bulk_array, emit_int_result, store_err, wrong_args};
 use crate::{Effect, changed};
 
@@ -23,7 +23,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "sadd");
             } else {
                 emit_int_result(
-                    store.sadd(&args[1], &rest_borrowed(args, 2)).map(|n| n as i64),
+                    with_rest(args, 2, |rest| store.sadd(&args[1], rest)).map(|n| n as i64),
                     out,
                 );
             }
@@ -34,7 +34,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "srem");
                 return Some(Effect::Unchanged);
             }
-            let res = store.srem(&args[1], &rest_borrowed(args, 2));
+            let res = with_rest(args, 2, |rest| store.srem(&args[1], rest));
             let removed = matches!(res, Ok(n) if n > 0);
             emit_int_result(res.map(|n| n as i64), out);
             changed(removed)
@@ -45,19 +45,19 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "smismember");
                 return Some(Effect::Read);
             }
-            let mut flags = Vec::with_capacity(args.len() - 2);
-            for i in 2..args.len() {
-                match store.sismember(&args[1], &args[i]) {
-                    Ok(b) => flags.push(b),
-                    Err(e) => {
-                        crate::reply::store_err(out, e);
-                        return Some(Effect::Read);
-                    }
+            // the key's type is the only error, and the first lookup meets it
+            let first = match store.sismember(&args[1], &args[2]) {
+                Ok(b) => b,
+                Err(e) => {
+                    crate::reply::store_err(out, e);
+                    return Some(Effect::Read);
                 }
-            }
-            encode_array_len(out, flags.len() as i64);
-            for b in flags {
-                kevy_resp::encode_integer(out, i64::from(b));
+            };
+            encode_array_len(out, (args.len() - 2) as i64);
+            kevy_resp::encode_integer(out, i64::from(first));
+            for i in 3..args.len() {
+                let hit = store.sismember(&args[1], &args[i]).unwrap_or(false);
+                kevy_resp::encode_integer(out, i64::from(hit));
             }
             Effect::Read
         }

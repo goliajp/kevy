@@ -5,7 +5,7 @@ use kevy_resp::{
 };
 use kevy_store::{InsertPosition, Store};
 
-use crate::args::{arg_i64, rest_borrowed};
+use crate::args::{arg_i64, with_rest};
 use crate::reply::{
     ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, store_err, wrong_args,
 };
@@ -24,12 +24,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, if cmd == b"LPUSH" { "lpush" } else { "rpush" });
             } else {
-                let vals = rest_borrowed(args, 2);
-                let res = if cmd == b"LPUSH" {
-                    store.lpush(&args[1], &vals)
-                } else {
-                    store.rpush(&args[1], &vals)
-                };
+                let res = with_rest(args, 2, |vals| {
+                    if cmd == b"LPUSH" {
+                        store.lpush(&args[1], vals)
+                    } else {
+                        store.rpush(&args[1], vals)
+                    }
+                });
                 emit_int_result(res.map(|n| n as i64), out);
             }
             Effect::Write
@@ -39,12 +40,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, if cmd == b"LPUSHX" { "lpushx" } else { "rpushx" });
                 return Some(Effect::Unchanged);
             }
-            let vals = rest_borrowed(args, 2);
-            let res = if cmd == b"LPUSHX" {
-                store.lpushx(&args[1], &vals)
-            } else {
-                store.rpushx(&args[1], &vals)
-            };
+            let res = with_rest(args, 2, |vals| {
+                if cmd == b"LPUSHX" {
+                    store.lpushx(&args[1], vals)
+                } else {
+                    store.rpushx(&args[1], vals)
+                }
+            });
             // a missing key takes nothing
             let pushed = matches!(res, Ok(n) if n > 0);
             emit_int_result(res.map(|n| n as i64), out);

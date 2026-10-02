@@ -194,6 +194,18 @@ fn spot_reads(z: &ZIndex, model: &Model, rng: &mut Rng) {
         assert_eq!(z.partition(|s| s < t), model.partition_point(|e| e.0 < t));
         assert_eq!(z.partition(|s| s <= t), model.partition_point(|e| e.0 <= t));
     }
+    for _ in 0..5 {
+        let through = rng.below(model.len() as u64 + 2) as usize;
+        let back: Vec<Vec<u8>> =
+            z.iter_rev_through(through).take(40).map(|(m, _)| m.to_vec()).collect();
+        let want: Vec<Vec<u8>> =
+            model[..through.min(model.len())].iter().rev().take(40).map(|e| e.1.clone()).collect();
+        assert_eq!(back, want, "backwards through {through}");
+        let Some(e) = model.get(rng.below(model.len() as u64 + 1) as usize) else { continue };
+        let k = (e.0, e.1.clone());
+        let below = |s: f64, m: &[u8]| s.total_cmp(&k.0).then_with(|| m.cmp(&k.1)).is_lt();
+        assert_eq!(z.partition_keys(below), model.partition_point(|x| cmp(x, &k).is_lt()));
+    }
     assert_eq!(z.rank_of(0.25, b"absent"), None);
     assert_eq!(z.iter_from(model.len()).next(), None);
 }
