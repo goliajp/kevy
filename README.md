@@ -230,7 +230,7 @@ kevy runs in the browser as a real store: the npm package
 [`@goliapkg/kevy`](https://www.npmjs.com/package/@goliapkg/kevy) ships
 the engine compiled to `wasm32-unknown-unknown` behind a hand-written
 ES-module loader — no wasm-bindgen, zero dependencies on either side
-of the boundary; seven files, 675 KB gzipped over the wire.
+of the boundary; seven files, 688 KB gzipped over the wire.
 
 ```sh
 npm install @goliapkg/kevy
