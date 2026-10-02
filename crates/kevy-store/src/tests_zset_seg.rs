@@ -200,3 +200,47 @@ fn load_zset_applies_the_encoding_switch() {
     st.load_zset(b"small".to_vec(), small, None);
     assert!(!is_segzset(&st, b"small"));
 }
+
+/// Random inserts and removes against a model: order holds, segments stay
+/// in bounds, and after most members go, the segment count shrinks with
+/// them instead of staying where the peak left it.
+#[test]
+fn removals_merge_thinned_segments_and_order_holds() {
+    use crate::zset_seg::{SegZSetData, ZSEG_CAP};
+    let mut z = SegZSetData::default();
+    let mut model = alloc::collections::BTreeMap::new();
+    let mut rng = 0x2545_f491_4f6c_dd1du64;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+    let n = 20 * ZSEG_CAP as u64;
+    for i in 0..n {
+        let m = alloc::format!("m{i:06}");
+        let score = (next() % 1000) as f64;
+        z.insert(m.as_bytes(), score);
+        model.insert(m.into_bytes(), score);
+    }
+    let peak = z.seg_stats().len();
+    for i in 0..n {
+        if next() % 10 != 0 {
+            let m = alloc::format!("m{i:06}");
+            assert_eq!(z.remove(m.as_bytes()), model.remove(m.as_bytes()).is_some());
+        }
+    }
+    let lens: alloc::vec::Vec<usize> = z.seg_stats().iter().map(|&(_, l)| l).collect();
+    assert!(lens.iter().all(|&l| (1..=ZSEG_CAP).contains(&l)), "{lens:?}");
+    let mut want: alloc::vec::Vec<(&[u8], f64)> =
+        model.iter().map(|(m, s)| (m.as_slice(), *s)).collect();
+    want.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+    assert!(z.ordered().eq(want.iter().copied()), "order broke");
+    let left = model.len();
+    println!("peak {peak} segments; {left} members left in {} segments", lens.len());
+    assert!(
+        lens.len() * (ZSEG_CAP / 8) <= left + ZSEG_CAP,
+        "{} segments for {left} members",
+        lens.len()
+    );
+}
