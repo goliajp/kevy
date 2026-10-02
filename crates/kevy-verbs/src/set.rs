@@ -42,6 +42,27 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             changed(removed)
         }
         b"SMOVE" => smove(store, args, out),
+        b"SMISMEMBER" => {
+            if args.len() < 3 {
+                wrong_args(out, "smismember");
+                return Some(Effect::Read);
+            }
+            let mut flags = Vec::with_capacity(args.len() - 2);
+            for i in 2..args.len() {
+                match store.sismember(&args[1], &args[i]) {
+                    Ok(b) => flags.push(b),
+                    Err(e) => {
+                        crate::reply::store_err(out, e);
+                        return Some(Effect::Read);
+                    }
+                }
+            }
+            encode_array_len(out, flags.len() as i64);
+            for b in flags {
+                kevy_resp::encode_integer(out, i64::from(b));
+            }
+            Effect::Read
+        }
         b"SCARD" => {
             if args.len() == 2 {
                 emit_int_result(store.scard(&args[1]).map(|n| n as i64), out);

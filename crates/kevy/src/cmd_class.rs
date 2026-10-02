@@ -64,9 +64,8 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
     Some(match cmd {
         // String — Redis class `$`.
         b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL" | b"APPEND" | b"INCR"
-        | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"SETRANGE" => {
-            NotifyKind::String
-        }
+        | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" | b"SETBIT" | b"BITFIELD"
+        | b"SETRANGE" => NotifyKind::String,
         // Hash — class `h`.
         b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HINCRBYFLOAT" | b"HEXPIRE"
         | b"HPEXPIRE" | b"HEXPIREAT" | b"HPEXPIREAT" | b"HPERSIST" => NotifyKind::Hash,
@@ -133,6 +132,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"DECRBY"
             | b"APPEND"
             | b"SETBIT"
+            | b"BITFIELD"
             | b"SETRANGE"
             | b"COPY"
             | b"BITOP"

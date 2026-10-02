@@ -80,6 +80,8 @@ const fn name(bytes: &'static [u8]) -> &'static str {
 registry! {
     b"APPEND" WR,
     b"BITCOUNT" RD,
+    b"BITFIELD" WR,
+    b"BITFIELD_RO" RD,
     b"BITPOS" RD,
     b"BLMOVE" WR,
     b"BLMPOP" WR,
@@ -96,6 +98,7 @@ registry! {
     b"EXISTS" RD,
     b"EXPIRE" WR,
     b"EXPIREAT" WR,
+    b"EXPIRETIME" RD,
     b"FLUSHALL" WR,
     b"FLUSHDB" WR,
     #[cfg(feature = "streams-geo")]
@@ -167,6 +170,7 @@ registry! {
     b"PERSIST" WR,
     b"PEXPIRE" WR,
     b"PEXPIREAT" WR,
+    b"PEXPIRETIME" RD,
     b"PSETEX" WR,
     b"PTTL" RD,
     b"RENAME" WR,
@@ -185,6 +189,7 @@ registry! {
     b"SINTERCARD" RD,
     b"SISMEMBER" RD,
     b"SMEMBERS" RD,
+    b"SMISMEMBER" RD,
     b"SMOVE" WR,
     b"SPOP" WR,
     b"SRANDMEMBER" RD,

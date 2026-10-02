@@ -83,7 +83,7 @@ impl<C: Commands> Shard<C> {
     /// mid-flight, else `(reply_bytes, channels_that_actually_changed)`.
     /// "Changed" matters because sub/unsub is idempotent — only real
     /// transitions must update the shared registry.
-    fn apply_sub_to_conn(
+    pub(crate) fn apply_sub_to_conn(
         &mut self,
         conn_id: u64,
         channels: &[Vec<u8>],
@@ -148,7 +148,7 @@ impl<C: Commands> Shard<C> {
     /// Reflect a real (sub/unsub) transition into the cross-shard
     /// registry that `PUBLISH` consults to route messages to the
     /// shards that actually hold subscribers.
-    fn apply_sub_to_registry(&self, changed: &[Vec<u8>], subscribe: bool) {
+    pub(crate) fn apply_sub_to_registry(&self, changed: &[Vec<u8>], subscribe: bool) {
         if changed.is_empty() {
             return;
         }

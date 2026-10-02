@@ -148,6 +148,11 @@ impl<C: Commands> Shard<C> {
             }
             Route::SetMove => self.start_set_move(conn_id, seq, args, is_quit, cluster_conn),
             Route::MSetNx => self.start_msetnx(conn_id, seq, args, is_quit, cluster_conn),
+            Route::PubSub => {
+                let reply = self.pubsub_info(args);
+                self.push_pending_single(conn_id, is_quit);
+                self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(reply)));
+            }
             Route::StoreFromCopies { first, count, dst } => {
                 let across =
                     crate::exec_read_across::Across { keys: first..first + count, dst: Some(dst) };

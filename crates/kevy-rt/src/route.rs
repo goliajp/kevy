@@ -374,6 +374,16 @@ pub enum Route {
         /// How many there are.
         count: usize,
     },
+    /// `PUBSUB CHANNELS | NUMSUB | NUMPAT | SHARDCHANNELS | SHARDNUMSUB |
+    /// HELP`: answered from the subscription registries every shard
+    /// shares, on the shard the command came to.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// assert_ne!(Route::PubSub, Route::Publish);
+    /// ```
+    PubSub,
     /// `MSETNX key value [key value …]`. Keys on one shard run there as
     /// sent; keys apart are first asked whether any exists, and only when
     /// none does are the pairs set, shard by shard — not atomic across the

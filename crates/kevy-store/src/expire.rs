@@ -269,6 +269,34 @@ impl Store {
     }
 }
 
+impl Store {
+    /// `PEXPIRETIME` — the Unix-ms deadline of `key`: `-2` absent, `-1` no
+    /// TTL. Deadlines are kept on the monotonic clock; this reads them back
+    /// through the wall clock to the nearest millisecond.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.set(b"k", b"v".to_vec(), None, kevy_store::SetCondition::Always);
+    /// assert_eq!(s.pexpire_time(b"k"), -1);
+    /// s.expire_at_unix_ms(b"k", 4_102_444_800_999);
+    /// assert_eq!(s.pexpire_time(b"k"), 4_102_444_800_999);
+    /// assert_eq!(s.pexpire_time(b"nope"), -2);
+    /// ```
+    pub fn pexpire_time(&mut self, key: &[u8]) -> i64 {
+        let now = now_ns();
+        if !self.reap(key, now) {
+            return -2;
+        }
+        match self.map.get(key).and_then(|e| e.expire_at_ns) {
+            None => -1,
+            Some(ns) => {
+                let at = crate::stream::now_unix_ns().saturating_add(ns.get().saturating_sub(now));
+                (at.saturating_add(500_000) / 1_000_000) as i64
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
