@@ -153,6 +153,7 @@ version = "7.0.0"
 name = "kevy-verbs"
 version = "7.0.0"
 dependencies = [
+ "kevy-hash",
  "kevy-num",
  "kevy-resp",
  "kevy-store",
