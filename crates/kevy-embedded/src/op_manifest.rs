@@ -39,6 +39,8 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "SINTERCARD",
     "SMISMEMBER",
     "SMOVE",
+    "SORT",
+    "SORT_RO",
     "STRLEN",
     // bitmap
     "BITCOUNT",

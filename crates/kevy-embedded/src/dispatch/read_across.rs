@@ -2,8 +2,8 @@
 //! keys that may live on different shards. Each key is copied under its
 //! own shard's lock and the command runs over the copies, as on the
 //! server; the answer is not a point-in-time snapshot across shards.
-//! `ZRANGESTORE` reads its source the same way and then writes its
-//! destination under that key's lock.
+//! `ZRANGESTORE` and `SORT … STORE` read their source the same way and
+//! then write their destination under that key's lock.
 
 use kevy_verbs::multikey::{parse_zcombine, parse_zdiff, parse_zintercard};
 
@@ -14,6 +14,10 @@ use crate::store::Store;
 pub(super) fn dispatch(s: &Store, up: &[u8], argv: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
     if up == b"ZRANGESTORE" {
         zrangestore(s, argv, out);
+        return true;
+    }
+    if up == b"SORT" && kevy_verbs::sort::store_destination(&Args::new(argv)).is_some() {
+        super::sort_store::sort_store(s, argv, out);
         return true;
     }
     if !matches!(up, b"LCS" | b"SINTERCARD" | b"ZINTER" | b"ZUNION" | b"ZDIFF") {

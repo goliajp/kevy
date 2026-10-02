@@ -379,6 +379,14 @@ impl Commands for KevyCommands {
         cmd::notify_class_for_verb(upper_verb(name, &mut buf))
     }
 
+    fn placed_event<A: ArgvView + ?Sized>(&self, args: &A) -> Vec<u8> {
+        let name = args.first().unwrap_or_default();
+        if name.eq_ignore_ascii_case(b"SORT") {
+            return b"sortstore".to_vec();
+        }
+        name.to_ascii_lowercase()
+    }
+
     fn txn_kind<A: ArgvView + ?Sized>(&self, args: &A) -> TxnKind {
         let Some(name) = args.first() else {
             return TxnKind::Other;
