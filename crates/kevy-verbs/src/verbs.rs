@@ -191,6 +191,8 @@ registry! {
     b"SMEMBERS" RD,
     b"SMISMEMBER" RD,
     b"SMOVE" WR,
+    b"SORT" WR,
+    b"SORT_RO" RD,
     b"SPOP" WR,
     b"SRANDMEMBER" RD,
     b"SREM" WR,

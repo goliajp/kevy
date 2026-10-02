@@ -70,6 +70,40 @@ fn float_increments_replay_to_the_same_text() {
     assert_eq!(k.as_deref(), Some(&b"123456789.45679012333857827"[..]));
 }
 
+// SORT … STORE with its destination on another shard than its source:
+// the list lands on the destination's shard and replays from the log
+#[test]
+fn sort_store_across_shards_lands_and_replays() {
+    use crate::config::AppendFsync;
+    let dir = crate::store::test_suites::tests::tmp_dir("sort-store-shards");
+    let cfg = || {
+        Config::default()
+            .with_shards(8)
+            .with_persist(&dir)
+            .with_ttl_reaper_manual()
+            .with_appendfsync(AppendFsync::Always)
+    };
+    let shard = |k: &str| crate::store::shard_idx(k.as_bytes(), 8);
+    let dst = (0..).map(|i| format!("dst{i}")).find(|k| shard(k) != shard("src")).unwrap();
+    let run = |s: &Store, line: &str| {
+        let argv: Vec<Vec<u8>> = line.split(' ').map(|p| p.as_bytes().to_vec()).collect();
+        let mut out = Vec::new();
+        s.dispatch_argv(&argv, &mut out);
+        out
+    };
+    let want = b"*3\r\n$1\r\n3\r\n$1\r\n2\r\n$1\r\n1\r\n".to_vec();
+    {
+        let s = Store::open(cfg()).unwrap();
+        run(&s, "RPUSH src 3 1 2");
+        run(&s, &format!("SET {dst} old"));
+        assert_eq!(run(&s, &format!("SORT src DESC STORE {dst}")), b":3\r\n");
+        assert_eq!(run(&s, &format!("LRANGE {dst} 0 -1")), want);
+        assert_eq!(run(&s, &format!("SORT src LIMIT 9 1 STORE gone{dst}")), b":0\r\n");
+    }
+    let s = Store::open(cfg()).unwrap();
+    assert_eq!(run(&s, &format!("LRANGE {dst} 0 -1")), want);
+}
+
 // ---- decr / decrby -------------------------------------------------------
 
 #[test]

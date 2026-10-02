@@ -117,7 +117,7 @@ impl<C: Commands> Shard<C> {
             Some((value, _)) => Op::StoreValue {
                 key: dst.clone(),
                 value,
-                event: argv[0].to_ascii_lowercase(),
+                event: self.commands.placed_event(argv),
                 class: self.commands.notify_class(argv),
             },
             None => Op::Del(vec![dst.clone()]),

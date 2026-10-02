@@ -45,6 +45,11 @@ pub trait Commands: Clone + Send + 'static {
         None
     }
 
+    #[doc = include_str!("commands_docs/placed_event.md")]
+    fn placed_event<A: ArgvView + ?Sized>(&self, args: &A) -> Vec<u8> {
+        args.first().map(<[u8]>::to_ascii_lowercase).unwrap_or_default()
+    }
+
     #[doc = include_str!("commands_docs/hello_reply.md")]
     fn hello_reply<A: ArgvView + ?Sized>(
         &self,

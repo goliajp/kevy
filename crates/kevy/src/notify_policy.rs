@@ -64,6 +64,15 @@ fn written<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, reply: &[u8]) -> Option<N
     match cmd {
         // an empty range removes the destination, which is a `del`
         b"ZRANGESTORE" if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
+        // a stored SORT announces its destination; an empty result removes it
+        b"SORT" => {
+            let dst = &args[kevy_verbs::sort::store_destination(args)?];
+            if reply == b":0\r\n" {
+                one(NotifyKind::Generic, "del", dst)
+            } else {
+                one(NotifyKind::List, "sortstore", dst)
+            }
+        }
         b"SMOVE" => Some(Notify::Events(vec![
             (NotifyKind::Set, "srem", args[1].to_vec()),
             (NotifyKind::Set, "sadd", args[2].to_vec()),
