@@ -582,10 +582,10 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `GEODIST key member1 member2 [m|km|mi|ft]` [readonly] — Return the distance between two geo members.
   - complexity: O(1)
   - compat: full
-- `GEOHASH key member [member ...]` [readonly] — Return the base32 geohash string of each member.
+- `GEOHASH key [member ...]` [readonly] — Return the base32 geohash string of each member.
   - complexity: O(M)
   - compat: full
-- `GEOPOS key member [member ...]` [readonly] — Return the longitude/latitude of each member.
+- `GEOPOS key [member ...]` [readonly] — Return the longitude/latitude of each member.
   - complexity: O(M)
   - compat: full
 - `GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key | STOREDIST key]` [write] — Legacy radius search around a coordinate, with optional STORE writes.
@@ -627,15 +627,15 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `BGREWRITEAOF` [write,admin] — Start an append-only-file rewrite in the background.
   - complexity: O(S) fan-out; each shard freezes a copy-on-write view and hands serialise plus fsync to its own worker
   - compat: differs: replies +OK rather than Redis's status line, rewrites one AOF per shard, and replies +OK even when AOF is disabled
-- `BGSAVE` [write,admin] — Start a snapshot save in the background.
+- `BGSAVE [SCHEDULE]` [write,admin] — Start a snapshot save in the background.
   - complexity: O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread
   - compat: differs: replies +OK rather than Redis's status line, and writes one dump per shard
 - `TIME` [readonly] — Return the server clock as unix seconds and microseconds.
   - complexity: O(1)
   - compat: full
-- `COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]` [readonly] — Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).
-  - complexity: bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan
-  - compat: differs: COUNT / LIST / INFO / DOCS only — GETKEYS and GETKEYSANDFLAGS are absent, and the info rows hard-code first/last/step and leave ACL categories, tips and key-specs empty
+- `COMMAND [COUNT | LIST | INFO [command ...] | DOCS [command ...] | GETKEYS command [arg ...] | GETKEYSANDFLAGS command [arg ...]]` [readonly] — Introspect the command table: COUNT, LIST, INFO, DOCS, and where a command's keys are (GETKEYS, GETKEYSANDFLAGS).
+  - complexity: bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO: O(log V) per name. GETKEYS: O(N) arguments
+  - compat: differs: LIST takes no FILTERBY and HELP is absent; DOCS answers kevy's own fields (complexity, compat). An INFO row of a command Redis also has is Redis 8.10.2's, key specs and subcommands included, even for the subcommands kevy does not implement
 - `CONFIG GET parameter | SET parameter value | REWRITE | RESETSTAT` [write,admin] — Read or change server configuration parameters.
   - complexity: GET: O(patterns * 16). SET: O(1) plus one config swap that shards pick up on their next tick. REWRITE: O(config file size)
   - compat: differs: 16 Redis-named parameters exist; only maxmemory, maxmemory-policy, appendfsync, the auto-rewrite pair, hz, maxmemory-samples, loglevel and logfile are hot-settable — bind, port, io-threads, dir and appendonly error at runtime; RESETSTAT is a no-op

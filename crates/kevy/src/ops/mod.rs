@@ -57,6 +57,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(&ctx.state.replication, args, out),
         b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(&ctx.state.replication, args, out),
         b"SHUTDOWN" => cmd_shutdown(ctx, args, out),
+        // the well-formed BGSAVE fans out to every shard; this is the rest
+        b"BGSAVE" => encode_error(out, "ERR syntax error"),
         b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"ROLE" => replication::cmd_role(ctx, args, out),

@@ -34,6 +34,11 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
+        // flags, ACL categories, key specs and subcommands are sets and maps
+        b"COMMAND" => {
+            crate::cmd_command::cmd_command(args, out, kevy_resp::RespVersion::V3);
+            true
+        }
         // Found by bench/resp3gate.sh, which asks the pinned redis which
         // verbs change shape under HELLO 3 rather than trusting this table
         // to be complete. It was not: five verbs sent the RESP2 wire to a

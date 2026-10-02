@@ -9,7 +9,9 @@
 
 use crate::cmd::{OOM_ERR, cmd_hello, is_growing_write_verb, store_err, upper_verb, wrong_args};
 use crate::state::Ctx;
-use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_null_bulk, encode_simple_string};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_bulk, encode_error, encode_null_bulk, encode_simple_string,
+};
 use kevy_rt::VerbId;
 use kevy_store::Store;
 use kevy_verbs::Effect;
@@ -425,7 +427,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
                 wrong_args(out, "echo");
             }
         }
-        b"COMMAND" => crate::cmd_command::cmd_command(args, out),
+        b"COMMAND" => crate::cmd_command::cmd_command(args, out, RespVersion::V2),
         b"FAILOVER" => crate::cmd_failover::cmd_failover(ctx, args, out),
         b"HELLO" => cmd_hello(out),
         b"QUIT" => encode_simple_string(out, "OK"),

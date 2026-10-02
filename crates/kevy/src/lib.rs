@@ -48,8 +48,11 @@ mod cmd_block_mpop;
 mod cmd_block_serve;
 mod cmd_class;
 mod cmd_command;
+mod cmd_command_info;
 mod cmd_describe;
 mod cmd_digest;
+mod command_spec;
+mod command_specs;
 mod defrag_tick;
 mod notify_policy;
 pub use defrag_tick::kevy_alloc_is_global;
@@ -464,6 +467,8 @@ const _: () = {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_command_keys;
 #[cfg(test)]
 mod tests_op_table;
 #[cfg(test)]

@@ -285,7 +285,7 @@ fn apply_geoadd(
 /// for missing members). Coordinates are rendered with 17-digit
 /// precision to match Redis's `addReplyHumanLongDouble`.
 fn cmd_geopos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 3 {
+    if args.len() < 2 {
         return wrong_args(out, "geopos");
     }
     let n = args.len() - 2;
@@ -293,7 +293,7 @@ fn cmd_geopos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
     // `*1\r\n` and then an error into the same reply, so a WRONGTYPE arrived
     // as the array's first element — real Redis answers WRONGTYPE and nothing
     // else. Found by a RESP3 error-path test; the V2 path had it too.
-    if let Err(e) = store.zscore(&args[1], &args[2]) {
+    if let Err(e) = store.zcard(&args[1]) {
         return store_err(out, e);
     }
     encode_array_len(out, n as i64);
@@ -360,8 +360,12 @@ fn score_to_point(
 /// `GEOHASH key member [member ...]` — emits the 11-character base32
 /// geohash for each member's cell centre (nil for missing members).
 fn cmd_geohash<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 3 {
+    if args.len() < 2 {
         return wrong_args(out, "geohash");
+    }
+    // the type first, as GEOPOS: an error must not land inside the array
+    if let Err(e) = store.zcard(&args[1]) {
+        return store_err(out, e);
     }
     let n = args.len() - 2;
     encode_array_len(out, n as i64);
