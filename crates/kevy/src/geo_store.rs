@@ -25,7 +25,7 @@ pub(crate) fn geo_search(store: &mut Store, argv: &[Vec<u8>]) -> GeoHits {
         Ok(pairs) => GeoHits::Pairs(pairs),
         Err(e) => {
             let mut reply = Vec::new();
-            kevy_resp::encode_error(&mut reply, e.as_wire());
+            kevy_resp::encode_error(&mut reply, &e.to_wire());
             GeoHits::Error(reply)
         }
     }

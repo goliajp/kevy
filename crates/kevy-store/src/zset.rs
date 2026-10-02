@@ -212,11 +212,16 @@ impl Store {
         }
     }
 
-    /// `ZINCRBY` — add `incr` to a member's score; returns the new score.
+    /// `ZINCRBY` — add `incr` to a member's score; returns the new score,
+    /// or [`StoreError::ScoreIsNan`] with nothing written.
     pub fn zincrby(&mut self, key: &[u8], incr: f64, member: &[u8]) -> Result<f64, StoreError> {
         let mut z = self.zset_mut(key, true)?.expect("created");
         let cur = z.score_of(member).unwrap_or(0.0);
         let next = cur + incr;
+        // only an infinity met by its opposite: the member, so the key, exists
+        if next.is_nan() {
+            return Err(StoreError::ScoreIsNan);
+        }
         let (is_new, grown) = z.insert_weighed(member, next);
         let d = grown + if is_new { member_weight(member) } else { 0 };
         self.account_delta(key, d);

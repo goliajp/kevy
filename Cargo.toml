@@ -42,6 +42,7 @@ members = [
     "crates/kevy-tmpdir",
     "crates/kevy-testnet",
     "crates/kevy-time",
+    "crates/kevy-num",
     "crates/kevy-crypto",
     "crates/kevy-noise",
     "crates/kevy-scalar",

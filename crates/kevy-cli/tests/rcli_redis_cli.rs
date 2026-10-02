@@ -543,7 +543,7 @@ fn repl_state_tracking_against_kevy() {
         b"RESET\nHELLO 3\nHELLO 2\nAUTH x\nclear\nconnect 127.0.0.1 1\nPING\n",
         &[],
     );
-    assert!(reset.stdout.starts_with("ERR unknown command 'RESET'"), "{}", reset.stdout);
+    assert!(reset.stdout.starts_with("RESET\n"), "{}", reset.stdout);
     assert!(reset.stdout.contains("\x1b[H\x1b[2J"), "clear: {:?}", reset.stdout);
     assert!(
         reset.stderr.contains("Could not connect to Redis at 127.0.0.1:1: Connection refused"),

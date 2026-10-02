@@ -53,22 +53,24 @@ pub fn arg_u64(b: &[u8]) -> Option<u64> {
     std::str::from_utf8(b).ok()?.parse::<u64>().ok()
 }
 
-/// A float, accepting the `inf` spellings and refusing NaN.
+/// A float argument read as Redis reads a score or an increment: the whole
+/// argument one literal (hexadecimal and the `inf` spellings included),
+/// with no white space, not NaN, and inside the double's range.
 ///
 /// ```
 /// use kevy_verbs::args::arg_f64;
 /// assert_eq!(arg_f64(b"2.5"), Some(2.5));
+/// assert_eq!(arg_f64(b"0x10"), Some(16.0));
 /// assert_eq!(arg_f64(b"-inf"), Some(f64::NEG_INFINITY));
 /// assert_eq!(arg_f64(b"nan"), None);
+/// assert_eq!(arg_f64(b" 1"), None);
+/// assert_eq!(arg_f64(b"1e400"), None);
 /// ```
 pub fn arg_f64(b: &[u8]) -> Option<f64> {
     if let Some(n) = short_int(b) {
         return Some(n as f64);
     }
-    // std's parser already takes every `inf` / `infinity` spelling, signed
-    // and in any case, so no lowercased copy is needed
-    let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
-    if f.is_nan() { None } else { Some(f) }
+    kevy_num::parse_exact(b)
 }
 
 /// A plain integer of at most 15 digits, which an f64 holds exactly — the
@@ -97,17 +99,35 @@ fn short_int(b: &[u8]) -> Option<i64> {
     Some(if neg { -n } else { n })
 }
 
-/// A score range bound: a leading `(` makes it exclusive.
+/// A score range bound: a leading `(` makes it exclusive. The rest is
+/// read as `strtod` reads it, as Redis does here: leading white space
+/// passes, an out-of-range value becomes an infinity or zero, and an
+/// empty number is zero; it must all be read, and not be NaN.
 ///
 /// ```
-/// let b = kevy_verbs::args::parse_score_bound(b"(3").unwrap();
+/// use kevy_verbs::args::parse_score_bound;
+/// let b = parse_score_bound(b"(3").unwrap();
 /// assert!(b.exclusive && b.value == 3.0);
+/// assert_eq!(parse_score_bound(b" 1").unwrap().value, 1.0);
+/// assert_eq!(parse_score_bound(b"(").unwrap().value, 0.0);
+/// assert!(parse_score_bound(b"1 ").is_none());
 /// ```
 pub fn parse_score_bound(b: &[u8]) -> Option<ScoreBound> {
-    match b.strip_prefix(b"(") {
-        Some(rest) => Some(ScoreBound::exclusive(arg_f64(rest)?)),
-        None => Some(ScoreBound::inclusive(arg_f64(b)?)),
-    }
+    let (exclusive, text) = match b.strip_prefix(b"(") {
+        Some(rest) => (true, rest),
+        None => (false, b),
+    };
+    let value = match short_int(text) {
+        Some(n) => n as f64,
+        None => {
+            let s = kevy_num::strtod(text);
+            if s.len != text.len() || s.value.is_nan() {
+                return None;
+            }
+            s.value
+        }
+    };
+    Some(if exclusive { ScoreBound::exclusive(value) } else { ScoreBound::inclusive(value) })
 }
 
 /// `args[from..]` as borrowed slices, without copying any argument.
@@ -296,8 +316,7 @@ mod tests {
 
     /// What the float parser alone answers.
     fn reference(b: &[u8]) -> Option<f64> {
-        let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
-        if f.is_nan() { None } else { Some(f) }
+        kevy_num::parse_exact(b)
     }
 
     #[test]

@@ -108,7 +108,7 @@ jobs:
           set -euo pipefail
           chain=$(printf '%s\n' \
             kevy-sys kevy-bench kevy-alloc kevy-compress kevy-crypto kevy-noise kevy-geo kevy-hash kevy-bytes \
-            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
+            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-num kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \
@@ -234,7 +234,7 @@ jobs:
           # do make that promise, so theirs are versioned.
           for c in \
             kevy-sys kevy-bench kevy-alloc kevy-compress kevy-crypto kevy-noise kevy-geo kevy-hash kevy-bytes \
-            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-resp \
+            kevy-lua kevy-lua-host kevy-madvise kevy-map kevy-ranktree kevy-num kevy-resp \
             kevy-elect kevy-replicate kevy-resp-client kevy-mcp kevy-ring \
             kevy-scope kevy-text kevy-time kevy-index kevy-scalar \
             kevy-sql kevy-tmpdir kevy-seg kevy-uring kevy-vector kevy-vlog \

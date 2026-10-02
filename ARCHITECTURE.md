@@ -46,7 +46,7 @@ L3  kevy-persist  kevy-replicate  kevy-elect  kevy-resp-client  kevy-verbs
 L2  kevy-store  kevy-resp  kevy-window  kevy-sql
 L1  kevy-map  kevy-bytes  kevy-seg  kevy-vlog  kevy-index  kevy-scalar
                                                           kevy-lua-host
-L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time  kevy-crypto  kevy-noise
+L0  kevy-alloc  kevy-hash  kevy-ring  kevy-sys  kevy-uring  kevy-time  kevy-num  kevy-crypto  kevy-noise
     kevy-geo  kevy-text  kevy-vector  kevy-ranktree  kevy-compress
     kevy-config  kevy-madvise  kevy-tmpdir  kevy-lua  kevy-scope
     kevy-chaos  kevy-bench  kevy-testnet  kevy-pubsub-bench

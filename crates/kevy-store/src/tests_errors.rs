@@ -30,6 +30,11 @@ fn every_store_error_has_its_wire_line_and_its_message() {
         (StoreError::NoSuchKey, "ERR no such key", "no such key"),
         (StoreError::NotFloat, "ERR value is not a valid float", "value is not a valid float"),
         (
+            StoreError::ScoreIsNan,
+            "ERR resulting score is not a number (NaN)",
+            "resulting score is not a number (NaN)",
+        ),
+        (
             StoreError::OutOfMemory,
             "OOM command not allowed when used memory > 'maxmemory'.",
             "maxmemory reached and the eviction policy is noeviction",

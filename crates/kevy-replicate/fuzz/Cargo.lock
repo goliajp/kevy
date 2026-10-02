@@ -76,6 +76,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-num"
+version = "7.0.0"
+
+[[package]]
 name = "kevy-replicate"
 version = "7.0.0"
 dependencies = [
@@ -97,6 +101,7 @@ name = "kevy-resp"
 version = "7.0.0"
 dependencies = [
  "kevy-bytes",
+ "kevy-num",
 ]
 
 [[package]]

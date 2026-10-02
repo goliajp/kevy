@@ -10,8 +10,9 @@ use crate::{Effect, changed};
 
 const ERR_TYPE: &str = "ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
 const ERR_OFFSET: &str = "ERR bit offset is not an integer or out of range";
-/// The furthest bit a field may start at: a 512 MB string.
-const MAX_OFFSET: u64 = 512 * 1024 * 1024 * 8;
+/// The first bit offset a field may not start at: the bits of a 512 MB
+/// string. A field starting just below it may still run past it.
+const OFFSET_LIMIT: u64 = 512 * 1024 * 1024 * 8;
 
 /// One command of this group; `None` = not in the group.
 pub(crate) fn exec<A: ArgvView + ?Sized>(
@@ -109,7 +110,7 @@ fn offset(b: &[u8], t: BitType) -> Result<u64, &'static str> {
     let n: u64 =
         core::str::from_utf8(digits).ok().and_then(|s| s.parse().ok()).ok_or(ERR_OFFSET)?;
     let off = if fields { n.checked_mul(u64::from(t.bits())).ok_or(ERR_OFFSET)? } else { n };
-    if off > MAX_OFFSET {
+    if off >= OFFSET_LIMIT {
         return Err(ERR_OFFSET);
     }
     Ok(off)
