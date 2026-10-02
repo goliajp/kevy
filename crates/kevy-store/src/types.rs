@@ -120,6 +120,17 @@ pub enum StoreError {
     /// assert_eq!(s.incr_by_float(b"k", 1.0), Err(StoreError::NotFloat));
     /// ```
     NotFloat,
+    /// An increment would leave a score that is not a number — an infinity
+    /// added to its opposite (ZINCRBY, ZADD INCR). Nothing is written.
+    ///
+    /// ```
+    /// use kevy_store::{Store, StoreError};
+    /// let mut s = Store::new();
+    /// s.zincrby(b"z", f64::INFINITY, b"m").unwrap();
+    /// assert_eq!(s.zincrby(b"z", f64::NEG_INFINITY, b"m"), Err(StoreError::ScoreIsNan));
+    /// assert_eq!(s.zscore(b"z", b"m"), Ok(Some(f64::INFINITY)));
+    /// ```
+    ScoreIsNan,
     /// `maxmemory` would be exceeded and the active eviction policy is
     /// [`EvictionPolicy::NoEviction`]. Surfaces as Redis's classic OOM error
     /// at the RESP layer.
@@ -163,6 +174,7 @@ impl StoreError {
             Self::OutOfRange => "ERR index out of range",
             Self::NoSuchKey => "ERR no such key",
             Self::NotFloat => "ERR value is not a valid float",
+            Self::ScoreIsNan => "ERR resulting score is not a number (NaN)",
             Self::OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
             Self::StreamExhausted => {
                 "ERR The stream has exhausted the last possible ID, unable to add more items"
@@ -180,6 +192,7 @@ impl fmt::Display for StoreError {
             Self::OutOfRange => "index out of range",
             Self::NoSuchKey => "no such key",
             Self::NotFloat => "value is not a valid float",
+            Self::ScoreIsNan => "resulting score is not a number (NaN)",
             Self::OutOfMemory => "maxmemory reached and the eviction policy is noeviction",
             Self::StreamExhausted => "the stream has exhausted the last possible ID",
         })

@@ -179,8 +179,8 @@ impl Store {
                     return Ok(None);
                 }
                 let next = old + delta;
-                if !next.is_finite() {
-                    return Err(StoreError::NotFloat);
+                if next.is_nan() {
+                    return Err(StoreError::ScoreIsNan);
                 }
                 if flags.vetoes_update(old, next) {
                     return Ok(None);
@@ -191,9 +191,6 @@ impl Store {
             None => {
                 if flags.condition == SetCondition::IfPresent {
                     return Ok(None);
-                }
-                if !delta.is_finite() {
-                    return Err(StoreError::NotFloat);
                 }
                 self.zadd(key, &[(delta, member)])?;
                 Ok(Some(delta))
