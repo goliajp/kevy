@@ -35,7 +35,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [Tauri apps](docs/tauri.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (237 total)
+## Verbs (238 total)
 
 ### scan
 
@@ -159,6 +159,9 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - `MSET key value [key value ...]` [write] — Set multiple key/value pairs atomically per shard.
   - complexity: O(N) pairs, one O(1) SET each
   - compat: differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic
+- `MSETNX key value [key value ...]` [write] — Set multiple key/value pairs, only if none of the keys exists.
+  - complexity: O(N) pairs
+  - compat: differs: keys on different shards are checked and then set, so another client may create one of them in between; co-locate the keys with a {hashtag} for Redis's atomic form
 - `PSETEX key milliseconds value` [write] — Set a key's value with a TTL in milliseconds.
   - complexity: O(1)
   - compat: full
