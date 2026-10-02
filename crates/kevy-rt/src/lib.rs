@@ -140,6 +140,7 @@ mod exec_rename;
 mod exec_replwait;
 mod exec_scan;
 mod exec_slowlog;
+mod exec_smove;
 mod exec_txn;
 mod exec_watch;
 mod exec_xread;

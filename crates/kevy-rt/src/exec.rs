@@ -113,6 +113,13 @@ impl<C: Commands> Shard<C> {
             Route::ReadAcross { first, count } if self.one_shard(args, first..first + count) => {
                 Route::Single(first)
             }
+            Route::SetMove
+                if args.len() == 4 && self.shard_of(&args[1]) == self.shard_of(&args[2]) =>
+            {
+                Route::Single(1)
+            }
+            // a malformed call runs where it came, to answer its error
+            Route::SetMove if args.len() != 4 => Route::Local,
             Route::StoreFromCopies { first, count, dst }
                 if self.one_shard(args, first..first + count)
                     && self.shard_of(&args[dst]) == self.shard_of(&args[first]) =>
@@ -137,6 +144,7 @@ impl<C: Commands> Shard<C> {
                     crate::exec_read_across::Across { keys: first..first + count, dst: None };
                 self.start_read_across(conn_id, seq, args, across, is_quit, cluster_conn);
             }
+            Route::SetMove => self.start_set_move(conn_id, seq, args, is_quit, cluster_conn),
             Route::StoreFromCopies { first, count, dst } => {
                 let across =
                     crate::exec_read_across::Across { keys: first..first + count, dst: Some(dst) };

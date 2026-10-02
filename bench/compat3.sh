@@ -394,6 +394,19 @@ check ZRANGESTORE zrdst zrr 0 -1 WITHSCORES
 check ZRANGESTORE zrdst b6str 0 -1
 check ZRANGESTORE b6str zrr 0 -1
 check TYPE b6str
+check SADD sm1 a b
+check SADD sm2 x
+check SMOVE sm1 sm2 a
+check SMOVE sm1 sm2 nope
+check SMOVE sm1 smnew b
+check SMEMBERS smnew
+check SMOVE sm2 sm2 x
+check SMOVE sm2 sm2 nope
+check SMOVE sm2 rk1 x
+check SMOVE sm2 rk1 nope
+check SMOVE rk1 sm2 x
+check SMOVE smnokey rk1 x
+check SMOVE sm1 sm2
 
 # --- expanded coverage (2026-05-26): gap commands ---
 # string / expiry variants (TTL checked immediately so it's still deterministic;

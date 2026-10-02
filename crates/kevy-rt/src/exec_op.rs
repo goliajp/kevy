@@ -422,6 +422,11 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::SetMoveCheck(key) => Part::Int(i64::from(self.store.scard(&key).is_ok())),
+            Op::SetMoveTake { src, member, dst_is_set } => {
+                self.op_set_move_take(&src, &member, dst_is_set)
+            }
+            Op::SetMovePut { key, member } => self.op_set_move_put(&key, &member),
             Op::StoreValue { key, value, event, class } => {
                 self.op_store_value(key, value, &event, class)
             }

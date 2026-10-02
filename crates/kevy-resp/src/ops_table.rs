@@ -265,6 +265,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SPOP",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
     op("SRANDMEMBER",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("SREM",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
+    op("SMOVE",        WR, GROW, Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
     op("SSCAN",        RD, NG,   None,            None,    SERVER),
     op("SUNION",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),

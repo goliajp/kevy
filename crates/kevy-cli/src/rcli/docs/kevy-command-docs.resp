@@ -1,4 +1,4 @@
-*472
+*474
 $4
 KEYS
 *14
@@ -3209,6 +3209,38 @@ flags
 *1
 $8
 readonly
+$5
+SMOVE
+*14
+$7
+summary
+$38
+Move a member from one set to another.
+$5
+since
+$5
+7.6.0
+$5
+group
+$3
+set
+$6
+syntax
+$31
+SMOVE source destination member
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$198
+differs: when the two keys live on different shards the member is removed from one and then added to the other, so the move is not atomic; co-locate the keys with a {hashtag} for Redis's atomic form
+$5
+flags
+*1
+$5
+write
 $4
 SPOP
 *14

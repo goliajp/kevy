@@ -19,6 +19,15 @@ pub(crate) enum Agg {
         next: usize,
         got: Option<SmallReply>,
     },
+    /// A cross-shard `SMOVE`: which step it is in, the keys and member,
+    /// and the last step's answer.
+    SetMove {
+        step: u8,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        member: Vec<u8>,
+        answer: i64,
+    },
     /// A [`crate::Route::ReadAcross`] read: the command, and the copies of
     /// its keys as they come in from their shards.
     ReadAcross {

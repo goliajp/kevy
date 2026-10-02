@@ -260,6 +260,23 @@ pub(crate) enum Op {
         argv: Argv,
         proto: RespVersion,
     },
+    /// `SMOVE` step 1, on the destination's shard: is `key` a set or
+    /// absent? Reply [`Part::Int`]: 1 yes, 0 no.
+    SetMoveCheck(Vec<u8>),
+    /// `SMOVE` step 2, on the source's shard: Redis's checks, then the
+    /// removal. Reply [`Part::Int`]: 1 removed, 0 the reply is 0, -1 the
+    /// reply is WRONGTYPE.
+    SetMoveTake {
+        src: Vec<u8>,
+        member: Vec<u8>,
+        dst_is_set: bool,
+    },
+    /// `SMOVE` step 3 (and its undo): add `member` to `key`. Reply
+    /// [`Part::Int`]: 1 added or there, -1 `key` is not a set.
+    SetMovePut {
+        key: Vec<u8>,
+        member: Vec<u8>,
+    },
     /// Place a value computed elsewhere at `key`, replacing whatever it
     /// held, and announce it as `event` of `class`. Reply [`Part::Ok`].
     StoreValue {

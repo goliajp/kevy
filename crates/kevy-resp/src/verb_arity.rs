@@ -202,6 +202,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("SLAVEOF", 3),
     ("SLOWLOG", -2),
     ("SMEMBERS", 2),
+    ("SMOVE", 4),
     ("SPOP", -2),
     ("SRANDMEMBER", -2),
     ("SREM", -3),

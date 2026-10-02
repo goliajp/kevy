@@ -374,6 +374,18 @@ pub enum Route {
         /// How many there are.
         count: usize,
     },
+    /// `SMOVE src dst member`. Keys on one shard run there as sent; keys
+    /// apart move the member in three steps — the destination's type, the
+    /// source's checks and removal, the destination's add — putting the
+    /// member back if the destination turned out not to be a set.
+    ///
+    /// ```
+    /// use kevy_rt::Route;
+    ///
+    /// let route = Route::SetMove;
+    /// assert_ne!(route, Route::Single(1));
+    /// ```
+    SetMove,
     /// [`Route::ReadAcross`] for a command that writes its result to the
     /// key at `dst` — `ZRANGESTORE`. When the keys are apart the result is
     /// computed over copies, then placed on `dst`'s shard (or `dst`
