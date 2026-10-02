@@ -67,7 +67,7 @@ impl Store {
         Ok(new_len)
     }
 
-    /// `BITOP AND|OR|XOR|NOT destkey srckey [srckey ...]` — bitwise
+    /// `BITOP AND|OR|XOR|NOT|DIFF|DIFF1|ANDOR|ONE destkey srckey [srckey ...]` — bitwise
     /// op across N source keys, stored at `destkey`. Returns the
     /// destination string length (= longest source length, with
     /// shorter sources zero-padded). For `Not`, exactly one source
@@ -79,6 +79,11 @@ impl Store {
         }
         if matches!(op, BitOp::Not) && srcs.len() != 1 {
             return Err(KevyError::InvalidInput("BITOP NOT takes exactly one source key".into()));
+        }
+        if srcs.len() < op.min_sources() {
+            return Err(KevyError::InvalidInput(format!(
+                "BITOP {op:?} takes two source keys or more"
+            )));
         }
         // Read each source (own each as Vec<u8>) — set-algebra style.
         let mut srcs_bytes: Vec<Vec<u8>> = Vec::with_capacity(srcs.len());

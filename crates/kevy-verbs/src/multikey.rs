@@ -186,8 +186,8 @@ fn parse_numkeys(b: &[u8]) -> Result<usize, CmdError> {
         .ok_or("ERR numkeys should be greater than 0")?)
 }
 
-/// `BITOP <AND|OR|XOR|NOT> dst src [src …]`: the operation; the
-/// destination is argument 2, the sources the rest.
+/// `BITOP <AND|OR|XOR|NOT|DIFF|DIFF1|ANDOR|ONE> dst src [src …]`: the
+/// operation; the destination is argument 2, the sources the rest.
 ///
 /// ```
 /// use kevy_resp::Argv;
@@ -207,10 +207,21 @@ pub fn parse_bitop<A: ArgvView + ?Sized>(args: &A) -> Result<BitOp, CmdError> {
         b"OR" => BitOp::Or,
         b"XOR" => BitOp::Xor,
         b"NOT" => BitOp::Not,
+        b"DIFF" => BitOp::Diff,
+        b"DIFF1" => BitOp::Diff1,
+        b"ANDOR" => BitOp::AndOr,
+        b"ONE" => BitOp::One,
         _ => return Err(CmdError::Wire("ERR syntax error")),
     };
     if op == BitOp::Not && args.len() != 4 {
         return Err(CmdError::Wire("ERR BITOP NOT must be called with a single source key."));
+    }
+    if args.len() - 3 < op.min_sources() {
+        return Err(CmdError::Wire(match op {
+            BitOp::Diff => "ERR BITOP DIFF must be called with at least two source keys.",
+            BitOp::Diff1 => "ERR BITOP DIFF1 must be called with at least two source keys.",
+            _ => "ERR BITOP ANDOR must be called with at least two source keys.",
+        }));
     }
     Ok(op)
 }

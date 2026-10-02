@@ -848,16 +848,16 @@ $6
 string
 $6
 syntax
-$42
-BITOP AND|OR|XOR|NOT destkey key [key ...]
+$77
+BITOP AND | OR | XOR | NOT | DIFF | DIFF1 | ANDOR | ONE destkey key [key ...]
 $10
 complexity
 $134
 O(N) over the longest source; on a multi-shard server each source is read on its own shard and the result written on the destination's
 $6
 compat
-$81
-differs: the DIFF / DIFF1 / ANDOR / ONE operators of Redis 8.2 are a syntax error
+$231
+differs: when the keys live on different shards each source is read on its own shard and the result placed on the destination's, so the write is not atomic with the reads; co-locate the keys with a {hashtag} for Redis's atomic form
 $5
 flags
 *1
@@ -868,8 +868,8 @@ BITCOUNT
 *14
 $7
 summary
-$57
-Count set bits in a string, optionally over a byte range.
+$64
+Count set bits in a string, optionally over a byte or bit range.
 $5
 since
 $5
@@ -880,16 +880,16 @@ $6
 string
 $6
 syntax
-$24
-BITCOUNT key [start end]
+$37
+BITCOUNT key [start end [BYTE | BIT]]
 $10
 complexity
 $27
 O(N) over the counted bytes
 $6
 compat
-$94
-differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+$4
+full
 $5
 flags
 *1
@@ -912,16 +912,16 @@ $6
 string
 $6
 syntax
-$28
-BITPOS key bit [start [end]]
+$41
+BITPOS key bit [start [end [BYTE | BIT]]]
 $10
 complexity
 $27
 O(N) over the scanned bytes
 $6
 compat
-$94
-differs: the BYTE / BIT unit argument of Redis 7.0 is not accepted — ranges are byte offsets
+$4
+full
 $5
 flags
 *1
