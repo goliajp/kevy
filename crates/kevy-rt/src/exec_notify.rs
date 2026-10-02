@@ -99,9 +99,15 @@ impl<C: Commands> Shard<C> {
         match asked {
             None => self.notify_by_verb(args),
             Some(crate::propagation::Notify::Events(events)) => {
+                // an emptied key's `del` follows the first event that names
+                // it, as Redis interleaves them (`srem`, `del`, `sadd`)
                 for (class, event, key) in events {
                     if class_enabled(class, &self.notify_flags) {
                         self.notify_keyspace_event(event.as_bytes(), &key);
+                    }
+                    if let Some(at) = emptied.iter().position(|k| *k == key) {
+                        let k = emptied.swap_remove(at);
+                        self.notify_keyspace_event(b"del", &k);
                     }
                 }
             }

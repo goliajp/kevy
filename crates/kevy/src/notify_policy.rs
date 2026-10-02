@@ -49,6 +49,10 @@ fn events<A: ArgvView + ?Sized>(
         }
         // an empty range removes the destination, which is a `del`
         (b"ZRANGESTORE", _) if reply == b":0\r\n" => one(NotifyKind::Generic, "del", &args[1]),
+        (b"SMOVE", _) => Some(Notify::Events(vec![
+            (NotifyKind::Set, "srem", args[1].to_vec()),
+            (NotifyKind::Set, "sadd", args[2].to_vec()),
+        ])),
         (b"LPUSHX", _) => one(NotifyKind::List, "lpush", &args[1]),
         (b"RPUSHX", _) => one(NotifyKind::List, "rpush", &args[1]),
         // every field-TTL setter is an `hexpire`, unless its deadline had

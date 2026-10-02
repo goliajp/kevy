@@ -34,6 +34,7 @@ mod mpop;
 mod read_across;
 mod set;
 mod shared;
+mod smove;
 mod strings;
 #[cfg(feature = "index")]
 mod table;
@@ -68,6 +69,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         || zset_algebra::dispatch(s, up, argv, out)
         || mpop::dispatch(s, up, argv, out)
         || read_across::dispatch(s, up, argv, out)
+        || smove::dispatch(s, up, argv, out)
         || bitmap::dispatch(s, up, argv, out)
         || keyspace::dispatch(s, up, argv, out)
         || shared::dispatch(s, up, argv, out)
@@ -193,6 +195,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "SETNX",
     "SETRANGE",
     "SINTERCARD",
+    "SMOVE",
     "STRLEN",
     // bitmap
     "BITCOUNT",

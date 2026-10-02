@@ -317,3 +317,26 @@ fn zrangestore_places_the_range_on_the_destinations_shard() {
     let r = call(&mut c, &[b"ZRANGESTORE", dst, src, b"0", b"-1", b"WITHSCORES"]);
     assert_eq!(r, b"-ERR syntax error\r\n");
 }
+
+/// `SMOVE` between sets on different shards, in Redis's order of checks.
+#[test]
+fn smove_moves_a_member_between_shards_in_redis_order() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let k = apart("sm", 3);
+    let (src, dst, str_key) = (b(&k[0]), b(&k[1]), b(&k[2]));
+    call(&mut c, &[b"SADD", src, b"a", b"b"]);
+    assert_eq!(call(&mut c, &[b"SMOVE", src, dst, b"a"]), b":1\r\n");
+    assert_eq!(call(&mut c, &[b"SISMEMBER", dst, b"a"]), b":1\r\n");
+    assert_eq!(call(&mut c, &[b"SISMEMBER", src, b"a"]), b":0\r\n");
+    assert_eq!(call(&mut c, &[b"SMOVE", src, dst, b"nope"]), b":0\r\n");
+    call(&mut c, &[b"SET", str_key, b"v"]);
+    let r = call(&mut c, &[b"SMOVE", src, str_key, b"b"]);
+    assert!(r.starts_with(b"-WRONGTYPE"), "{r:?}");
+    assert_eq!(call(&mut c, &[b"SISMEMBER", src, b"b"]), b":1\r\n", "b stays where it was");
+    let r = call(&mut c, &[b"SMOVE", src, str_key, b"nope"]);
+    assert!(r.starts_with(b"-WRONGTYPE"), "the destination's type is checked first: {r:?}");
+    assert_eq!(call(&mut c, &[b"SMOVE", b"sm-none", str_key, b"b"]), b":0\r\n");
+    assert_eq!(call(&mut c, &[b"SMOVE", src, dst, b"b"]), b":1\r\n");
+    assert_eq!(call(&mut c, &[b"EXISTS", src]), b":0\r\n", "the emptied source goes");
+}

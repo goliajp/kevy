@@ -32,6 +32,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "SETNX",
     "SETRANGE",
     "SINTERCARD",
+    "SMOVE",
     "STRLEN",
     // bitmap
     "BITCOUNT",

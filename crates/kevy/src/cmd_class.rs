@@ -74,9 +74,8 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyKind> {
         b"LPUSH" | b"RPUSH" | b"LPUSHX" | b"RPUSHX" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM"
         | b"LTRIM" | b"LINSERT" | b"RPOPLPUSH" | b"LMOVE" => NotifyKind::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
-        b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE" | b"SDIFFSTORE" => {
-            NotifyKind::Set
-        }
+        b"SADD" | b"SREM" | b"SMOVE" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
+        | b"SDIFFSTORE" => NotifyKind::Set,
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
         b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMAX" | b"ZPOPMIN.BELOW"
@@ -150,6 +149,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"LMOVE"
             | b"BLMOVE"
             | b"ZRANGESTORE"
+            | b"SMOVE"
             | b"LPUSHX"
             | b"RPUSHX"
             | b"LSET"

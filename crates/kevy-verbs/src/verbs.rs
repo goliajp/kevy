@@ -184,6 +184,7 @@ registry! {
     b"SINTERCARD" RD,
     b"SISMEMBER" RD,
     b"SMEMBERS" RD,
+    b"SMOVE" WR,
     b"SPOP" WR,
     b"SRANDMEMBER" RD,
     b"SREM" WR,
