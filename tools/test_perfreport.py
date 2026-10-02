@@ -51,6 +51,16 @@ class Counters(unittest.TestCase):
         self.assertEqual(got["cycles"], 3000)
         self.assertNotIn("raw_syscalls:sys_enter", got)
 
+    def test_cache_misses_are_read_when_counted_and_optional_when_not(self):
+        counted = PERF_X86 + "2000000,,LLC-load-misses,100,100.00,,\n"
+        self.assertEqual(pr.parse_perfstat(counted)["LLC-load-misses"], 2e6)
+        unsupported = PERF_X86 + "<not supported>,,LLC-load-misses,0,100.00,,\n"
+        got = pr.parse_perfstat(unsupported)
+        self.assertIsNotNone(got)
+        self.assertIsNone(got["LLC-load-misses"])
+        w = window(perf=counted)
+        self.assertAlmostEqual(pr.window_lines(w)["llc"], 2e6 / w["secs"] / 1e6)
+
     def test_a_missing_required_counter_is_none(self):
         text = PERF_X86.replace("cycles", "bogus")
         self.assertIsNone(pr.parse_perfstat(text))

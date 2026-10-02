@@ -22,9 +22,9 @@ import random
 import statistics
 
 PERF_EVENTS = ("instructions:u", "instructions:k", "cycles", "task-clock",
-               "raw_syscalls:sys_enter")
+               "raw_syscalls:sys_enter", "LLC-load-misses")
 # a counter the box cannot read leaves its column empty instead of the run
-OPTIONAL_EVENTS = ("raw_syscalls:sys_enter",)
+OPTIONAL_EVENTS = ("raw_syscalls:sys_enter", "LLC-load-misses")
 
 # metric -> (label, "cost" when higher is worse, "rate" when lower is worse)
 METRICS = {
@@ -34,6 +34,7 @@ METRICS = {
     "instr_k": ("instr_k/op", "cost"),
     "cycles": ("cyc/op", "cost"),
     "sys": ("sys/op", "cost"),
+    "llc": ("llc/op", "cost"),
     "p95_us": ("p95 µs", "cost"),
 }
 
@@ -131,6 +132,7 @@ def window_lines(w):
         out["instr"] = out["instr_u"] + out["instr_k"]
         out["cycles"] = per_op("cycles")
         out["sys"] = per_op("raw_syscalls:sys_enter")
+        out["llc"] = per_op("LLC-load-misses")
         out["util"] = perf["task-clock"] / 1000.0 / w["secs"] / len(srv)
     return out
 
@@ -206,7 +208,7 @@ def fmt_abs(v, metric):
         return "—"
     if metric == "ops":
         return f"{v / 1e6:.2f}M"
-    if metric == "sys":
+    if metric in ("sys", "llc"):
         return f"{v:.3f}"
     return f"{v:.0f}"
 
