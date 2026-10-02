@@ -110,6 +110,99 @@ impl ClientKillFilter {
     }
 }
 
+/// Which clients a `CLIENT LIST` shows: all of them, one type, or some
+/// ids.
+///
+/// ```
+/// use kevy_rt::{Argv, ClientListFilter};
+///
+/// let argv = |s: &str| Argv::from(s.split(' ').map(|p| p.as_bytes().to_vec()).collect::<Vec<_>>());
+/// assert_eq!(ClientListFilter::parse(&argv("CLIENT LIST")), Ok(ClientListFilter::All));
+/// assert_eq!(ClientListFilter::parse(&argv("CLIENT LIST type PubSub")), Ok(ClientListFilter::PubSub));
+/// assert_eq!(ClientListFilter::parse(&argv("CLIENT LIST ID 3 -1")), Ok(ClientListFilter::Ids(vec![3, -1])));
+/// assert_eq!(
+///     ClientListFilter::parse(&argv("CLIENT LIST TYPE foo")).unwrap_err(),
+///     "ERR Unknown client type 'foo'",
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ClientListFilter {
+    /// No filter.
+    ///
+    /// ```
+    /// assert_ne!(kevy_rt::ClientListFilter::All, kevy_rt::ClientListFilter::Normal);
+    /// ```
+    All,
+    /// `TYPE normal`: the clients holding no subscription.
+    ///
+    /// ```
+    /// assert_ne!(kevy_rt::ClientListFilter::Normal, kevy_rt::ClientListFilter::PubSub);
+    /// ```
+    Normal,
+    /// `TYPE pubsub`: the clients holding a subscription, in either
+    /// protocol.
+    ///
+    /// ```
+    /// assert_ne!(kevy_rt::ClientListFilter::PubSub, kevy_rt::ClientListFilter::Replication);
+    /// ```
+    PubSub,
+    /// `TYPE master | replica | slave`: replication runs over links of its
+    /// own, never a client connection, so these list none.
+    ///
+    /// ```
+    /// assert_ne!(kevy_rt::ClientListFilter::Replication, kevy_rt::ClientListFilter::All);
+    /// ```
+    Replication,
+    /// `ID id [id …]`; an id no connection has (0, a negative one) lists
+    /// none.
+    ///
+    /// ```
+    /// assert_ne!(kevy_rt::ClientListFilter::Ids(vec![1]), kevy_rt::ClientListFilter::All);
+    /// ```
+    Ids(Vec<i64>),
+}
+
+impl ClientListFilter {
+    /// Read the argv of `CLIENT LIST …`, refusing as Redis refuses: an
+    /// unknown type by name, a non-integer id, any other shape as a syntax
+    /// error.
+    pub fn parse<A: ArgvView + ?Sized>(args: &A) -> Result<Self, String> {
+        let word = |i: usize| args.get(i).map(<[u8]>::to_ascii_uppercase);
+        match (args.len(), word(2).as_deref()) {
+            (2, _) => Ok(Self::All),
+            (4, Some(b"TYPE")) => match word(3).as_deref() {
+                Some(b"NORMAL") => Ok(Self::Normal),
+                Some(b"PUBSUB") => Ok(Self::PubSub),
+                Some(b"MASTER" | b"REPLICA" | b"SLAVE") => Ok(Self::Replication),
+                _ => {
+                    Err(format!("ERR Unknown client type '{}'", String::from_utf8_lossy(&args[3])))
+                }
+            },
+            (4.., Some(b"ID")) => (3..args.len())
+                .map(|i| std::str::from_utf8(&args[i]).ok().and_then(|s| s.parse().ok()))
+                .collect::<Option<Vec<i64>>>()
+                .map(Self::Ids)
+                .ok_or_else(|| "ERR Invalid client ID".to_string()),
+            _ => Err("ERR syntax error".to_string()),
+        }
+    }
+
+    fn admits(&self, id: u64, conn: &Conn) -> bool {
+        match self {
+            Self::All => true,
+            Self::Normal => !is_pubsub(conn),
+            Self::PubSub => is_pubsub(conn),
+            Self::Replication => false,
+            Self::Ids(ids) => ids.iter().any(|&want| u64::try_from(want) == Ok(id)),
+        }
+    }
+}
+
+fn is_pubsub(conn: &Conn) -> bool {
+    !conn.sub.is_empty() || !conn.psub.is_empty()
+}
+
 /// Render one `CLIENT LIST` / `CLIENT INFO` row into `out`. The field
 /// set mirrors the Redis 7.x shape; fields kevy keeps no per-conn
 /// state for are reported at their idle defaults (`cmd=NULL` — the
@@ -120,7 +213,7 @@ pub(crate) fn client_row(id: u64, conn: &Conn, out: &mut Vec<u8>) {
     let _ = writeln!(
         s,
         "id={id} addr={}:{} laddr=0.0.0.0:0 fd={} name={} age={} idle=0 \
-         flags=N db=0 sub={} psub={} ssub=0 multi={} watch={} qbuf={} \
+         flags={} db=0 sub={} psub={} ssub=0 multi={} watch={} qbuf={} \
          qbuf-free=0 argv-mem=0 multi-mem=0 tot-mem=0 rbs=0 rbp=0 obl={} \
          oll=0 omem=0 events=r cmd=NULL user=default redir=-1 resp={} \
          lib-name= lib-ver=",
@@ -129,6 +222,7 @@ pub(crate) fn client_row(id: u64, conn: &Conn, out: &mut Vec<u8>) {
         conn.sock.raw(),
         String::from_utf8_lossy(&conn.client_name),
         conn.created.elapsed().as_secs(),
+        if is_pubsub(conn) { "P" } else { "N" },
         conn.sub.len(),
         conn.psub.len(),
         conn.multi.as_ref().map_or(-1, |q| q.len() as i64),
@@ -146,10 +240,10 @@ pub(crate) fn client_row(id: u64, conn: &Conn, out: &mut Vec<u8>) {
 impl<C: Commands> Shard<C> {
     /// `Op::ClientList` — render every real client conn on this shard
     /// (cluster-bus links excluded: infra, not clients).
-    pub(crate) fn exec_client_list(&mut self) -> Part {
+    pub(crate) fn exec_client_list(&mut self, filter: &ClientListFilter) -> Part {
         let mut text = Vec::with_capacity(self.conns.len() * 192);
         for (id, conn) in &self.conns {
-            if conn.cluster {
+            if conn.cluster || !filter.admits(*id, conn) {
                 continue;
             }
             client_row(*id, conn, &mut text);

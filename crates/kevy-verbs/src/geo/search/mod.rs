@@ -4,26 +4,18 @@
 //! with the legacy `GEORADIUS[BYMEMBER]` family in `radius.rs`.
 //!
 //! Sub-modules:
-//! - `parse` — argv-soup → structured `Opts` for GEOSEARCH /
-//!   GEOSEARCHSTORE / legacy GEORADIUS. Kept separate so this file
-//!   stays under the project's ≤500-LOC limit.
+//! - `parse` — the arguments, read against the source key as Redis
+//!   reads them.
 
 mod parse;
 
-pub(super) use parse::{
-    GeoError, bad_pair, center, extent, parse_legacy_radius, parse_opts, parse_opts_at,
-};
+pub(super) use parse::{Form, GeoError, Query, bad_pair, plan};
 
 use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges};
 use kevy_resp::{
-    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
-    encode_integer,
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_integer,
 };
 use kevy_store::{ScoreBound, Store};
-
-use crate::reply::{store_err, wrong_args};
-
-use super::score_to_point;
 
 /// `GEOSEARCH key <FROMMEMBER member|FROMLONLAT lon lat>
 /// <BYRADIUS r unit|BYBOX w h unit> [ASC|DESC] [COUNT n [ANY]]
@@ -34,38 +26,28 @@ pub(crate) fn cmd_geosearch<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
     proto: RespVersion,
 ) {
-    if args.len() < 4 {
-        return wrong_args(out, "geosearch");
-    }
-    let opts = match parse_opts(args) {
-        Ok(o) => Opts { proto, ..o },
-        Err(e) => return e.emit(out),
-    };
-    let key = args[1].to_vec();
-    let hits = match run_search(store, &key, &opts) {
-        Ok(h) => h,
-        Err(SearchError::NoMember) => {
-            return encode_error(out, "ERR could not decode requested zset member");
+    match plan(store, args, Form::Search) {
+        Ok(mut q) => {
+            q.opts.proto = proto;
+            let hits = run_search(store, &q).unwrap_or_default();
+            emit_reply(&hits, &q.opts, out);
         }
-        Err(SearchError::Store(e)) => return store_err(out, e),
-    };
-    emit_reply(&hits, &opts, out);
+        Err(e) => e.emit(&args[0], out),
+    }
 }
 
-/// Shared search core: resolves the centre, fans out over the candidate
-/// neighbour ranges, filters by exact shape, then applies sort + count.
-/// Used directly by `GEOSEARCH` for its reply path and indirectly by
-/// `GEOSEARCHSTORE` / `GEORADIUS*` (sprint C) for theirs.
-pub(super) fn run_search(
-    store: &mut Store,
-    key: &[u8],
-    opts: &Opts,
-) -> Result<Vec<Hit>, SearchError> {
-    let (clon, clat) = resolve_center(store, key, &opts.from)?;
-    let ranges = neighbor_score_ranges(clon, clat, opts.shape.bounding_radius_meters());
-    let mut hits = collect_hits(store, key, &ranges, clon, clat, opts)?;
-    apply_sort(&mut hits, opts.sort);
-    apply_count(&mut hits, opts.sort, opts.count, opts.any);
+/// Shared search core: fans out over the candidate neighbour ranges
+/// around the centre, filters by exact shape, then applies sort + count.
+/// A missing source key finds nothing.
+pub(super) fn run_search(store: &mut Store, q: &Query) -> Result<Vec<Hit>, kevy_store::StoreError> {
+    if q.src_missing {
+        return Ok(Vec::new());
+    }
+    let (clon, clat) = q.opts.center;
+    let ranges = neighbor_score_ranges(clon, clat, q.opts.shape.bounding_radius_meters());
+    let mut hits = collect_hits(store, &q.src, &ranges, &q.opts)?;
+    apply_sort(&mut hits, q.opts.sort);
+    apply_count(&mut hits, q.opts.sort, q.opts.count, q.opts.any);
     Ok(hits)
 }
 
@@ -75,11 +57,10 @@ pub(super) fn run_search(
 /// on the SOURCE's shard and ships these pairs to the DESTINATION's shard.
 pub(super) fn search_pairs(
     store: &mut Store,
-    key: &[u8],
-    opts: &Opts,
-) -> Result<Vec<(Vec<u8>, f64)>, SearchError> {
-    let hits = run_search(store, key, opts)?;
-    Ok(store_pairs(&hits, opts))
+    q: &Query,
+) -> Result<Vec<(Vec<u8>, f64)>, kevy_store::StoreError> {
+    let hits = run_search(store, q)?;
+    Ok(store_pairs(&hits, &q.opts))
 }
 
 /// `STOREDIST` stores the distance **in the unit the query asked for** — a
@@ -95,23 +76,7 @@ fn store_pairs(hits: &[Hit], opts: &Opts) -> Vec<(Vec<u8>, f64)> {
         .collect()
 }
 
-pub(super) enum SearchError {
-    NoMember,
-    Store(kevy_store::StoreError),
-}
-
-impl From<kevy_store::StoreError> for SearchError {
-    fn from(e: kevy_store::StoreError) -> Self {
-        SearchError::Store(e)
-    }
-}
-
 // ───────────── options ─────────────
-
-pub(super) enum Anchor {
-    Member(Vec<u8>),
-    LonLat(f64, f64),
-}
 
 #[derive(Clone, Copy)]
 enum Shape {
@@ -140,7 +105,8 @@ enum Sort {
 }
 
 pub(super) struct Opts {
-    from: Anchor,
+    /// The centre, `(lon, lat)`, its member already looked up.
+    center: (f64, f64),
     shape: Shape,
     /// Unit multiplier (metres per unit) for the `BYRADIUS r unit` /
     /// `BYBOX w h unit` argument; reapplied when formatting `WITHDIST`.
@@ -168,23 +134,10 @@ pub(super) struct Hit {
     pub(super) dist_m: f64,
 }
 
-fn resolve_center(store: &mut Store, key: &[u8], from: &Anchor) -> Result<(f64, f64), SearchError> {
-    match from {
-        Anchor::Member(m) => match score_to_point(store, key, m) {
-            Ok(Some(p)) => Ok(p),
-            Ok(None) => Err(SearchError::NoMember),
-            Err(e) => Err(SearchError::Store(e)),
-        },
-        Anchor::LonLat(lon, lat) => Ok((*lon, *lat)),
-    }
-}
-
 fn collect_hits(
     store: &mut Store,
     key: &[u8],
     ranges: &[(f64, f64)],
-    clon: f64,
-    clat: f64,
     opts: &Opts,
 ) -> Result<Vec<Hit>, kevy_store::StoreError> {
     let mut hits = Vec::new();
@@ -192,29 +145,28 @@ fn collect_hits(
         let members =
             store.zrange_by_score(key, ScoreBound::inclusive(*min), ScoreBound::inclusive(*max))?;
         for (member, score) in members {
-            let (mlon, mlat) = decode_score(score);
-            if !in_shape(opts.shape, clon, clat, mlon, mlat) {
-                continue;
+            if let Some(dist_m) = within(opts.shape, opts.center, decode_score(score)) {
+                hits.push(Hit { member, score, dist_m });
             }
-            let dist_m = haversine_meters(clon, clat, mlon, mlat);
-            hits.push(Hit { member, score, dist_m });
         }
     }
     Ok(hits)
 }
 
-fn in_shape(shape: Shape, clon: f64, clat: f64, mlon: f64, mlat: f64) -> bool {
-    match shape {
-        Shape::Radius { r_m } => haversine_meters(clon, clat, mlon, mlat) <= r_m,
-        Shape::Box { w_m, h_m } => {
-            // On-ground rectangle: project ∆lat/∆lon to metres and
-            // compare against half-axes. The lon component shrinks by
-            // cos(lat) at higher latitudes (the standard small-box
-            // approximation Redis uses).
-            let dlat_m = (mlat - clat).to_radians() * EARTH_RADIUS_METERS;
-            let dlon_m = (mlon - clon).to_radians() * EARTH_RADIUS_METERS * clat.to_radians().cos();
-            dlat_m.abs() <= h_m / 2.0 && dlon_m.abs() <= w_m / 2.0
+/// The distance from the centre to `point` when the point is inside the
+/// shape, worked out as Redis works it out: a box checks the latitude
+/// distance, then the longitude distance at the point's own latitude.
+fn within(shape: Shape, (clon, clat): (f64, f64), (plon, plat): (f64, f64)) -> Option<f64> {
+    if let Shape::Box { w_m, h_m } = shape {
+        let lat_m = EARTH_RADIUS_METERS * (clat.to_radians() - plat.to_radians()).abs();
+        if lat_m > h_m / 2.0 || haversine_meters(plon, plat, clon, plat) > w_m / 2.0 {
+            return None;
         }
+    }
+    let d = haversine_meters(clon, clat, plon, plat);
+    match shape {
+        Shape::Radius { r_m } if d > r_m => None,
+        _ => Some(d),
     }
 }
 
@@ -252,16 +204,6 @@ fn apply_count(hits: &mut Vec<Hit>, sort: Sort, count: Option<usize>, any: bool)
     hits.truncate(n);
 }
 
-// ───────────── legacy GEORADIUS option parsing ─────────────
-
-/// Parsed form of a `GEORADIUS[BYMEMBER]` invocation: search-core
-/// `Opts` plus the optional STORE destination it should write into
-/// instead of replying.
-pub(super) struct LegacyRadiusParsed {
-    pub(super) opts: Opts,
-    pub(super) store_dst: Option<Vec<u8>>,
-}
-
 /// What `emit_or_store` did with the hits: emitted them as a wire
 /// reply already, or wrote them into a destination ZSet (returning
 /// the integer count to be encoded by the caller).
@@ -274,7 +216,7 @@ pub(super) fn emit_or_store(
     out: &mut Vec<u8>,
     store: &mut Store,
     hits: &[Hit],
-    parsed: &LegacyRadiusParsed,
+    parsed: &Query,
 ) -> RadiusReply {
     match &parsed.store_dst {
         None => {
@@ -304,32 +246,26 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
-) {
-    let (src, opts) = match plan_geosearchstore(args) {
-        Ok(p) => p,
-        Err(e) => return e.emit(out),
-    };
-    let dst = args[1].to_vec();
-    match search_pairs(store, &src, &opts) {
-        Ok(pairs) => encode_integer(out, store.zstore_result(&dst, &pairs) as i64),
-        Err(SearchError::NoMember) => {
-            encode_error(out, "ERR could not decode requested zset member");
+) -> bool {
+    let q = match plan(store, args, Form::SearchStore) {
+        Ok(q) => q,
+        Err(e) => {
+            e.emit(&args[0], out);
+            return false;
         }
-        Err(SearchError::Store(e)) => store_err(out, e),
+    };
+    match search_pairs(store, &q) {
+        Ok(pairs) => {
+            let dst = &args[1];
+            let changed = !pairs.is_empty() || store.key_exists(dst);
+            encode_integer(out, store.zstore_result(dst, &pairs) as i64);
+            changed
+        }
+        Err(e) => {
+            crate::reply::store_err(out, e);
+            false
+        }
     }
-}
-
-/// `GEOSEARCHSTORE dst src …` → `(source key, options)`. The destination is
-/// argv[1] and belongs to the caller: on a multi-shard server the write lands
-/// on ITS shard, not the source's (see `kevy_rt::Route::GeoStore`).
-pub(super) fn plan_geosearchstore<A: ArgvView + ?Sized>(
-    args: &A,
-) -> Result<(Vec<u8>, Opts), GeoError> {
-    if args.len() < 5 {
-        return Err(GeoError::Wire("ERR wrong number of arguments for 'geosearchstore' command"));
-    }
-    let opts = parse_opts_at(args, 3)?;
-    Ok((args[2].to_vec(), opts))
 }
 
 // ───────────── reply ─────────────

@@ -36,7 +36,12 @@ fn run_table(table: &str) -> usize {
             let argv: Vec<Vec<u8>> = cmd.split('\t').map(unescape).collect();
             let verb = argv[0].to_ascii_uppercase();
             let mut out = Vec::new();
-            kevy_verbs::exec(&mut store, &verb, &kevy_resp::Argv::from(argv), &mut out);
+            let argv = kevy_resp::Argv::from(argv);
+            if kevy_verbs::exec(&mut store, &verb, &argv, &mut out).is_none() {
+                // the _RO geo twins are not in the verb table
+                #[cfg(feature = "streams-geo")]
+                kevy_verbs::geo::exec_read_only(&verb, &mut store, &argv, &mut out);
+            }
             assert_eq!(
                 String::from_utf8_lossy(&out),
                 String::from_utf8_lossy(&unescape(want)),
@@ -59,4 +64,13 @@ fn set_family_matches_redis() {
 #[test]
 fn bitmaps_match_redis() {
     assert_eq!(run_table(include_str!("data/redis_bitmap.txt")), 98);
+}
+
+/// The geo searches' option checks, in Redis's order, and their replies.
+/// A distance read back after STOREDIST is x86-64 Redis's: its aarch64
+/// builds fuse multiply-adds and differ in the last digit.
+#[cfg(feature = "streams-geo")]
+#[test]
+fn geo_searches_match_redis() {
+    assert_eq!(run_table(include_str!("data/redis_geo.txt")), 86);
 }

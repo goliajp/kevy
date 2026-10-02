@@ -65,10 +65,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             search::cmd_geosearch(store, args, out, RespVersion::V2);
             Effect::Read
         }
-        b"GEOSEARCHSTORE" => {
-            search::cmd_geosearchstore(store, args, out);
-            Effect::Write
-        }
+        b"GEOSEARCHSTORE" => crate::changed(search::cmd_geosearchstore(store, args, out)),
         b"GEORADIUS" => radius::cmd_georadius(store, args, out, false, RespVersion::V2),
         b"GEORADIUSBYMEMBER" => {
             radius::cmd_georadiusbymember(store, args, out, false, RespVersion::V2)

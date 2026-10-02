@@ -5607,15 +5607,15 @@ geo
 $6
 syntax
 $143
-GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
+GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key | STOREDIST key]
 $10
 complexity
 $196
 O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination
 $6
 compat
-$108
-differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+$340
+differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1
@@ -5639,15 +5639,15 @@ geo
 $6
 syntax
 $139
-GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]
+GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key | STOREDIST key]
 $10
 complexity
 $89
 O(log N + C) — the seeked nine-cell fetch, same as GEORADIUS; the anchor lookup is O(1)
 $6
 compat
-$108
-differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search
+$340
+differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1
@@ -5678,8 +5678,8 @@ $197
 O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)
 $6
 compat
-$85
-differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error
+$4
+full
 $5
 flags
 *1
@@ -5710,8 +5710,8 @@ $87
 O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard
 $6
 compat
-$238
-differs: STOREDIST stores the distance in the unit the query asked for (Redis does the same); the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read
+$385
+differs: the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read; a STOREDIST distance is computed in Redis's order with the platform's sin and cos, so it matches a Redis built for the same platform to the last digit, while Redis's own aarch64 Linux builds fuse multiply-adds and can differ there
 $5
 flags
 *1
@@ -6060,16 +6060,16 @@ $6
 server
 $6
 syntax
-$80
-CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF
+$141
+CLIENT ID | GETNAME | SETNAME name | LIST [TYPE NORMAL | MASTER | REPLICA | PUBSUB] [ID client-id ...] | KILL filter | INFO | NO-EVICT ON|OFF
 $10
 complexity
 $91
 ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan
 $6
 compat
-$213
-differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown
+$255
+differs: ID / GETNAME / SETNAME / INFO / LIST (TYPE, ID) / KILL (ID, ADDR) / NO-EVICT only, and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown; replication runs over links of its own, so LIST TYPE master / replica lists none
 $5
 flags
 *2
@@ -6356,16 +6356,16 @@ $6
 server
 $6
 syntax
-$22
-SHUTDOWN [NOSAVE|SAVE]
+$46
+SHUTDOWN [NOSAVE | SAVE] [NOW] [FORCE] [ABORT]
 $10
 complexity
 $58
 O(1) to trip the stop flag; the drain that follows is O(N)
 $6
 compat
-$87
-differs: only SHUTDOWN [NOSAVE|SAVE] parses — NOW, FORCE and ABORT are a syntax error
+$263
+differs: no shutdown waits for replicas, so NOW changes nothing and ABORT always answers that no shutdown is in progress; the final snapshot is taken while the process drains, so a failed one does not stop the shutdown — every shutdown behaves as SHUTDOWN FORCE
 $5
 flags
 *2
