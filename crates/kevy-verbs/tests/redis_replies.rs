@@ -132,3 +132,9 @@ fn stream_trims_over_nodes_match_redis() {
     }
     assert_eq!(checked, 40);
 }
+
+/// `SINTERCARD` checks every key's type before a missing set answers 0.
+#[test]
+fn sintercard_matches_redis() {
+    assert_eq!(run_table(include_str!("data/redis_sintercard.txt")), 8);
+}

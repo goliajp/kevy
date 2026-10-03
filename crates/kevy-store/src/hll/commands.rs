@@ -1,8 +1,8 @@
 //! PFADD, PFCOUNT and PFMERGE.
 
 use super::{
-    DENSE, HDR, REGISTERS, SPARSE, cached, dense_set, estimate, histogram, invalidate, merge_into,
-    new_sparse, place, raise, to_dense,
+    DENSE, DENSE_LEN, HDR, REGISTERS, SPARSE, cached, dense_get, dense_set, estimate, histogram,
+    invalidate, merge_into, new_sparse, place, raise, to_dense,
 };
 use crate::{Store, StoreError};
 
@@ -17,6 +17,26 @@ impl Store {
     /// assert_eq!(s.pfcount(&[b"h"]).unwrap().0, 2);
     /// ```
     pub fn pfadd(&mut self, key: &[u8], elements: &[&[u8]]) -> Result<bool, StoreError> {
+        // a dense sketch only this key holds takes its registers in place
+        if let Some(b) = self.bytes_in_place(key, DENSE_LEN)
+            && b.len() == DENSE_LEN
+            && b.starts_with(b"HYLL")
+            && b[4] == DENSE
+        {
+            let mut raised = false;
+            for e in elements {
+                let (index, count) = place(e);
+                let regs = &mut b[HDR..];
+                if dense_get(regs, index as usize) < count {
+                    dense_set(regs, index as usize, count);
+                    raised = true;
+                }
+            }
+            if raised {
+                invalidate(b);
+            }
+            return Ok(raised);
+        }
         let (mut buf, created) = match self.hll_bytes(key)? {
             Some(b) => (b.into_owned(), false),
             None => (new_sparse(), true),
