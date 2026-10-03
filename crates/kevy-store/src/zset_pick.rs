@@ -4,6 +4,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
+use crate::value::SmallBytes;
 use crate::{Store, StoreError, ZSpan};
 
 impl Store {
@@ -18,17 +19,42 @@ impl Store {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn zpopmax(&mut self, key: &[u8], count: usize) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        if count == 0 {
-            // a wrong-typed key still answers WRONGTYPE
-            self.zcard(key)?;
-            return Ok(Vec::new());
-        }
-        let top = self.zrevrange(key, 0, i64::try_from(count).unwrap_or(i64::MAX) - 1)?;
-        if !top.is_empty() {
-            let members: Vec<&[u8]> = top.iter().map(|(m, _)| m.as_slice()).collect();
-            self.zrem(key, &members)?;
-        }
+        let mut top = Vec::new();
+        self.zpop_each(key, count, true, |m, s| top.push((m.to_vec(), s)))?;
         Ok(top)
+    }
+
+    /// `ZPOPMIN` / `ZPOPMAX` (`max`) of up to `count` members, each handed
+    /// to `f` just before it goes; how many went. A wrong-typed key is an
+    /// error even for a count of 0.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
+    /// let mut got = Vec::new();
+    /// assert_eq!(s.zpop_each(b"z", 2, true, |m, sc| got.push((m.to_vec(), sc)))?, 2);
+    /// assert_eq!(got, [(b"c".to_vec(), 3.0), (b"b".to_vec(), 2.0)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zpop_each(
+        &mut self,
+        key: &[u8],
+        count: usize,
+        max: bool,
+        mut f: impl FnMut(&[u8], f64),
+    ) -> Result<usize, StoreError> {
+        let take = count.min(self.zcard(key)?);
+        for _ in 0..take {
+            // a short member is held inline while the set lets it go
+            let gone = {
+                let mut end = self.zrange_select(key, ZSpan::Rank(0, 0), max, None)?;
+                let Some((m, sc)) = end.next() else { break };
+                f(m, sc);
+                SmallBytes::from_slice(m)
+            };
+            self.zrem(key, &[gone.as_slice()])?;
+        }
+        Ok(take)
     }
 
     /// `ZREVRANK` — the member's rank counted from the highest score.

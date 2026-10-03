@@ -43,42 +43,9 @@ impl Store {
     /// members (ascending by `(score, member)`). Returns `(member,
     /// score)` pairs in pop order; empty when the key is absent / empty.
     pub fn zpopmin(&mut self, key: &[u8], count: usize) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        if count == 0 {
-            // Validate type up-front so ZPOPMIN k 0 against a wrong-type
-            // key still reports WRONGTYPE (Redis behaviour).
-            if let Some(e) = self.live_entry(key) {
-                match &e.value {
-                    Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => {}
-                    _ => return Err(StoreError::WrongType),
-                }
-            }
-            return Ok(Vec::new());
-        }
-        // Snapshot the lowest `count` members first (immutable borrow),
-        // then remove them via the shared zrem path (which handles the
-        // encoding, weight accounting, and empty-key cleanup uniformly).
-        let to_pop: Vec<(Vec<u8>, f64)> = match self.live_entry(key) {
-            None => return Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect(),
-                Value::SegZSet(z) => {
-                    z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect()
-                }
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> =
-                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    entries.into_iter().take(count).collect()
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-        };
-        if to_pop.is_empty() {
-            return Ok(to_pop);
-        }
-        let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &borrowed)?;
-        Ok(to_pop)
+        let mut low = Vec::new();
+        self.zpop_each(key, count, false, |m, s| low.push((m.to_vec(), s)))?;
+        Ok(low)
     }
 
     /// `zpopmin_below` — pop up to `count` lowest-scored members

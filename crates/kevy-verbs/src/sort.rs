@@ -107,33 +107,24 @@ fn parse<A: ArgvView + ?Sized>(args: &A, read_only: bool) -> Result<Opts, &'stat
     Ok(o)
 }
 
-/// The key's elements in their own order: a list's, a sorted set's by
-/// score, a set's as it iterates.
-fn elements(store: &mut Store, key: &[u8]) -> Result<(Vec<Vec<u8>>, bool), kevy_store::StoreError> {
-    Ok(match store.type_of(key) {
-        "list" => (store.lrange(key, 0, -1)?, false),
-        "set" => (store.smembers(key)?, true),
-        "zset" => (store.zrange(key, 0, -1)?.into_iter().map(|(m, _)| m).collect(), false),
-        "none" => (Vec::new(), false),
-        _ => return Err(kevy_store::StoreError::WrongType),
-    })
-}
-
 fn run<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     mut o: Opts,
     out: &mut Vec<u8>,
 ) -> Effect {
-    let (mut items, is_set) = match elements(store, &args[1]) {
-        Ok(e) => e,
+    // the elements are borrowed in place; only the order is built apart
+    let mut items: Vec<&[u8]> = Vec::new();
+    let kind = match store.each_element(&args[1], |e| items.push(e)) {
+        Ok(kind) => kind,
         Err(e) => {
             store_err(out, e);
             return Effect::Unchanged;
         }
     };
-    // a set's own order is not stable, so a stored result is sorted
-    if is_set && o.store.is_some() {
+    // a set's own order is not stable, so an unsorted stored result is
+    // sorted by bytes instead
+    if o.nosort && kind == "set" && o.store.is_some() {
         (o.nosort, o.alpha) = (false, true);
     }
     if !o.nosort && sort(&mut items, o.alpha).is_err() {
@@ -143,58 +134,51 @@ fn run<A: ArgvView + ?Sized>(
     if o.desc {
         items.reverse();
     }
-    let items = window(items, o.limit);
+    let items = &items[window(items.len(), o.limit)];
     let repeat = o.gets.max(1);
-    match o.store {
-        None => {
-            encode_array_len(out, (items.len() * repeat) as i64);
-            for it in &items {
-                for _ in 0..repeat {
-                    encode_bulk(out, it);
-                }
-            }
-            Effect::Read
+    let Some(at) = o.store else {
+        encode_array_len(out, (items.len() * repeat) as i64);
+        for it in items {
+            (0..repeat).for_each(|_| encode_bulk(out, it));
         }
-        Some(at) => {
-            let dst = &args[at];
-            let existed = store.del(&[dst]) > 0;
-            let rows: Vec<&[u8]> =
-                items.iter().flat_map(|it| std::iter::repeat_n(it.as_slice(), repeat)).collect();
-            if !rows.is_empty() {
-                store.rpush(dst, &rows).expect("a removed key takes a list");
-            }
-            encode_integer(out, rows.len() as i64);
-            changed(existed || !rows.is_empty())
-        }
+        return Effect::Read;
+    };
+    // the destination is written while the source is read: copied first
+    let rows: Vec<Vec<u8>> =
+        items.iter().flat_map(|it| core::iter::repeat_n(it.to_vec(), repeat)).collect();
+    let dst = &args[at];
+    let existed = store.del(&[dst]) > 0;
+    if !rows.is_empty() {
+        let refs: Vec<&[u8]> = rows.iter().map(Vec::as_slice).collect();
+        store.rpush(dst, &refs).expect("a removed key takes a list");
     }
+    encode_integer(out, rows.len() as i64);
+    changed(existed || !rows.is_empty())
 }
 
 /// Ascending: by bytes for `ALPHA`, else by numeric value with the bytes
 /// breaking ties. `Err` when an element is not a number.
-fn sort(items: &mut Vec<Vec<u8>>, alpha: bool) -> Result<(), ()> {
+fn sort(items: &mut [&[u8]], alpha: bool) -> Result<(), ()> {
     if alpha {
         items.sort_unstable();
         return Ok(());
     }
-    let scores: Vec<f64> =
-        items.iter().map(|it| kevy_num::parse_exact(it).ok_or(())).collect::<Result<_, _>>()?;
-    let mut keyed: Vec<(f64, Vec<u8>)> = scores.into_iter().zip(items.drain(..)).collect();
+    let mut keyed: Vec<(f64, &[u8])> = items
+        .iter()
+        .map(|it| kevy_num::parse_exact(it).map(|v| (v, *it)).ok_or(()))
+        .collect::<Result<_, _>>()?;
     // -0 and 0 compare equal, as C compares them; NaN never parses
-    keyed.sort_unstable_by(|a, b| {
-        a.0.partial_cmp(&b.0).expect("no NaN").then_with(|| a.1.cmp(&b.1))
-    });
-    items.extend(keyed.into_iter().map(|(_, it)| it));
+    keyed
+        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).expect("no NaN").then_with(|| a.1.cmp(b.1)));
+    items.iter_mut().zip(keyed).for_each(|(slot, (_, it))| *slot = it);
     Ok(())
 }
 
-/// `LIMIT offset count`: a negative offset is 0, a negative count is "to
-/// the end".
-fn window(items: Vec<Vec<u8>>, limit: Option<(i64, i64)>) -> Vec<Vec<u8>> {
-    let Some((offset, count)) = limit else { return items };
-    let start = offset.max(0) as usize;
-    if start >= items.len() {
-        return Vec::new();
-    }
-    let take = if count < 0 { items.len() } else { count as usize };
-    items.into_iter().skip(start).take(take).collect()
+/// `LIMIT offset count` over `len` items: a negative offset is 0, a
+/// negative count is "to the end".
+fn window(len: usize, limit: Option<(i64, i64)>) -> core::ops::Range<usize> {
+    let Some((offset, count)) = limit else { return 0..len };
+    let start = (offset.max(0) as usize).min(len);
+    let take = if count < 0 { len } else { count as usize };
+    start..start.saturating_add(take).min(len)
 }
