@@ -107,12 +107,12 @@ impl Form {
 }
 
 /// A geo search, read against its source key.
-pub(in crate::geo) struct Query {
-    pub(in crate::geo) src: Vec<u8>,
+pub(in crate::geo) struct Query<'a> {
+    pub(in crate::geo) src: &'a [u8],
     pub(in crate::geo) opts: Opts,
     /// The destination of a legacy `STORE` / `STOREDIST`, or of
     /// GEOSEARCHSTORE.
-    pub(in crate::geo) store_dst: Option<Vec<u8>>,
+    pub(in crate::geo) store_dst: Option<&'a [u8]>,
     /// The source key does not exist: the search finds nothing, and its
     /// centre was never looked up.
     pub(in crate::geo) src_missing: bool,
@@ -120,7 +120,7 @@ pub(in crate::geo) struct Query {
 
 /// What the options set so far.
 #[derive(Default)]
-struct Seen {
+struct Seen<'a> {
     center: Option<(f64, f64)>,
     from_member: bool,
     from_lonlat: bool,
@@ -134,15 +134,15 @@ struct Seen {
     with_dist: bool,
     with_hash: bool,
     storedist: bool,
-    store_dst: Option<Vec<u8>>,
+    store_dst: Option<&'a [u8]>,
 }
 
 /// Read a geo search's arguments against `store`.
-pub(in crate::geo) fn plan<A: ArgvView + ?Sized>(
+pub(in crate::geo) fn plan<'a, A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &A,
+    args: &'a A,
     form: Form,
-) -> Result<Query, GeoError> {
+) -> Result<Query<'a>, GeoError> {
     let (src_at, base, least, arity) = form.layout();
     if args.len() < least {
         return Err(GeoError::Wire(arity));
@@ -162,7 +162,7 @@ pub(in crate::geo) fn plan<A: ArgvView + ?Sized>(
             seen.shape = Some(radius(&args[3], &args[4])?);
         }
         Form::ByMember { .. } | Form::Search => {}
-        Form::SearchStore => seen.store_dst = Some(args[1].to_vec()),
+        Form::SearchStore => seen.store_dst = Some(&args[1]),
     }
     let mut i = base;
     while i < args.len() {
@@ -172,13 +172,13 @@ pub(in crate::geo) fn plan<A: ArgvView + ?Sized>(
 }
 
 /// Read the option at `args[i]`; how many arguments it took.
-fn option<A: ArgvView + ?Sized>(
+fn option<'a, A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &A,
+    args: &'a A,
     i: usize,
     form: Form,
     src_missing: bool,
-    s: &mut Seen,
+    s: &mut Seen<'a>,
 ) -> Result<usize, GeoError> {
     let mut buf = [0u8; 32];
     let word = upper_verb(&args[i], &mut buf);
@@ -199,18 +199,18 @@ fn option<A: ArgvView + ?Sized>(
 }
 
 /// An option that takes values, at `args[i]`.
-struct Valued<'a, A: ?Sized> {
-    store: &'a mut Store,
+struct Valued<'s, 'a, A: ?Sized> {
+    store: &'s mut Store,
     args: &'a A,
     i: usize,
     form: Form,
     src_missing: bool,
 }
 
-impl<A: ArgvView + ?Sized> Valued<'_, A> {
+impl<'a, A: ArgvView + ?Sized> Valued<'_, 'a, A> {
     /// How many arguments the option took; `None` when `word` is no option
     /// here, or its values are missing.
-    fn read(self, word: &[u8], s: &mut Seen) -> Result<Option<usize>, GeoError> {
+    fn read(self, word: &[u8], s: &mut Seen<'a>) -> Result<Option<usize>, GeoError> {
         let (args, i) = (self.args, self.i);
         let left = args.len() - i - 1;
         let search = matches!(self.form, Form::Search | Form::SearchStore);
@@ -224,7 +224,7 @@ impl<A: ArgvView + ?Sized> Valued<'_, A> {
                 2
             }
             b"STORE" | b"STOREDIST" if left >= 1 && self.form.can_store() => {
-                s.store_dst = Some(args[i + 1].to_vec());
+                s.store_dst = Some(&args[i + 1]);
                 s.storedist = word == b"STOREDIST";
                 2
             }
@@ -258,12 +258,12 @@ impl<A: ArgvView + ?Sized> Valued<'_, A> {
 }
 
 /// The checks that need every option.
-fn finish<A: ArgvView + ?Sized>(
-    args: &A,
+fn finish<'a, A: ArgvView + ?Sized>(
+    args: &'a A,
     form: Form,
     src_missing: bool,
-    s: Seen,
-) -> Result<Query, GeoError> {
+    s: Seen<'a>,
+) -> Result<Query<'a>, GeoError> {
     if s.store_dst.is_some() && (s.with_dist || s.with_hash || s.with_coord) {
         return Err(GeoError::Wire(if form == Form::SearchStore {
             "ERR GEOSEARCHSTORE is not compatible with WITHDIST, WITHHASH and WITHCOORD options"
@@ -285,7 +285,7 @@ fn finish<A: ArgvView + ?Sized>(
     let (shape, unit) = s.shape.unwrap_or((Shape::Radius { r_m: 0.0 }, 1.0));
     let src_at = form.layout().0;
     Ok(Query {
-        src: args[src_at].to_vec(),
+        src: &args[src_at],
         opts: Opts {
             center: s.center.unwrap_or((0.0, 0.0)),
             shape,

@@ -142,13 +142,10 @@ pub fn geo_search<A: ArgvView + ?Sized>(
 /// Shared between GEODIST and GEOSEARCH. Returns the metres-per-unit
 /// multiplier for `m | km | mi | ft`; `None` for unknown units.
 pub(super) fn parse_unit(b: &[u8]) -> Option<f64> {
-    match b.to_ascii_lowercase().as_slice() {
-        b"m" => Some(1.0),
-        b"km" => Some(1000.0),
-        b"mi" => Some(1609.34),
-        b"ft" => Some(0.3048),
-        _ => None,
-    }
+    [(&b"m"[..], 1.0), (b"km", 1000.0), (b"mi", 1609.34), (b"ft", 0.3048)]
+        .into_iter()
+        .find(|(name, _)| b.eq_ignore_ascii_case(name))
+        .map(|(_, meters)| meters)
 }
 
 // ───────────── GEOADD ─────────────

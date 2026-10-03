@@ -115,15 +115,18 @@ pub fn lcs<A: ArgvView + ?Sized>(
     if args.len() < 3 {
         return wrong_args(out, "lcs");
     }
-    let mut strings = [Vec::new(), Vec::new()];
-    for (i, s) in strings.iter_mut().enumerate() {
-        match store.get(&args[1 + i]) {
-            Ok(v) => *s = v.map(|c| c.into_owned()).unwrap_or_default(),
-            Err(StoreError::WrongType) => {
-                return encode_error(out, "ERR The specified keys must contain string values");
-            }
-            Err(e) => return store_err(out, e),
+    // both strings borrowed at once, read as the store holds them
+    let (k1, k2) = (&args[1], &args[2]);
+    let read = store.get_shared_with(k1, |a| {
+        store.get_shared_with(k2, |b| {
+            lcs_reply(args, a.unwrap_or_default(), b.unwrap_or_default(), out, proto);
+        })
+    });
+    match read.and_then(|inner| inner) {
+        Ok(()) => {}
+        Err(StoreError::WrongType) => {
+            encode_error(out, "ERR The specified keys must contain string values");
         }
+        Err(e) => store_err(out, e),
     }
-    lcs_reply(args, &strings[0], &strings[1], out, proto);
 }
