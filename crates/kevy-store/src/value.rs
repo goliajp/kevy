@@ -238,11 +238,6 @@ impl ZSetData {
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
         self.by_score.iter().map(|(s, m)| (m.as_slice(), s.0))
     }
-    /// Like [`Self::ordered`] but starting at ascending `rank` — one
-    /// O(log N) seek, no skip-walk.
-    pub(crate) fn ordered_from(&self, rank: usize) -> impl Iterator<Item = (&[u8], f64)> {
-        self.by_score.iter_from(rank).map(|(s, m)| (m.as_slice(), s.0))
-    }
     /// The ascending rank of `member` (whose score is `score`). O(log N).
     pub(crate) fn rank_of(&self, member: &[u8], score: f64) -> Option<usize> {
         self.by_score.rank_of(&(Score(score), SmallBytes::from_slice(member)))

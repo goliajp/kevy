@@ -108,41 +108,7 @@ impl Store {
         start: i64,
         stop: i64,
     ) -> Result<usize, StoreError> {
-        let to_remove: Vec<Vec<u8>> = match self.live_entry(key) {
-            None => return Ok(0),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
-                    None => return Ok(0),
-                    // Seek to the start rank (O(log N)), collect the M hits.
-                    Some((s, end)) => {
-                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
-                    }
-                },
-                Value::SegZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
-                    None => return Ok(0),
-                    Some((s, end)) => {
-                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
-                    }
-                },
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> =
-                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    match crate::util::range_bounds(start, stop, entries.len()) {
-                        None => return Ok(0),
-                        Some((s, end)) => {
-                            entries.into_iter().skip(s).take(end - s + 1).map(|(m, _)| m).collect()
-                        }
-                    }
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-        };
-        if to_remove.is_empty() {
-            return Ok(0);
-        }
-        let borrowed: Vec<&[u8]> = to_remove.iter().map(Vec::as_slice).collect();
-        self.zrem(key, &borrowed)
+        self.zrem_span(key, ZSpan::Rank(start, stop))
     }
 
     /// `ZREMRANGEBYSCORE key min max` — remove every member whose score
@@ -154,17 +120,7 @@ impl Store {
         min: ScoreBound,
         max: ScoreBound,
     ) -> Result<usize, StoreError> {
-        // Reuse zrange_by_score's bound logic to materialise the hit set
-        // — keeps inline / heap parity in one place.
-        let hits = self.zrange_by_score(key, min, max)?;
-        if hits.is_empty() {
-            // Still need to honour wrong-type errors that zrange_by_score
-            // already surfaced; here Ok([]) means empty match, not type
-            // mismatch, so it's safe to early-return.
-            return Ok(0);
-        }
-        let borrowed: Vec<&[u8]> = hits.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &borrowed)
+        self.zrem_span(key, ZSpan::Score(min, max))
     }
 
     /// `ZREVRANGEBYSCORE` — `zrange_by_score` reversed. Bounds are

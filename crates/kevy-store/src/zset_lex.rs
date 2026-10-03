@@ -181,13 +181,7 @@ impl Store {
         min: LexEnd<'_>,
         max: LexEnd<'_>,
     ) -> Result<usize, StoreError> {
-        let gone =
-            crate::zset_range::owned(self.zrange_select(key, ZSpan::Lex(min, max), false, None)?);
-        if gone.is_empty() {
-            return Ok(0);
-        }
-        let members: Vec<&[u8]> = gone.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &members)
+        self.zrem_span(key, ZSpan::Lex(min, max))
     }
 }
 
