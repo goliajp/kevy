@@ -8,7 +8,7 @@ use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error};
 use kevy_store::Store;
 
 use crate::args::arg_i64;
-use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, WRONGTYPE, fmt_score, store_err, wrong_args};
+use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, WRONGTYPE, store_err, wrong_args};
 
 /// Which collection a scan walks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,7 +95,7 @@ pub(crate) fn scan<A: ArgvView + ?Sized>(
         return encode_error(out, "ERR invalid cursor");
     };
     match store.type_of(&args[1]) {
-        "none" => return page(out, 0, &[]),
+        "none" => return empty_page(out),
         t if t != type_name => return encode_error(out, WRONGTYPE),
         _ => {}
     }
@@ -103,52 +103,59 @@ pub(crate) fn scan<A: ArgvView + ?Sized>(
         Ok(o) => o,
         Err(e) => return encode_error(out, e),
     };
-    match collect(store, &args[1], cursor, kind, &o) {
-        Ok((next, items)) => page(out, next, &items),
-        Err(e) => store_err(out, e),
-    }
+    page(store, &args[1], cursor, kind, &o, out);
 }
 
-/// One page of `key`, its members filtered by the pattern.
-fn collect(
-    store: &mut Store,
-    key: &[u8],
-    cursor: u64,
-    kind: Kind,
-    o: &Opts<'_>,
-) -> Result<(u64, Vec<Vec<u8>>), kevy_store::StoreError> {
+/// `["0", []]`: the page of a key that is not there.
+fn empty_page(out: &mut Vec<u8>) {
+    encode_array_len(out, 2);
+    encode_bulk(out, b"0");
+    encode_array_len(out, 0);
+}
+
+/// `[cursor, [item ...]]`: one page of `key`, its members filtered by
+/// the pattern. The items go straight into `out`; the cursor and their
+/// count, known only once the page is read, are put in front of them.
+fn page(store: &mut Store, key: &[u8], cursor: u64, kind: Kind, o: &Opts<'_>, out: &mut Vec<u8>) {
     let keep = |m: &[u8]| o.pattern.is_none_or(|p| kevy_store::glob_match(p, m));
-    let mut items: Vec<Vec<u8>> = Vec::new();
+    let start = out.len();
+    let mut n = 0;
     let next = match kind {
         Kind::Hash => store.hscan(key, cursor, o.count, |f, v| {
             if keep(f) {
-                items.push(f.to_vec());
+                encode_bulk(out, f);
+                n += 1;
                 if !o.no_values {
-                    items.push(v.to_vec());
+                    encode_bulk(out, v);
+                    n += 1;
                 }
             }
         }),
         Kind::Set => store.sscan(key, cursor, o.count, |m| {
             if keep(m) {
-                items.push(m.to_vec());
+                encode_bulk(out, m);
+                n += 1;
             }
         }),
         Kind::ZSet => store.zscan(key, cursor, o.count, |m, sc| {
             if keep(m) {
-                items.push(m.to_vec());
-                items.push(fmt_score(sc));
+                encode_bulk(out, m);
+                kevy_resp::encode_bulk_double(out, sc);
+                n += 2;
             }
         }),
     };
-    Ok((next?, items))
-}
-
-/// `[cursor, [item ...]]`.
-fn page(out: &mut Vec<u8>, next: u64, items: &[Vec<u8>]) {
+    let next = match next {
+        Ok(next) => next,
+        Err(e) => {
+            out.truncate(start);
+            return store_err(out, e);
+        }
+    };
+    let body = out.len();
     encode_array_len(out, 2);
-    encode_bulk(out, next.to_string().as_bytes());
-    encode_array_len(out, items.len() as i64);
-    for i in items {
-        encode_bulk(out, i);
-    }
+    crate::reply::encode_bulk_fmt(out, format_args!("{next}"));
+    encode_array_len(out, n);
+    let head = out.len() - body;
+    out[start..].rotate_right(head);
 }

@@ -61,6 +61,35 @@ pub fn encode_bulk(out: &mut Vec<u8>, data: &[u8]) {
     out.extend_from_slice(b"\r\n");
 }
 
+/// A bulk string whose bytes `body` appends to `out`: written in place,
+/// the length put in front of them after, so no text is built apart.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_bulk_with(&mut out, |o| o.extend_from_slice(b"twelve bytes"));
+/// assert_eq!(out, b"$12\r\ntwelve bytes\r\n");
+/// ```
+pub fn encode_bulk_with(out: &mut Vec<u8>, body: impl FnOnce(&mut Vec<u8>)) {
+    let start = out.len();
+    body(out);
+    let n = out.len() - start;
+    bulk_header(out, n);
+    let head = out.len() - start - n;
+    out[start..].rotate_right(head);
+    out.extend_from_slice(b"\r\n");
+}
+
+/// An integer as a bulk string, as a SCAN cursor is sent.
+///
+/// ```
+/// let mut out = Vec::new();
+/// kevy_resp::encode_bulk_int(&mut out, 1234);
+/// assert_eq!(out, b"$4\r\n1234\r\n");
+/// ```
+pub fn encode_bulk_int(out: &mut Vec<u8>, n: i64) {
+    encode_bulk_with(out, |o| push_int(o, n));
+}
+
 /// `$<len>\r\n`, built back to front on the stack, then one append.
 #[inline]
 fn bulk_header(out: &mut Vec<u8>, len: usize) {

@@ -171,6 +171,34 @@ mod commands;
 mod tests {
     use super::*;
 
+    /// A dense sketch raised in place reads back byte for byte as one a
+    /// pinned snapshot forces through the copying path.
+    #[test]
+    fn in_place_and_copied_raises_write_the_same_bytes() {
+        let (mut free, mut pinned) = (Store::new(), Store::new());
+        let names: alloc::vec::Vec<alloc::vec::Vec<u8>> =
+            (0..4000).map(|i| alloc::format!("e{i}").into_bytes()).collect();
+        for s in [&mut free, &mut pinned] {
+            for chunk in names[..3000].chunks(100) {
+                let refs: alloc::vec::Vec<&[u8]> = chunk.iter().map(|n| n.as_slice()).collect();
+                s.pfadd(b"h", &refs).unwrap();
+            }
+            assert_eq!(s.get(b"h").unwrap().unwrap()[4], DENSE, "dense by now");
+            s.pfcount(&[b"h"]).unwrap();
+        }
+        for (i, n) in names[3000..].iter().enumerate() {
+            let view = pinned.collect_snapshot();
+            assert_eq!(
+                free.pfadd(b"h", &[n]).unwrap(),
+                pinned.pfadd(b"h", &[n]).unwrap(),
+                "add {i}"
+            );
+            drop(view);
+            assert_eq!(free.get(b"h").unwrap(), pinned.get(b"h").unwrap(), "after add {i}");
+        }
+        assert_eq!(free.pfcount(&[b"h"]).unwrap(), pinned.pfcount(&[b"h"]).unwrap());
+    }
+
     // bytes read back with GET from Redis 8.10 after the same commands
     #[test]
     fn the_bytes_are_redis_bytes() {

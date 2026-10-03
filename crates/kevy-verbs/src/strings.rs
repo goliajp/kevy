@@ -89,7 +89,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             if args.len() != 4 {
                 wrong_args(out, if cmd == b"SUBSTR" { "substr" } else { "getrange" });
             } else if let (Some(a), Some(b)) = (arg_i64(&args[2]), arg_i64(&args[3])) {
-                match store.getrange(&args[1], a, b) {
+                match store.getrange_borrowed(&args[1], a, b) {
                     Ok(v) => encode_bulk(out, &v),
                     Err(e) => store_err(out, e),
                 }

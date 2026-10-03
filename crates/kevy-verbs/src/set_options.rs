@@ -196,38 +196,59 @@ fn set_reading<A: ArgvView + ?Sized>(
     let key = &args[1];
     // GET and the value conditions read a string; anything else is refused
     let reads = o.get || !matches!(o.cond, Cond::Always | Cond::Nx | Cond::Xx);
-    let old = if reads {
-        match store.get(key) {
-            Ok(v) => v.map(|v| v.into_owned()),
-            Err(e) => {
-                store_err(out, e);
-                return Effect::Unchanged;
-            }
+    let (present, met) = if reads {
+        match judge_old(store, key, o, out) {
+            Some(judged) => judged,
+            None => return Effect::Unchanged,
         }
     } else {
-        None
-    };
-    let present = if reads { old.is_some() } else { store.key_exists(key) };
-    let met = match met(o.cond, present, old.as_deref()) {
-        Ok(m) => m,
-        Err(e) => {
-            encode_error(out, e);
-            return Effect::Unchanged;
-        }
-    };
-    let reply = |out: &mut Vec<u8>, wrote: bool| match (&old, o.get) {
-        (Some(v), true) => encode_bulk(out, v),
-        (None, true) => encode_null_bulk(out),
-        (_, false) if wrote => encode_simple_string(out, "OK"),
-        _ => encode_null_bulk(out),
+        let present = store.key_exists(key);
+        let met =
+            matches!((o.cond, present), (Cond::Always, _) | (Cond::Nx, false) | (Cond::Xx, true));
+        (present, met)
     };
     if !met {
-        reply(out, false);
+        if !o.get {
+            encode_null_bulk(out);
+        }
         return Effect::Unchanged;
     }
     let wrote = write(store, key, &args[2], o.ttl, dl, present);
-    reply(out, true);
+    if !o.get {
+        encode_simple_string(out, "OK");
+    }
     changed(wrote)
+}
+
+/// `(present, met)` from the old value, judged — and with GET sent —
+/// while it is still there; `None` once a refusal is written.
+fn judge_old(
+    store: &mut Store,
+    key: &[u8],
+    o: &Opts<'_>,
+    out: &mut Vec<u8>,
+) -> Option<(bool, bool)> {
+    let old = match store.get(key) {
+        Ok(v) => v,
+        Err(e) => {
+            store_err(out, e);
+            return None;
+        }
+    };
+    let met = match met(o.cond, old.is_some(), old.as_deref()) {
+        Ok(m) => m,
+        Err(e) => {
+            encode_error(out, e);
+            return None;
+        }
+    };
+    if o.get {
+        match old.as_deref() {
+            Some(v) => encode_bulk(out, v),
+            None => encode_null_bulk(out),
+        }
+    }
+    Some((old.is_some(), met))
 }
 
 /// Whether the condition lets the write through. A digest that is not 16
@@ -297,25 +318,25 @@ pub(crate) fn getex<A: ArgvView + ?Sized>(
         return Effect::Unchanged;
     };
     let key = &args[1];
-    let value = match store.get(key) {
-        Ok(Some(v)) => v.into_owned(),
-        Ok(None) => {
+    // a missing key answers nil whatever its options' numbers say, so the
+    // deadline is read first but refused only for a key that is there
+    let dl = deadline(o.ttl, "getex");
+    match (store.get(key), dl.as_ref()) {
+        (Ok(None), _) => {
             encode_null_bulk(out);
             return Effect::Read;
         }
-        Err(e) => {
+        (Err(e), _) => {
             store_err(out, e);
             return Effect::Unchanged;
         }
-    };
-    let dl = match deadline(o.ttl, "getex") {
-        Ok(d) => d,
-        Err(e) => {
-            encode_error(out, &e);
+        (Ok(Some(_)), Err(e)) => {
+            encode_error(out, e);
             return Effect::Unchanged;
         }
-    };
-    encode_bulk(out, &value);
+        (Ok(Some(v)), Ok(_)) => encode_bulk(out, &v),
+    }
+    let Ok(dl) = dl else { return Effect::Unchanged };
     match dl {
         Some(Deadline::At(at)) => changed(store.expire_at_unix_ms(key, at)),
         Some(Deadline::In(ms)) => changed(store.expire(key, Duration::from_millis(ms))),

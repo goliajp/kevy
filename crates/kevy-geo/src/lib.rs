@@ -95,7 +95,7 @@ pub const EARTH_RADIUS_METERS: f64 = 6_372_797.560_856;
 pub const GEO_STEP: u32 = 26;
 
 mod search;
-pub use search::neighbor_score_ranges;
+pub use search::{ScoreRanges, neighbor_ranges, neighbor_score_ranges};
 
 /// Encode `(longitude, latitude)` as the 52-bit interleaved geohash
 /// stored as a ZSet score. Returns `None` if either coordinate is out

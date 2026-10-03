@@ -265,6 +265,7 @@ mod nodes;
 mod pending;
 mod restore;
 mod store;
+mod store_add;
 mod trim_refs;
 pub use claim::{AutoclaimResult, XClaimOpts};
 pub use group::{ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, ReadGroupId};

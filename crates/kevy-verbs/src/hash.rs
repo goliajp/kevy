@@ -5,7 +5,7 @@ use kevy_resp::{
 };
 use kevy_store::Store;
 
-use crate::args::{arg_i64, rest_borrowed};
+use crate::args::{arg_i64, with_rest};
 use crate::reply::{
     ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, store_err, wrong_args,
 };
@@ -71,7 +71,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, "hdel");
                 return Some(Effect::Unchanged);
             }
-            let res = store.hdel(&args[1], &rest_borrowed(args, 2));
+            let res = with_rest(args, 2, |rest| store.hdel(&args[1], rest));
             let removed = matches!(res, Ok(n) if n > 0);
             emit_int_result(res.map(|n| n as i64), out);
             changed(removed)
@@ -163,7 +163,7 @@ fn hmget<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "hmget");
     }
-    match store.hmget(&args[1], &rest_borrowed(args, 2)) {
+    match with_rest(args, 2, |rest| store.hmget(&args[1], rest)) {
         Ok(vals) => {
             encode_array_len(out, vals.len() as i64);
             for v in &vals {

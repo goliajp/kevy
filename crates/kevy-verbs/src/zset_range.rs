@@ -2,10 +2,10 @@
 //! pops, and `ZSCAN`.
 
 use kevy_resp::{ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error};
-use kevy_store::{LexBound, Store, StoreError};
+use kevy_store::{LexEnd, Store, StoreError, ZSpan};
 
 use crate::args::{arg_f64, arg_i64};
-use crate::reply::{ERR_NOT_FLOAT, fmt_score, store_err, wrong_args};
+use crate::reply::{ERR_NOT_FLOAT, store_err, wrong_args};
 use crate::{Effect, changed};
 
 /// One range or pop command; `None` = the verb is not in this group.
@@ -70,14 +70,14 @@ fn lex<A: ArgvView + ?Sized>(
         wrong_args(out, if remove { "zremrangebylex" } else { "zlexcount" });
         return Effect::Unchanged;
     }
-    let (Some(min), Some(max)) = (LexBound::parse(&args[2]), LexBound::parse(&args[3])) else {
+    let (Some(min), Some(max)) = (LexEnd::parse(&args[2]), LexEnd::parse(&args[3])) else {
         encode_error(out, "ERR min or max not valid string range item");
         return Effect::Unchanged;
     };
     let n = if remove {
-        store.zremrange_by_lex(&args[1], &min, &max)
+        store.zremrange_by_lex_ends(&args[1], min, max)
     } else {
-        store.zlexcount(&args[1], &min, &max)
+        store.zrange_select(&args[1], ZSpan::Lex(min, max), false, None).map(|r| r.len())
     };
     match n {
         Ok(n) => {
@@ -118,7 +118,7 @@ fn popped(res: Result<Vec<(Vec<u8>, f64)>, StoreError>, out: &mut Vec<u8>) -> Ef
             encode_array_len(out, (items.len() * 2) as i64);
             for (m, sc) in &items {
                 encode_bulk(out, m);
-                encode_bulk(out, &fmt_score(*sc));
+                kevy_resp::encode_bulk_double(out, *sc);
             }
             changed(!items.is_empty())
         }

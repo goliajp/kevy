@@ -6,9 +6,35 @@
 //! owes". For the forward iterator everything left of `keys[i]` is already
 //! yielded; for the reverse iterator everything right of it is.
 
-use alloc::vec::Vec;
-
 use crate::node::Node;
+
+/// Most levels a tree can have: below the root a level has at least 8
+/// children per node, so 24 levels would take more than 2^66 keys.
+const MAX_HEIGHT: usize = 24;
+
+/// A walk's resume points, one per level at most — on the iterator
+/// itself, so iterating allocates nothing.
+#[derive(Debug)]
+struct Path<'a, K> {
+    at: [Option<(&'a Node<K>, usize)>; MAX_HEIGHT],
+    len: usize,
+}
+
+impl<'a, K> Path<'a, K> {
+    fn new() -> Self {
+        Path { at: [None; MAX_HEIGHT], len: 0 }
+    }
+
+    fn push(&mut self, step: (&'a Node<K>, usize)) {
+        self.at[self.len] = Some(step);
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<(&'a Node<K>, usize)> {
+        self.len = self.len.checked_sub(1)?;
+        self.at[self.len].take()
+    }
+}
 
 /// Forward (ascending) iterator. Created by [`crate::RankTree::iter`] or
 /// [`crate::RankTree::iter_from`].
@@ -22,7 +48,7 @@ use crate::node::Node;
 /// ```
 #[derive(Debug)]
 pub struct Iter<'a, K> {
-    stack: Vec<(&'a Node<K>, usize)>,
+    stack: Path<'a, K>,
     remaining: usize,
 }
 
@@ -31,14 +57,14 @@ impl<'a, K> Iter<'a, K> {
     /// when `rank` is past the end.
     pub(crate) fn new_from(root: &'a Node<K>, rank: usize) -> Self {
         let remaining = root.total.saturating_sub(rank);
-        let mut it = Iter { stack: Vec::new(), remaining };
+        let mut it = Iter { stack: Path::new(), remaining };
         if remaining == 0 {
             return it;
         }
         // Forward: resume at `keys[i]` of each node passed through, so
         // the separator to the RIGHT of the child taken. The last child
         // has no such separator, hence the bound.
-        let mut stack = Vec::new();
+        let mut stack = Path::new();
         let (node, idx) = crate::node::descend_to_rank(root, rank, |n, i| {
             if i < n.keys.len() {
                 stack.push((n, i));
@@ -105,7 +131,7 @@ impl<K> ExactSizeIterator for Iter<'_, K> {}
 /// ```
 #[derive(Debug)]
 pub struct IterRev<'a, K> {
-    stack: Vec<(&'a Node<K>, usize)>,
+    stack: Path<'a, K>,
     remaining: usize,
 }
 
@@ -115,7 +141,7 @@ impl<'a, K> IterRev<'a, K> {
     /// saturates at the population.
     pub(crate) fn new_through(root: &'a Node<K>, through: usize) -> Self {
         let remaining = through.min(root.total);
-        let mut it = IterRev { stack: Vec::new(), remaining };
+        let mut it = IterRev { stack: Path::new(), remaining };
         if remaining == 0 {
             return it;
         }
@@ -124,7 +150,7 @@ impl<'a, K> IterRev<'a, K> {
         // taken. The first child has none, hence the bound — the mirror
         // of the forward case, and the only thing that differs between
         // the two walks.
-        let mut stack = Vec::new();
+        let mut stack = Path::new();
         let (node, idx) = crate::node::descend_to_rank(root, rank, |n, i| {
             if i > 0 {
                 stack.push((n, i - 1));

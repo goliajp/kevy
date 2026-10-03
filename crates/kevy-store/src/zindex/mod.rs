@@ -17,6 +17,7 @@ mod inner;
 mod leaf;
 mod query;
 mod rebalance;
+mod rev;
 #[cfg(test)]
 mod tests;
 
@@ -27,6 +28,7 @@ use inner::Inner;
 use leaf::Leaf;
 
 pub(crate) use query::Iter;
+pub(crate) use rev::IterRev;
 
 /// A child or the root: each kind in an allocation of its own size.
 #[derive(Clone, Debug)]

@@ -4,7 +4,8 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::{Store, StoreError};
+use crate::value::SmallBytes;
+use crate::{Store, StoreError, ZSpan};
 
 impl Store {
     /// `ZPOPMAX` — remove and return up to `count` highest-scored members,
@@ -18,17 +19,42 @@ impl Store {
     /// # Ok::<(), kevy_store::StoreError>(())
     /// ```
     pub fn zpopmax(&mut self, key: &[u8], count: usize) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        if count == 0 {
-            // a wrong-typed key still answers WRONGTYPE
-            self.zcard(key)?;
-            return Ok(Vec::new());
-        }
-        let top = self.zrevrange(key, 0, i64::try_from(count).unwrap_or(i64::MAX) - 1)?;
-        if !top.is_empty() {
-            let members: Vec<&[u8]> = top.iter().map(|(m, _)| m.as_slice()).collect();
-            self.zrem(key, &members)?;
-        }
+        let mut top = Vec::new();
+        self.zpop_each(key, count, true, |m, s| top.push((m.to_vec(), s)))?;
         Ok(top)
+    }
+
+    /// `ZPOPMIN` / `ZPOPMAX` (`max`) of up to `count` members, each handed
+    /// to `f` just before it goes; how many went. A wrong-typed key is an
+    /// error even for a count of 0.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
+    /// let mut got = Vec::new();
+    /// assert_eq!(s.zpop_each(b"z", 2, true, |m, sc| got.push((m.to_vec(), sc)))?, 2);
+    /// assert_eq!(got, [(b"c".to_vec(), 3.0), (b"b".to_vec(), 2.0)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zpop_each(
+        &mut self,
+        key: &[u8],
+        count: usize,
+        max: bool,
+        mut f: impl FnMut(&[u8], f64),
+    ) -> Result<usize, StoreError> {
+        let take = count.min(self.zcard(key)?);
+        for _ in 0..take {
+            // a short member is held inline while the set lets it go
+            let gone = {
+                let mut end = self.zrange_select(key, ZSpan::Rank(0, 0), max, None)?;
+                let Some((m, sc)) = end.next() else { break };
+                f(m, sc);
+                SmallBytes::from_slice(m)
+            };
+            self.zrem(key, &[gone.as_slice()])?;
+        }
+        Ok(take)
     }
 
     /// `ZREVRANK` — the member's rank counted from the highest score.
@@ -64,6 +90,29 @@ impl Store {
         key: &[u8],
         count: i64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
+        let ranks = self.zrandmember_ranks(key, count)?;
+        let mut out = Vec::with_capacity(ranks.len());
+        for r in ranks {
+            out.extend(
+                self.zrange_select(key, ZSpan::Rank(r as i64, r as i64), false, None)?
+                    .map(|(m, s)| (m.to_vec(), s)),
+            );
+        }
+        Ok(out)
+    }
+
+    /// The ranks [`Self::zrandmember`] picks, in the order it returns
+    /// them, for a caller that reads the members in place.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a"), (2.0, b"b")])?;
+    /// let mut r = s.zrandmember_ranks(b"z", 2)?;
+    /// r.sort();
+    /// assert_eq!(r, [0, 1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zrandmember_ranks(&mut self, key: &[u8], count: i64) -> Result<Vec<usize>, StoreError> {
         let n = self.zcard(key)?;
         if n == 0 || count == 0 {
             return Ok(Vec::new());
@@ -82,11 +131,25 @@ impl Store {
                 ranks.swap(i, j);
             }
         }
-        let mut out = Vec::with_capacity(ranks.len());
-        for r in ranks {
-            out.extend(self.zrange(key, r as i64, r as i64)?);
-        }
-        Ok(out)
+        Ok(ranks)
+    }
+
+    /// The rank `ZRANDMEMBER key` picks, as `zrandmember_ranks(key, 1)`
+    /// would, without a list for it.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a")])?;
+    /// assert_eq!(s.zrandmember_rank(b"z")?, Some(0));
+    /// assert_eq!(s.zrandmember_rank(b"none")?, None);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zrandmember_rank(&mut self, key: &[u8]) -> Result<Option<usize>, StoreError> {
+        Ok(match self.zcard(key)? {
+            0 => None,
+            1 => Some(0),
+            n => Some((self.rng.next_u64() % n as u64) as usize),
+        })
     }
 
     /// `k` distinct ranks out of `0..n` (Floyd's sampling).

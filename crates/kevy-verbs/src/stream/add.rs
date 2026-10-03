@@ -38,11 +38,8 @@ pub(super) fn cmd_xadd<A: ArgvView + ?Sized>(
             return Effect::Write;
         }
     };
-    let fields: Vec<(Vec<u8>, Vec<u8>)> = (parsed.id_at + 1..args.len())
-        .step_by(2)
-        .map(|i| (args[i].to_vec(), args[i + 1].to_vec()))
-        .collect();
-    let id = match store.xadd(&args[1], parsed.id, fields, parsed.missing, now_unix_ms()) {
+    let fields = (parsed.id_at + 1..args.len()).step_by(2).map(|i| (&args[i], &args[i + 1]));
+    let id = match store.xadd_from(&args[1], parsed.id, fields, parsed.missing, now_unix_ms()) {
         Ok(Some(id)) => id,
         Ok(None) => {
             encode_null_bulk(out); // NOMKSTREAM + missing key

@@ -192,38 +192,78 @@ impl Store {
         now: u64,
         cond: HExpireCond,
     ) -> Result<Vec<HExpireCode>, StoreError> {
-        self.purge_hash_ttl(key);
         let mut codes = Vec::with_capacity(fields.len());
-        for f in fields {
-            if !self.hash_has_field(key, f)? {
-                codes.push(-2);
+        self.hexpire_as_of_each(key, fields, deadline_ms, now, cond, |c| codes.push(c))?;
+        Ok(codes)
+    }
+
+    /// [`Self::hexpire_as_of`], each field's code handed to `f` in request
+    /// order. An error comes before any code.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let now = kevy_store::now_unix_ms();
+    /// let mut codes = Vec::new();
+    /// s.hexpire_as_of_each(b"h", &[b"f", b"x"], now + 9, now, kevy_store::HExpireCond::Always, |c| codes.push(c))?;
+    /// assert_eq!(codes, [1, -2]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn hexpire_as_of_each(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+        deadline_ms: u64,
+        now: u64,
+        cond: HExpireCond,
+        mut f: impl FnMut(HExpireCode),
+    ) -> Result<(), StoreError> {
+        self.purge_hash_ttl(key);
+        for field in fields {
+            if !self.hash_has_field(key, field)? {
+                f(-2);
                 continue;
             }
-            let current = self.hfttl.get(key).and_then(|m| m.get(*f)).copied();
-            let pass = match cond {
-                HExpireCond::Always => true,
-                HExpireCond::Nx => current.is_none(),
-                HExpireCond::Xx => current.is_some(),
-                HExpireCond::Gt => current.is_some_and(|c| deadline_ms > c),
-                HExpireCond::Lt => current.is_none_or(|c| deadline_ms < c),
-            };
-            if !pass {
-                codes.push(0);
-                continue;
-            }
-            if deadline_ms <= now {
-                if let Some(m) = self.hfttl.get_mut(key) {
-                    m.remove(*f);
-                }
-                self.hdel(key, &[f])?;
-                codes.push(2);
-                continue;
-            }
-            hfttl_slot(&mut self.hfttl, key).insert(SmallBytes::from_slice(f), deadline_ms);
-            codes.push(1);
+            f(self.hexpire_field(key, field, deadline_ms, now, cond)?);
         }
         self.prune_hfttl_key(key);
-        Ok(codes)
+        Ok(())
+    }
+
+    /// One present field of [`Self::hexpire_as_of_each`].
+    fn hexpire_field(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        deadline_ms: u64,
+        now: u64,
+        cond: HExpireCond,
+    ) -> Result<HExpireCode, StoreError> {
+        let current = self.hfttl.get(key).and_then(|m| m.get(field)).copied();
+        let pass = match cond {
+            HExpireCond::Always => true,
+            HExpireCond::Nx => current.is_none(),
+            HExpireCond::Xx => current.is_some(),
+            HExpireCond::Gt => current.is_some_and(|c| deadline_ms > c),
+            HExpireCond::Lt => current.is_none_or(|c| deadline_ms < c),
+        };
+        if !pass {
+            return Ok(0);
+        }
+        if deadline_ms <= now {
+            if let Some(m) = self.hfttl.get_mut(key) {
+                m.remove(field);
+            }
+            self.hdel(key, &[field])?;
+            return Ok(2);
+        }
+        match hfttl_slot(&mut self.hfttl, key).get_mut(field) {
+            Some(d) => *d = deadline_ms,
+            None => {
+                hfttl_slot(&mut self.hfttl, key).insert(SmallBytes::from_slice(field), deadline_ms);
+            }
+        }
+        Ok(1)
     }
 
     /// Clear per-field TTLs: `-2` missing, `-1` had no TTL, `1` cleared.
@@ -232,18 +272,39 @@ impl Store {
         key: &[u8],
         fields: &[&[u8]],
     ) -> Result<Vec<HExpireCode>, StoreError> {
-        self.purge_hash_ttl(key);
         let mut out = Vec::with_capacity(fields.len());
-        for f in fields {
-            if !self.hash_has_field(key, f)? {
-                out.push(-2);
+        self.hpersist_each(key, fields, |c| out.push(c))?;
+        Ok(out)
+    }
+
+    /// [`Self::hpersist`], each field's code handed to `f` in request
+    /// order. An error comes before any code.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.hset(b"h", &[(b"f".as_slice(), b"v".as_slice())])?;
+    /// let mut codes = Vec::new();
+    /// s.hpersist_each(b"h", &[b"f"], |c| codes.push(c))?;
+    /// assert_eq!(codes, [-1]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn hpersist_each(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+        mut f: impl FnMut(HExpireCode),
+    ) -> Result<(), StoreError> {
+        self.purge_hash_ttl(key);
+        for field in fields {
+            if !self.hash_has_field(key, field)? {
+                f(-2);
                 continue;
             }
-            let had = self.hfttl.get_mut(key).and_then(|m| m.remove(*f)).is_some();
-            out.push(if had { 1 } else { -1 });
+            let had = self.hfttl.get_mut(key).and_then(|m| m.remove(*field)).is_some();
+            f(if had { 1 } else { -1 });
         }
         self.prune_hfttl_key(key);
-        Ok(out)
+        Ok(())
     }
 
     /// Lazy enforcement hook — call at the top of every hash op.
@@ -378,71 +439,5 @@ fn hfttl_slot<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn h(s: &mut Store) {
-        s.hset(b"h", &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())])
-            .unwrap();
-    }
-
-    #[test]
-    fn hexpire_httl_hpersist_codes() {
-        let mut s = Store::new();
-        h(&mut s);
-        let far = now_unix_ms() + 100_000;
-        // set on a + missing field
-        let codes = s.hexpire_at(b"h", &[b"a", b"nope"], far, HExpireCond::Always).unwrap();
-        assert_eq!(codes, vec![1, -2]);
-        let ttls = s.hpttl(b"h", &[b"a", b"b", b"nope"]).unwrap();
-        assert!(ttls[0] > 90_000 && ttls[0] <= 100_000);
-        assert_eq!(&ttls[1..], &[-1, -2]);
-        // NX refuses existing, XX refuses missing
-        assert_eq!(s.hexpire_at(b"h", &[b"a"], far + 1, HExpireCond::Nx).unwrap(), vec![0]);
-        assert_eq!(s.hexpire_at(b"h", &[b"b"], far, HExpireCond::Xx).unwrap(), vec![0]);
-        // GT/LT
-        assert_eq!(s.hexpire_at(b"h", &[b"a"], far + 500, HExpireCond::Gt).unwrap(), vec![1]);
-        assert_eq!(s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Gt).unwrap(), vec![0]);
-        // persist
-        assert_eq!(s.hpersist(b"h", &[b"a", b"b", b"nope"]).unwrap(), vec![1, -1, -2]);
-        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
-    }
-
-    #[test]
-    fn past_deadline_deletes_and_lazy_purge_enforces() {
-        let mut s = Store::new();
-        h(&mut s);
-        // past deadline → immediate delete, code 2
-        assert_eq!(s.hexpire_at(b"h", &[b"a"], 1, HExpireCond::Always).unwrap(), vec![2]);
-        assert!(!s.hexists(b"h", b"a").unwrap());
-        // near-future deadline → lazily gone after it passes
-        let soon = now_unix_ms() + 30;
-        s.hexpire_at(b"h", &[b"b"], soon, HExpireCond::Always).unwrap();
-        std::thread::sleep(core::time::Duration::from_millis(50));
-        assert!(!s.hexists(b"h", b"b").unwrap(), "lazy purge on access");
-        // hash is now empty → hlen 0, sidecar pruned
-        assert_eq!(s.hlen(b"h").unwrap(), 0);
-        assert!(s.hfttl.is_empty());
-    }
-
-    #[test]
-    fn overwrite_clears_ttl_and_reaper_reports() {
-        let mut s = Store::new();
-        h(&mut s);
-        let soon = now_unix_ms() + 20;
-        s.hexpire_at(b"h", &[b"a", b"b"], soon, HExpireCond::Always).unwrap();
-        // overwrite a → its TTL is discarded (Redis 7.4)
-        s.hset(b"h", &[(b"a".as_slice(), b"new".as_slice())]).unwrap();
-        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
-        std::thread::sleep(core::time::Duration::from_millis(40));
-        // reaper sweeps b, reports the removal for effect logging
-        let swept = s.tick_hash_ttl(100);
-        assert_eq!(swept, vec![(b"h".to_vec(), vec![b"b".to_vec()])]);
-        assert!(s.hexists(b"h", b"a").unwrap(), "overwritten field survived");
-        // whole-key delete drops the sidecar
-        let far = now_unix_ms() + 100_000;
-        s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Always).unwrap();
-        s.del(&[b"h".as_slice()]);
-        assert!(s.hfttl.is_empty());
-    }
-}
+#[path = "tests_hash_ttl.rs"]
+mod tests;

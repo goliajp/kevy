@@ -140,6 +140,46 @@ pub fn rest_borrowed<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<&[u8]> 
     (from..args.len()).map(|i| &args[i]).collect()
 }
 
+/// [`rest_borrowed`] handed to `f` without the list: up to 16 arguments
+/// sit on the stack, so the common short command allocates nothing.
+///
+/// ```
+/// let argv = kevy_resp::Argv::from(vec![b"SADD".to_vec(), b"s".to_vec(), b"a".to_vec(), b"b".to_vec()]);
+/// assert_eq!(kevy_verbs::args::with_rest(&argv, 2, |r| r.len()), 2);
+/// ```
+pub fn with_rest<A: ArgvView + ?Sized, R>(
+    args: &A,
+    from: usize,
+    f: impl FnOnce(&[&[u8]]) -> R,
+) -> R {
+    with_args(args, from..args.len(), f)
+}
+
+/// The arguments at `at`, borrowed, handed to `f`: on the stack for up to
+/// 16 of them, a list only past that.
+///
+/// ```
+/// let argv = kevy_resp::Argv::from(vec![b"X".to_vec(), b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+/// let got = kevy_verbs::args::with_args(&argv, 1..3, |r| r.concat());
+/// assert_eq!(got, b"ab");
+/// ```
+pub fn with_args<A: ArgvView + ?Sized, R>(
+    args: &A,
+    at: core::ops::Range<usize>,
+    f: impl FnOnce(&[&[u8]]) -> R,
+) -> R {
+    const ON_STACK: usize = 16;
+    let n = at.len();
+    if n > ON_STACK {
+        return f(&at.map(|i| &args[i]).collect::<Vec<&[u8]>>());
+    }
+    let mut buf: [&[u8]; ON_STACK] = [&[]; ON_STACK];
+    for (slot, i) in buf.iter_mut().zip(at) {
+        *slot = &args[i];
+    }
+    f(&buf[..n])
+}
+
 /// The options of `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`.
 ///
 /// ```

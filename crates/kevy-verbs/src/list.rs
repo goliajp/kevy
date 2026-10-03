@@ -5,7 +5,7 @@ use kevy_resp::{
 };
 use kevy_store::{InsertPosition, Store};
 
-use crate::args::{arg_i64, rest_borrowed};
+use crate::args::{arg_i64, with_rest};
 use crate::reply::{
     ERR_NOT_INT, ERR_SYNTAX, emit_bulk_array, emit_int_result, store_err, wrong_args,
 };
@@ -24,12 +24,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, if cmd == b"LPUSH" { "lpush" } else { "rpush" });
             } else {
-                let vals = rest_borrowed(args, 2);
-                let res = if cmd == b"LPUSH" {
-                    store.lpush(&args[1], &vals)
-                } else {
-                    store.rpush(&args[1], &vals)
-                };
+                let res = with_rest(args, 2, |vals| {
+                    if cmd == b"LPUSH" {
+                        store.lpush(&args[1], vals)
+                    } else {
+                        store.rpush(&args[1], vals)
+                    }
+                });
                 emit_int_result(res.map(|n| n as i64), out);
             }
             Effect::Write
@@ -39,12 +40,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, if cmd == b"LPUSHX" { "lpushx" } else { "rpushx" });
                 return Some(Effect::Unchanged);
             }
-            let vals = rest_borrowed(args, 2);
-            let res = if cmd == b"LPUSHX" {
-                store.lpushx(&args[1], &vals)
-            } else {
-                store.rpushx(&args[1], &vals)
-            };
+            let res = with_rest(args, 2, |vals| {
+                if cmd == b"LPUSHX" {
+                    store.lpushx(&args[1], vals)
+                } else {
+                    store.rpushx(&args[1], vals)
+                }
+            });
             // a missing key takes nothing
             let pushed = matches!(res, Ok(n) if n > 0);
             emit_int_result(res.map(|n| n as i64), out);
@@ -162,28 +164,27 @@ fn pop<A: ArgvView + ?Sized>(store: &mut Store, args: &A, tail: bool, out: &mut 
         }
         return Effect::Unchanged;
     }
-    let res = if tail { store.rpop(&args[1], count) } else { store.lpop(&args[1], count) };
-    let items = match res {
-        Ok(items) => items,
+    // the elements go straight into the reply; the array's length, known
+    // once they are out, is put in front of them
+    let start = out.len();
+    let n = match store.list_pop_each(&args[1], count, !tail, |v| encode_bulk(out, &v)) {
+        Ok(n) => n,
         Err(e) => {
             store_err(out, e);
             return Effect::Unchanged;
         }
     };
     if !count_given {
-        match items.first() {
-            Some(v) => encode_bulk(out, v),
-            None => encode_null_bulk(out),
+        if n == 0 {
+            encode_null_bulk(out);
         }
-    } else if items.is_empty() {
-        encode_array_len(out, -1);
     } else {
-        encode_array_len(out, items.len() as i64);
-        for it in &items {
-            encode_bulk(out, it);
-        }
+        let body = out.len();
+        encode_array_len(out, if n == 0 { -1 } else { n as i64 });
+        let head = out.len() - body;
+        out[start..].rotate_right(head);
     }
-    changed(!items.is_empty())
+    changed(n > 0)
 }
 
 /// `BLPOP` / `BRPOP key [key …] timeout`.
@@ -213,17 +214,18 @@ fn blocking_pop<A: ArgvView + ?Sized>(
     if args.len() > 3 {
         return Effect::Unchanged;
     }
-    let res = if tail { store.rpop(&args[1], 1) } else { store.lpop(&args[1], 1) };
-    match res {
-        Err(e) => store_err(out, e),
-        Ok(items) => {
-            if let Some(v) = items.into_iter().next() {
-                encode_array_len(out, 2);
-                encode_bulk(out, &args[1]);
-                encode_bulk(out, &v);
-                let pop: &[u8] = if tail { b"RPOP" } else { b"LPOP" };
-                return Effect::Record(vec![pop.to_vec(), args[1].to_vec()]);
-            }
+    let start = out.len();
+    encode_array_len(out, 2);
+    encode_bulk(out, &args[1]);
+    match store.list_pop_each(&args[1], 1, !tail, |v| encode_bulk(out, &v)) {
+        Ok(1) => {
+            let pop: &[u8] = if tail { b"RPOP" } else { b"LPOP" };
+            return Effect::Record(vec![pop.to_vec(), args[1].to_vec()]);
+        }
+        Ok(_) => out.truncate(start),
+        Err(e) => {
+            out.truncate(start);
+            store_err(out, e);
         }
     }
     Effect::Unchanged

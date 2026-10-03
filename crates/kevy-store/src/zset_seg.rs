@@ -67,6 +67,11 @@ pub struct SegZSetData {
 }
 
 impl SegZSetData {
+    /// The score order, which range reads walk.
+    pub(crate) fn order(&self) -> &ZIndex {
+        &self.order
+    }
+
     /// The member → score index, which a `ZSCAN` sweep pages through.
     pub(crate) fn by_member(&self) -> &SegMap<f64> {
         &self.by_member

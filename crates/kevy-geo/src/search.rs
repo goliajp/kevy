@@ -45,10 +45,54 @@ use crate::{
 /// let zero: f64 = r(0.0, 0.0, 0.0).iter().map(|(lo, hi)| hi - lo).sum();
 /// assert!(zero < all.1 / 1e6, "a zero radius must not scan the keyspace");
 /// ```
-#[allow(clippy::similar_names)]
 pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64)> {
+    neighbor_ranges(lon, lat, radius_m).to_vec()
+}
+
+/// At most nine score ranges, held inline: what [`neighbor_ranges`]
+/// answers. Reads as a slice.
+///
+/// ```
+/// let r = kevy_geo::neighbor_ranges(13.36, 38.11, 1_000.0);
+/// assert!(!r.is_empty() && r.len() <= 9);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct ScoreRanges {
+    at: [(f64, f64); 9],
+    len: usize,
+}
+
+impl ScoreRanges {
+    fn one(range: (f64, f64)) -> Self {
+        let mut r = Self { at: [(0.0, 0.0); 9], len: 0 };
+        r.push(range);
+        r
+    }
+
+    fn push(&mut self, range: (f64, f64)) {
+        self.at[self.len] = range;
+        self.len += 1;
+    }
+}
+
+impl core::ops::Deref for ScoreRanges {
+    type Target = [(f64, f64)];
+
+    fn deref(&self) -> &[(f64, f64)] {
+        &self.at[..self.len]
+    }
+}
+
+/// [`neighbor_score_ranges`] without the list: the ranges inline.
+///
+/// ```
+/// let at_palermo = |r| kevy_geo::neighbor_ranges(13.36, 38.11, r).to_vec();
+/// assert_eq!(at_palermo(5_000.0), kevy_geo::neighbor_score_ranges(13.36, 38.11, 5_000.0));
+/// ```
+#[allow(clippy::similar_names)]
+pub fn neighbor_ranges(lon: f64, lat: f64, radius_m: f64) -> ScoreRanges {
     if !lon.is_finite() || !lat.is_finite() {
-        return vec![(0.0, (1u64 << 52) as f64 - 1.0)];
+        return ScoreRanges::one((0.0, (1u64 << 52) as f64 - 1.0));
     }
     // A zero or negative radius used to short-circuit to the whole
     // keyspace here — which made `GEOSEARCH … BYRADIUS 0` a full scan of
@@ -62,10 +106,10 @@ pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64
     // existed two functions down.
     let step = estimate_step(radius_m, lat);
     if step <= 1 {
-        return vec![(0.0, (1u64 << 52) as f64 - 1.0)];
+        return ScoreRanges::one((0.0, (1u64 << 52) as f64 - 1.0));
     }
     let (clat, clon) = encode_uniform_step(lon, lat, step);
-    let mut raw: Vec<(u64, u64)> = Vec::with_capacity(9);
+    let (mut raw, mut n) = ([(0u64, 0u64); 9], 0);
     let cells = 1i32 << step;
     let shift = (GEO_STEP - step) * 2;
     let inner_mask = (1u64 << shift) - 1;
@@ -79,11 +123,12 @@ pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64
             let prefix = interleave52(ilat as u32, ilon as u32);
             let min = prefix << shift;
             let max = min | inner_mask;
-            raw.push((min, max));
+            raw[n] = (min, max);
+            n += 1;
         }
     }
-    raw.sort_unstable();
-    merge_ranges(raw)
+    raw[..n].sort_unstable();
+    merge_ranges(&raw[..n])
 }
 
 /// The cell size to search at, for a radius **at a latitude**.
@@ -184,15 +229,21 @@ fn encode_uniform_step(lon: f64, lat: f64, step: u32) -> (u32, u32) {
 /// Sort + coalesce adjacent / overlapping integer ranges, then convert
 /// to the `(f64, f64)` form callers feed into `ZRANGEBYSCORE`. The 52-bit
 /// integer ↔ f64 mapping is exact within the f64 mantissa.
-fn merge_ranges(sorted: Vec<(u64, u64)>) -> Vec<(f64, f64)> {
-    let mut out: Vec<(u64, u64)> = Vec::with_capacity(sorted.len());
-    for (min, max) in sorted {
-        match out.last_mut() {
-            Some(prev) if prev.1.saturating_add(1) >= min => {
-                prev.1 = prev.1.max(max);
+fn merge_ranges(sorted: &[(u64, u64)]) -> ScoreRanges {
+    let mut out = ScoreRanges { at: [(0.0, 0.0); 9], len: 0 };
+    let mut open: Option<(u64, u64)> = None;
+    for &(min, max) in sorted {
+        open = match open {
+            Some(prev) if prev.1.saturating_add(1) >= min => Some((prev.0, prev.1.max(max))),
+            Some(prev) => {
+                out.push((prev.0 as f64, prev.1 as f64));
+                Some((min, max))
             }
-            _ => out.push((min, max)),
-        }
+            None => Some((min, max)),
+        };
     }
-    out.into_iter().map(|(a, b)| (a as f64, b as f64)).collect()
+    if let Some(last) = open {
+        out.push((last.0 as f64, last.1 as f64));
+    }
+    out
 }
