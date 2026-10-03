@@ -1,0 +1,8 @@
+FLUSHALL	=>	+OK\r\n
+SET	str	x	=>	+OK\r\n
+SADD	a	1	2	3	=>	:3\r\n
+SINTERCARD	2	nope	str	=>	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+SINTERCARD	2	str	nope	=>	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+SINTERCARD	3	a	nope	str	=>	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+SINTERCARD	2	a	str	=>	-WRONGTYPE Operation against a key holding the wrong kind of value\r\n
+SINTERCARD	1	a	LIMIT	2	=>	:2\r\n

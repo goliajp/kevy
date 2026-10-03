@@ -7,8 +7,6 @@
 //! snapshot view clones one segment, not the whole value).
 
 use crate::list_seg::{SEG_PROMOTE, SegListData};
-#[cfg(not(feature = "std"))]
-use crate::nostd_prelude::*;
 use crate::small_list::{self, PushResult, SmallListData};
 use crate::util::{norm_index, range_bounds};
 use crate::value::{ListData, SmallBytes, Value, list_item_weight};
@@ -49,7 +47,11 @@ impl Store {
     /// when the key is missing (the `lset/lpop/rpop/lrem/ltrim` legacy
     /// paths). Callers dispatch the `SegList` encoding BEFORE calling
     /// this — a seg-encoded key never reaches the `make_mut` here.
-    fn list_mut(&mut self, key: &[u8], create: bool) -> Result<Option<&mut ListData>, StoreError> {
+    pub(crate) fn list_mut(
+        &mut self,
+        key: &[u8],
+        create: bool,
+    ) -> Result<Option<&mut ListData>, StoreError> {
         if self.live_entry_mut(key).is_none() {
             if !create {
                 return Ok(None);
@@ -83,7 +85,7 @@ impl Store {
 
     /// Whether `key` currently holds the `SegList` encoding (after lazy
     /// expiry). The write ops branch on this before the flat path.
-    fn is_seglist(&mut self, key: &[u8]) -> bool {
+    pub(crate) fn is_seglist(&mut self, key: &[u8]) -> bool {
         matches!(self.live_entry_mut(key).map(|e| &e.value), Some(Value::SegList(_)))
     }
 
@@ -91,7 +93,7 @@ impl Store {
     /// [`Self::is_seglist`]; the outer `make_mut` here is the cheap
     /// pointer-array clone (the per-segment clones happen inside
     /// `SegListData`'s ops, only on touched segments).
-    fn seglist_mut(&mut self, key: &[u8]) -> &mut SegListData {
+    pub(crate) fn seglist_mut(&mut self, key: &[u8]) -> &mut SegListData {
         match &mut self.map.get_mut(key).expect("is_seglist checked").value {
             Value::SegList(l) => Arc::make_mut(l),
             _ => unreachable!("is_seglist checked"),
@@ -99,7 +101,7 @@ impl Store {
     }
 
     /// Remove `key` if it now holds an empty list (any encoding).
-    fn drop_if_empty_list(&mut self, key: &[u8]) {
+    pub(crate) fn drop_if_empty_list(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
             Some(Value::List(l)) => l.is_empty(),
             Some(Value::SegList(l)) => l.is_empty(),
@@ -247,63 +249,6 @@ impl Store {
     }
 
     /// `LPOP`/`RPOP` shared body — pop up to `count` from one end.
-    fn list_pop(
-        &mut self,
-        key: &[u8],
-        count: usize,
-        front: bool,
-    ) -> Result<Vec<Vec<u8>>, StoreError> {
-        // Inline → promote first if there is anything to pop; simpler
-        // than maintaining a second pop path on the packed buffer.
-        if matches!(self.map.get(key).map(|e| &e.value), Some(Value::SmallListInline(_))) {
-            self.promote_list_inline_to_heap(key);
-        }
-        let (out, delta) = {
-            let mut o = Vec::new();
-            let mut d: i64 = 0;
-            if self.is_seglist(key) {
-                let l = self.seglist_mut(key);
-                for _ in 0..count {
-                    let popped = if front { l.pop_front() } else { l.pop_back() };
-                    match popped {
-                        Some(v) => {
-                            d -= list_item_weight(v.len()) as i64;
-                            o.push(v);
-                        }
-                        None => break,
-                    }
-                }
-            } else if let Some(l) = self.list_mut(key, false)? {
-                let cap = l.capacity();
-                for _ in 0..count {
-                    let popped = if front { l.pop_front() } else { l.pop_back() };
-                    match popped {
-                        Some(v) => {
-                            d -= v.capacity() as i64;
-                            o.push(v);
-                        }
-                        None => break,
-                    }
-                }
-                d = flat_delta(l, cap, d);
-            }
-            (o, d)
-        };
-        self.account_delta(key, delta);
-        self.drop_if_empty_list(key);
-        Ok(out)
-    }
-
-    /// `LPOP` — pop up to `count` from the head (deleting emptied key).
-    pub fn lpop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.list_pop(key, count, true)
-    }
-
-    /// `RPOP` — pop up to `count` from the tail.
-    pub fn rpop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        self.list_pop(key, count, false)
-    }
-
     /// Force-promote an inline list at `key` to its heap variant
     /// (no-op if already heap or absent). Used by mutating paths that
     /// only support the heap representations (pop/lrem/lset/ltrim).
@@ -462,7 +407,7 @@ fn promote_flat_to_seg(slot: &mut Value, v: &[u8], front: bool) {
 /// A flat list's weight change: `bytes` of items in or out, plus its
 /// deque's slots, which follow its capacity (they stay allocated as items
 /// leave, and grow in steps as items arrive).
-fn flat_delta(l: &ListData, cap_before: usize, bytes: i64) -> i64 {
+pub(crate) fn flat_delta(l: &ListData, cap_before: usize, bytes: i64) -> i64 {
     (l.capacity() as i64 - cap_before as i64) * crate::value::LIST_SLOT_BYTES as i64 + bytes
 }
 

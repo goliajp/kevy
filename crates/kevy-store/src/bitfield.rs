@@ -233,6 +233,31 @@ impl Store {
         key: &[u8],
         ops: &[BitFieldOp],
     ) -> Result<(Vec<Option<i64>>, bool), StoreError> {
+        let mut got = Vec::with_capacity(ops.len());
+        let wrote = self.bitfield_each(key, ops, |r| got.push(r))?;
+        Ok((got, wrote))
+    }
+
+    /// [`Self::bitfield`], each operation's answer handed to `f` in order;
+    /// whether anything was written. A write inside a bulk value only
+    /// this key holds happens in place.
+    ///
+    /// ```
+    /// use kevy_store::{BitFieldOp, BitType, Overflow, Store};
+    /// let mut s = Store::new();
+    /// let u8t = BitType::parse(b"u8").unwrap();
+    /// let mut got = Vec::new();
+    /// let ops = [BitFieldOp::IncrBy(u8t, 0, 5, Overflow::Wrap), BitFieldOp::Get(u8t, 0)];
+    /// assert!(s.bitfield_each(b"k", &ops, |r| got.push(r))?);
+    /// assert_eq!(got, [Some(5), Some(5)]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn bitfield_each(
+        &mut self,
+        key: &[u8],
+        ops: &[BitFieldOp],
+        mut f: impl FnMut(Option<i64>),
+    ) -> Result<bool, StoreError> {
         let reach = ops
             .iter()
             .filter_map(|op| match *op {
@@ -242,41 +267,52 @@ impl Store {
                 BitFieldOp::Get(..) => None,
             })
             .max();
-        let current = self.get(key)?;
         let Some(reach) = reach else {
-            let bytes = current.unwrap_or(Cow::Borrowed(&[]));
-            let got = ops.iter().map(|op| match *op {
-                BitFieldOp::Get(t, off) => Some(read(&bytes, off, t)),
-                _ => None,
-            });
-            return Ok((got.collect(), false));
+            let bytes = self.get(key)?.unwrap_or(Cow::Borrowed(&[]));
+            for op in ops {
+                f(match *op {
+                    BitFieldOp::Get(t, off) => Some(read(&bytes, off, t)),
+                    _ => None,
+                });
+            }
+            return Ok(false);
         };
-        let mut bytes = current.map(Cow::into_owned).unwrap_or_default();
         let need = reach.div_ceil(8) as usize;
+        if let Some(bytes) = self.bytes_in_place(key, need) {
+            return Ok(apply(bytes, ops, f));
+        }
+        let mut bytes = self.get(key)?.map(Cow::into_owned).unwrap_or_default();
         if bytes.len() < need {
             bytes.resize(need, 0);
         }
-        let mut wrote = false;
-        let mut got = Vec::with_capacity(ops.len());
-        for op in ops {
-            got.push(match *op {
-                BitFieldOp::Get(t, off) => Some(read(&bytes, off, t)),
-                BitFieldOp::Set(t, off, v, of) => fit(v, 0, t, of).map(|nv| {
-                    let old = read(&bytes, off, t);
-                    write(&mut bytes, off, t, nv);
-                    wrote = true;
-                    old
-                }),
-                BitFieldOp::IncrBy(t, off, incr, of) => fit(read(&bytes, off, t), incr, t, of)
-                    .inspect(|&nv| {
-                        write(&mut bytes, off, t, nv);
-                        wrote = true;
-                    }),
-            });
-        }
+        let wrote = apply(&mut bytes, ops, f);
         self.set_bytes_keep_ttl(key, bytes);
-        Ok((got, wrote))
+        Ok(wrote)
     }
+}
+
+/// Run `ops` over `bytes`, long enough for every write, each answer to
+/// `f`; whether any wrote.
+fn apply(bytes: &mut [u8], ops: &[BitFieldOp], mut f: impl FnMut(Option<i64>)) -> bool {
+    let mut wrote = false;
+    for op in ops {
+        f(match *op {
+            BitFieldOp::Get(t, off) => Some(read(bytes, off, t)),
+            BitFieldOp::Set(t, off, v, of) => fit(v, 0, t, of).map(|nv| {
+                let old = read(bytes, off, t);
+                write(bytes, off, t, nv);
+                wrote = true;
+                old
+            }),
+            BitFieldOp::IncrBy(t, off, incr, of) => {
+                fit(read(bytes, off, t), incr, t, of).inspect(|&nv| {
+                    write(bytes, off, t, nv);
+                    wrote = true;
+                })
+            }
+        });
+    }
+    wrote
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ use kevy_resp::{
 use kevy_store::{Store, StoreError};
 
 use crate::Effect;
+use crate::args::with_args;
 use crate::lcs::lcs_reply;
 use crate::multikey::{parse_zcombine, parse_zdiff, parse_zintercard};
 use crate::reply::{store_err, wrong_args};
@@ -98,28 +99,10 @@ fn sintercard<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
         Ok(p) => p,
         Err(e) => return encode_error(out, e.as_wire()),
     };
-    let mut sets = Vec::with_capacity(numkeys);
-    for i in 2..2 + numkeys {
-        match store.set_snapshot(&args[i]) {
-            Err(e) => return store_err(out, e),
-            Ok(m) if m.is_empty() => return encode_integer(out, 0),
-            Ok(m) => sets.push(m),
-        }
+    match with_args(args, 2..2 + numkeys, |keys| store.sintercard(keys, limit)) {
+        Ok(n) => encode_integer(out, n as i64),
+        Err(e) => store_err(out, e),
     }
-    sets.sort_by_key(Vec::len);
-    let (first, rest) = sets.split_first().map_or((&[][..], &[][..]), |(f, r)| (&f[..], r));
-    let others: Vec<std::collections::HashSet<&[u8]>> =
-        rest.iter().map(|s| s.iter().map(Vec::as_slice).collect()).collect();
-    let mut n = 0usize;
-    for m in first {
-        if others.iter().all(|o| o.contains(m.as_slice())) {
-            n += 1;
-            if n == limit {
-                break;
-            }
-        }
-    }
-    encode_integer(out, n as i64);
 }
 
 /// `LCS key1 key2 [LEN] [IDX] [MINMATCHLEN n] [WITHMATCHLEN]`.

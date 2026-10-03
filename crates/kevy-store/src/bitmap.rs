@@ -46,9 +46,20 @@ impl Store {
         let byte_idx = (offset / 8) as usize;
         let bit_idx = 7 - (offset % 8) as u8;
 
-        // Read current bytes (Cow); compute previous bit; extend +
-        // write back. We collect into a fresh Vec each time — bitmaps
-        // tend to be hot-write so SmallBytes shrink-fit is moot.
+        let flip = |b: &mut u8| {
+            let prev = (*b >> bit_idx) & 1;
+            if value == 1 {
+                *b |= 1 << bit_idx;
+            } else {
+                *b &= !(1u8 << bit_idx);
+            }
+            prev
+        };
+        if let Some(bytes) = self.bytes_in_place(key, byte_idx + 1) {
+            return Ok(flip(&mut bytes[byte_idx]));
+        }
+        // past the end, or not a bulk value only this key holds: copy,
+        // grow, write back
         let mut owned: Vec<u8> = match self.get(key)? {
             Some(Cow::Borrowed(b)) => b.to_vec(),
             Some(Cow::Owned(v)) => v,
@@ -57,18 +68,25 @@ impl Store {
         if byte_idx >= owned.len() {
             owned.resize(byte_idx + 1, 0);
         }
-        let prev = (owned[byte_idx] >> bit_idx) & 1;
-        if value == 1 {
-            owned[byte_idx] |= 1 << bit_idx;
-        } else {
-            owned[byte_idx] &= !(1u8 << bit_idx);
-        }
+        let prev = flip(&mut owned[byte_idx]);
         self.set_bytes_keep_ttl(key, owned);
         Ok(prev)
     }
 
     /// Store `owned` as `key`'s string, in the byte-array encoding (never
     /// int), keeping any TTL the key had.
+    /// The string at `key` writable in place, when it is a bulk value
+    /// nothing else holds (no snapshot, no reply still being sent) and at
+    /// least `len` bytes long: a write inside it then copies nothing.
+    /// `None` sends the caller to the copying path, which also answers a
+    /// missing or wrong-typed key.
+    pub(crate) fn bytes_in_place(&mut self, key: &[u8], len: usize) -> Option<&mut [u8]> {
+        match &mut self.live_entry_mut(key)?.value {
+            Value::ArcBulk(a) if a.len() >= len => Arc::get_mut(a).map(|b| &mut b[..]),
+            _ => None,
+        }
+    }
+
     pub(crate) fn set_bytes_keep_ttl(&mut self, key: &[u8], owned: Vec<u8>) {
         let new_val = if owned.is_empty() {
             Value::Str(SmallBytes::from_slice(&[]))
@@ -214,6 +232,10 @@ impl Store {
     /// any existing TTL.
     pub fn setrange(&mut self, key: &[u8], offset: u64, value: &[u8]) -> Result<usize, StoreError> {
         let offset = offset as usize;
+        if let Some(bytes) = self.bytes_in_place(key, offset + value.len()) {
+            bytes[offset..offset + value.len()].copy_from_slice(value);
+            return Ok(bytes.len());
+        }
         let mut owned: Vec<u8> = match self.get(key)? {
             Some(Cow::Borrowed(b)) => b.to_vec(),
             Some(Cow::Owned(v)) => v,

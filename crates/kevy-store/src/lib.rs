@@ -111,6 +111,7 @@ mod keyspace;
 mod keyspace_load;
 mod keyspace_map;
 mod list;
+mod list_pop;
 mod list_read;
 pub mod list_seg;
 mod notify;
@@ -414,6 +415,8 @@ mod send_sync;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bit_in_place;
 #[cfg(test)]
 mod tests_collection_scan;
 #[cfg(test)]

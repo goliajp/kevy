@@ -30,33 +30,62 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         wrong_args(out, if read_only { "bitfield_ro" } else { "bitfield" });
         return Some(Effect::Unchanged);
     }
-    let ops = match parse(args, read_only) {
-        Ok(ops) => ops,
+    // parsed whole first, so a malformed later operation refuses the
+    // call; then again onto the stack, past 16 operations into a list
+    let (mut first, mut n) = (None, 0);
+    if let Err(e) = parse(args, read_only, |op| {
+        first.get_or_insert(op);
+        n += 1;
+    }) {
+        encode_error(out, e);
+        return Some(Effect::Unchanged);
+    }
+    let Some(first) = first else { return Some(run(store, &args[1], &[], read_only, out)) };
+    if n > 16 {
+        let mut ops = Vec::with_capacity(n);
+        let _ = parse(args, read_only, |op| ops.push(op));
+        return Some(run(store, &args[1], &ops, read_only, out));
+    }
+    let mut ops = [first; 16];
+    let mut at = 0;
+    let _ = parse(args, read_only, |op| {
+        ops[at] = op;
+        at += 1;
+    });
+    Some(run(store, &args[1], &ops[..n], read_only, out))
+}
+
+/// The operations against `key`, each answer written as it comes.
+fn run(
+    store: &mut Store,
+    key: &[u8],
+    ops: &[BitFieldOp],
+    read_only: bool,
+    out: &mut Vec<u8>,
+) -> Effect {
+    let start = out.len();
+    encode_array_len(out, ops.len() as i64);
+    let answered = store.bitfield_each(key, ops, |v| match v {
+        Some(n) => encode_integer(out, n),
+        None => encode_null_bulk(out),
+    });
+    match answered {
+        Ok(wrote) if !read_only => changed(wrote),
+        Ok(_) => Effect::Read,
         Err(e) => {
-            encode_error(out, e);
-            return Some(Effect::Unchanged);
-        }
-    };
-    Some(match store.bitfield(&args[1], &ops) {
-        Err(e) => {
+            out.truncate(start);
             store_err(out, e);
             Effect::Unchanged
         }
-        Ok((got, wrote)) => {
-            encode_array_len(out, got.len() as i64);
-            for v in got {
-                match v {
-                    Some(n) => encode_integer(out, n),
-                    None => encode_null_bulk(out),
-                }
-            }
-            if read_only { Effect::Read } else { changed(wrote) }
-        }
-    })
+    }
 }
 
-fn parse<A: ArgvView + ?Sized>(args: &A, read_only: bool) -> Result<Vec<BitFieldOp>, &'static str> {
-    let (mut ops, mut of, mut i) = (Vec::new(), Overflow::Wrap, 2);
+fn parse<A: ArgvView + ?Sized>(
+    args: &A,
+    read_only: bool,
+    mut push: impl FnMut(BitFieldOp),
+) -> Result<(), &'static str> {
+    let (mut of, mut i) = (Overflow::Wrap, 2);
     while i < args.len() {
         let sub = &args[i];
         let operands = if sub.eq_ignore_ascii_case(b"GET") || sub.eq_ignore_ascii_case(b"OVERFLOW")
@@ -77,7 +106,7 @@ fn parse<A: ArgvView + ?Sized>(args: &A, read_only: bool) -> Result<Vec<BitField
         } else {
             let t = BitType::parse(&args[i + 1]).ok_or(ERR_TYPE)?;
             let off = offset(&args[i + 2], t)?;
-            ops.push(if sub.eq_ignore_ascii_case(b"GET") {
+            push(if sub.eq_ignore_ascii_case(b"GET") {
                 BitFieldOp::Get(t, off)
             } else {
                 let v = arg_i64(&args[i + 3]).ok_or(ERR_NOT_INT)?;
@@ -90,7 +119,7 @@ fn parse<A: ArgvView + ?Sized>(args: &A, read_only: bool) -> Result<Vec<BitField
         }
         i += operands + 1;
     }
-    Ok(ops)
+    Ok(())
 }
 
 fn overflow(b: &[u8]) -> Result<Overflow, &'static str> {
