@@ -77,7 +77,7 @@ impl Store {
         self.reweigh_entry(key);
     }
 
-    fn drop_if_empty_zset(&mut self, key: &[u8]) {
+    pub(crate) fn drop_if_empty_zset(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
             Some(Value::ZSet(z)) => z.len() == 0,
             Some(Value::SegZSet(z)) => z.is_empty(),
@@ -330,7 +330,7 @@ fn flat_insert_weighed(z: &mut ZSetData, member: &[u8], score: f64) -> (bool, i6
 
 /// What a member adds to a zset besides the structure's growth: its
 /// rank-tree slot, and its heap held twice (member table and rank tree).
-fn member_weight(m: &[u8]) -> i64 {
+pub(crate) fn member_weight(m: &[u8]) -> i64 {
     let heap = kevy_map::malloc_footprint(SmallBytes::heap_bytes_for(m)) as u64;
     (2 * heap + crate::value::RANKTREE_SLOT_BYTES) as i64
 }
