@@ -5,7 +5,8 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::value::{ScoreBound, Value};
+use crate::value::{ScoreBound, SmallBytes, Value};
+use crate::zset::member_weight;
 use crate::{Store, StoreError, ZSpan};
 
 impl Store {
@@ -153,4 +154,72 @@ impl Store {
 /// A selection copied out.
 pub(crate) fn owned(r: crate::ZRange<'_>) -> Vec<(Vec<u8>, f64)> {
     r.map(|(m, s)| (m.to_vec(), s)).collect()
+}
+
+impl Store {
+    /// Remove the members of `key` in `span`, none of them copied out: the
+    /// key is found once, the window bracketed as two ranks, then the
+    /// member at its first rank goes, as many times as the window is wide
+    /// — a short member held inline while it goes. How many went.
+    ///
+    /// ```
+    /// use kevy_store::{ScoreBound, Store, ZSpan};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
+    /// let low = ZSpan::Score(ScoreBound::inclusive(0.0), ScoreBound::inclusive(2.0));
+    /// assert_eq!(s.zrem_span(b"z", low)?, 2);
+    /// assert_eq!(s.zcard(b"z")?, 1);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zrem_span(&mut self, key: &[u8], span: ZSpan<'_>) -> Result<usize, StoreError> {
+        let Some(e) = self.live_entry_mut(key) else { return Ok(0) };
+        let (lo, hi) = crate::zset_select::bounds_in(&e.value, span)?;
+        if lo == hi {
+            return Ok(0);
+        }
+        let delta = remove_ranks(&mut e.value, lo, hi - lo);
+        self.account_delta(key, delta);
+        self.drop_if_empty_zset(key);
+        Ok(hi - lo)
+    }
+}
+
+/// Remove `n` members from rank `lo` of a sorted set value; the weight it
+/// shed.
+fn remove_ranks(value: &mut Value, lo: usize, n: usize) -> i64 {
+    let mut d = 0;
+    match value {
+        Value::ZSet(z) => {
+            let z = alloc::sync::Arc::make_mut(z);
+            for _ in 0..n {
+                let Some((_, m)) = z.by_score.select(lo).cloned() else { break };
+                z.remove(m.as_slice());
+                d -= member_weight(m.as_slice());
+            }
+        }
+        Value::SegZSet(z) => {
+            let z = alloc::sync::Arc::make_mut(z);
+            for _ in 0..n {
+                let Some((m, _)) = z.ordered_from(lo).next() else { break };
+                let m = SmallBytes::from_slice(m);
+                if let Some(shell) = z.remove_weighed(m.as_slice()) {
+                    d += shell - member_weight(m.as_slice());
+                }
+            }
+        }
+        Value::SmallZSetInline(z) => {
+            let mut two = [(SmallBytes::new(), 0.0), (SmallBytes::new(), 0.0)];
+            let k = z
+                .iter()
+                .zip(two.iter_mut())
+                .map(|((m, s), slot)| *slot = (SmallBytes::from_slice(m), s))
+                .count();
+            two[..k].sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            for (m, _) in &two[lo..(lo + n).min(k)] {
+                z.try_remove(m.as_slice());
+            }
+        }
+        _ => {}
+    }
+    d
 }

@@ -173,41 +173,8 @@ impl Store {
     }
 }
 
-impl Store {
-    /// Remove the members of `key` in `span`, ascending, none of them
-    /// copied out: the window is bracketed as two ranks, then the member
-    /// at its first rank goes, as many times as the window is wide — a
-    /// short member held inline while it goes. How many went.
-    ///
-    /// ```
-    /// use kevy_store::{ScoreBound, Store, ZSpan};
-    /// let mut s = Store::new();
-    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
-    /// let low = ZSpan::Score(ScoreBound::inclusive(0.0), ScoreBound::inclusive(2.0));
-    /// assert_eq!(s.zrem_span(b"z", low)?, 2);
-    /// assert_eq!(s.zcard(b"z")?, 1);
-    /// # Ok::<(), kevy_store::StoreError>(())
-    /// ```
-    pub fn zrem_span(&mut self, key: &[u8], span: ZSpan<'_>) -> Result<usize, StoreError> {
-        let (lo, hi) = match self.live_entry(key) {
-            None => return Ok(0),
-            Some(e) => bounds_in(&e.value, span)?,
-        };
-        for _ in lo..hi {
-            let gone = {
-                let mut at =
-                    self.zrange_select(key, ZSpan::Rank(lo as i64, lo as i64), false, None)?;
-                let Some((m, _)) = at.next() else { break };
-                SmallBytes::from_slice(m)
-            };
-            self.zrem(key, &[gone.as_slice()])?;
-        }
-        Ok(hi - lo)
-    }
-}
-
 /// The ascending ranks `[lo, hi)` of `span` in a sorted set value.
-fn bounds_in(value: &Value, span: ZSpan<'_>) -> Result<(usize, usize), StoreError> {
+pub(crate) fn bounds_in(value: &Value, span: ZSpan<'_>) -> Result<(usize, usize), StoreError> {
     Ok(match value {
         Value::ZSet(z) => window(z.len(), span, false, None, |s| flat_bracket(z, s)),
         Value::SegZSet(z) => window(z.len(), span, false, None, |s| seg_bracket(z, s)),
