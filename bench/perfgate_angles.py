@@ -72,7 +72,9 @@ CALLGRIND = {
     "pfadd": (None, "PFADD hll __rand_int__"),
 }
 # angles whose single request costs far more than a GET count fewer
-CALLGRIND_OPS = {"zinterstore": 5_000}
+# zrangebyscore: a build that collects the whole range before LIMIT walks
+# ~50,000 members a request
+CALLGRIND_OPS = {"zinterstore": 5_000, "zrangebyscore": 2_000}
 
 
 def crc16(data):
