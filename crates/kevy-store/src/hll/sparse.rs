@@ -36,6 +36,24 @@ pub(super) fn decode(b: &[u8], at: usize) -> Result<(Op, usize), Corrupt> {
     })
 }
 
+/// Register `index`'s value, read from the runs.
+pub(super) fn get(b: &[u8], index: u32) -> Result<u8, Corrupt> {
+    let (mut p, mut first) = (super::HDR, 0u32);
+    while p < b.len() {
+        let (op, n) = decode(b, p)?;
+        let (v, len) = match op {
+            Op::Zero(len) => (0, len),
+            Op::Val(v, len) => (v, len),
+        };
+        if index < first + len {
+            return Ok(v);
+        }
+        first += len;
+        p += n;
+    }
+    Err(Corrupt)
+}
+
 fn is_val(c: u8) -> bool {
     c & 0x80 != 0
 }

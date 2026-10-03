@@ -13,7 +13,7 @@ use crate::args::upper_verb;
 use crate::reply::store_err;
 
 use super::search;
-use super::search::{Form, RadiusReply};
+use super::search::Form;
 
 /// `GEORADIUS[_RO] key lon lat radius unit [...]` — legacy.
 pub(super) fn cmd_georadius<A: ArgvView + ?Sized>(
@@ -53,19 +53,23 @@ fn run_radius<A: ArgvView + ?Sized>(
         }
     };
     q.opts.proto = proto;
-    let hits = match search::run_search(store, &q) {
-        Ok(h) => h,
-        Err(e) => {
-            store_err(out, e);
-            return Effect::Read;
+    let Some(dst) = q.store_dst else {
+        match search::run_search(store, &q) {
+            Ok(hits) => search::emit_reply(&hits, &q.opts, out),
+            Err(e) => store_err(out, e),
         }
+        return Effect::Read;
     };
-    let had_dst = q.store_dst.as_ref().is_some_and(|d| store.key_exists(d));
-    match search::emit_or_store(out, store, &hits, &q) {
-        RadiusReply::Replied => Effect::Read,
-        RadiusReply::Stored(n) => {
+    let had_dst = store.key_exists(dst);
+    match search::search_pairs(store, &q) {
+        Ok(pairs) => {
+            let n = store.zstore_result(dst, &pairs);
             encode_integer(out, n as i64);
             crate::changed(n > 0 || had_dst)
+        }
+        Err(e) => {
+            store_err(out, e);
+            Effect::Read
         }
     }
 }

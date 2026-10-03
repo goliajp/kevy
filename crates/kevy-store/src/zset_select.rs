@@ -135,38 +135,80 @@ impl Store {
         rev: bool,
         limit: Option<(i64, i64)>,
     ) -> Result<ZRange<'_>, StoreError> {
-        let empty = ZRange { walk: Walk::Small { e: [(&[], 0.0); 2], lo: 0, hi: 0, rev }, left: 0 };
-        let Some(e) = self.live_entry(key) else { return Ok(empty) };
-        Ok(match &e.value {
-            Value::ZSet(z) => {
-                let (lo, hi) = window(z.len(), span, rev, limit, |s| flat_bracket(z, s));
-                let walk = if rev {
-                    Walk::FlatRev(z.by_score.iter_rev_from(hi))
-                } else {
-                    Walk::Flat(z.by_score.iter_from(lo))
-                };
-                ZRange { walk, left: hi - lo }
+        match self.live_entry(key) {
+            Some(e) => select_in(&e.value, span, rev, limit),
+            None => {
+                Ok(ZRange { walk: Walk::Small { e: [(&[], 0.0); 2], lo: 0, hi: 0, rev }, left: 0 })
             }
-            Value::SegZSet(z) => {
-                let (lo, hi) = window(z.len(), span, rev, limit, |s| seg_bracket(z, s));
-                let order = z.order();
-                let walk = if rev {
-                    Walk::SegRev(order.iter_rev_through(hi))
-                } else {
-                    Walk::Seg(order.iter_from(lo))
-                };
-                ZRange { walk, left: hi - lo }
-            }
-            Value::SmallZSetInline(z) => {
-                let mut e = [(&[][..], 0.0); 2];
-                let n = z.iter().zip(e.iter_mut()).map(|(x, slot)| *slot = x).count();
-                e[..n].sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
-                let (lo, hi) = window(n, span, rev, limit, |s| small_bracket(&e[..n], s));
-                ZRange { walk: Walk::Small { e, lo, hi, rev }, left: hi - lo }
-            }
-            _ => return Err(StoreError::WrongType),
-        })
+        }
     }
+
+    /// The entries of `key` in each of `spans`, ascending, to `f` —
+    /// borrowed for as long as the store is, so a caller can keep them
+    /// past one span while it reads the next. A missing key selects
+    /// nothing.
+    ///
+    /// ```
+    /// use kevy_store::{ScoreBound, Store, ZSpan};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (5.0, b"b"), (9.0, b"c")])?;
+    /// let low = ZSpan::Score(ScoreBound::inclusive(0.0), ScoreBound::inclusive(2.0));
+    /// let high = ZSpan::Score(ScoreBound::inclusive(8.0), ScoreBound::inclusive(10.0));
+    /// let mut got: Vec<&[u8]> = Vec::new();
+    /// s.zrange_each_span(b"z", &[low, high], |m, _| got.push(m))?;
+    /// assert_eq!(got, [&b"a"[..], b"c"]);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zrange_each_span<'s>(
+        &'s mut self,
+        key: &[u8],
+        spans: &[ZSpan<'_>],
+        mut f: impl FnMut(&'s [u8], f64),
+    ) -> Result<(), StoreError> {
+        let Some(e) = self.live_entry(key) else { return Ok(()) };
+        for span in spans {
+            select_in(&e.value, *span, false, None)?.for_each(|(m, s)| f(m, s));
+        }
+        Ok(())
+    }
+}
+
+/// [`Store::zrange_select`] over a value already found live.
+fn select_in<'s>(
+    value: &'s Value,
+    span: ZSpan<'_>,
+    rev: bool,
+    limit: Option<(i64, i64)>,
+) -> Result<ZRange<'s>, StoreError> {
+    Ok(match value {
+        Value::ZSet(z) => {
+            let (lo, hi) = window(z.len(), span, rev, limit, |s| flat_bracket(z, s));
+            let walk = if rev {
+                Walk::FlatRev(z.by_score.iter_rev_from(hi))
+            } else {
+                Walk::Flat(z.by_score.iter_from(lo))
+            };
+            ZRange { walk, left: hi - lo }
+        }
+        Value::SegZSet(z) => {
+            let (lo, hi) = window(z.len(), span, rev, limit, |s| seg_bracket(z, s));
+            let order = z.order();
+            let walk = if rev {
+                Walk::SegRev(order.iter_rev_through(hi))
+            } else {
+                Walk::Seg(order.iter_from(lo))
+            };
+            ZRange { walk, left: hi - lo }
+        }
+        Value::SmallZSetInline(z) => {
+            let mut e = [(&[][..], 0.0); 2];
+            let n = z.iter().zip(e.iter_mut()).map(|(x, slot)| *slot = x).count();
+            e[..n].sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+            let (lo, hi) = window(n, span, rev, limit, |s| small_bracket(&e[..n], s));
+            ZRange { walk: Walk::Small { e, lo, hi, rev }, left: hi - lo }
+        }
+        _ => return Err(StoreError::WrongType),
+    })
 }
 
 fn flat_bracket(z: &crate::value::ZSetData, span: ZSpan<'_>) -> (usize, usize) {

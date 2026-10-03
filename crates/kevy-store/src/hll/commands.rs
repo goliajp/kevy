@@ -37,7 +37,9 @@ impl Store {
             }
             return Ok(raised);
         }
+        // adding elements already counted changes nothing: no copy for it
         let (mut buf, created) = match self.hll_bytes(key)? {
+            Some(b) if !raises_any(&b, elements)? => return Ok(false),
             Some(b) => (b.into_owned(), false),
             None => (new_sparse(), true),
         };
@@ -128,4 +130,20 @@ impl Store {
         self.set_bytes_keep_ttl(dst, buf);
         Ok(())
     }
+}
+
+/// Whether adding `elements` would raise any register of `b`.
+fn raises_any(b: &[u8], elements: &[&[u8]]) -> Result<bool, StoreError> {
+    for e in elements {
+        let (index, count) = place(e);
+        let now = if b[4] == DENSE {
+            dense_get(&b[HDR..], index as usize)
+        } else {
+            super::sparse::get(b, index).map_err(StoreError::from)?
+        };
+        if now < count {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
