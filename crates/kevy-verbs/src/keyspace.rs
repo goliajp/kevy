@@ -7,7 +7,7 @@ use std::time::Duration;
 use kevy_resp::{ArgvView, encode_error, encode_integer, encode_simple_string};
 use kevy_store::{RenameOutcome, Store};
 
-use crate::args::{arg_i64, rest_borrowed, upper_verb};
+use crate::args::{arg_i64, upper_verb, with_rest};
 use crate::reply::{ERR_NOT_INT, wrong_args};
 use crate::{Effect, changed};
 
@@ -27,7 +27,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
                 wrong_args(out, if cmd == b"DEL" { "del" } else { "unlink" });
                 return Some(Effect::Unchanged);
             }
-            let n = store.del(&rest_borrowed(args, 1));
+            let n = with_rest(args, 1, |rest| store.del(rest));
             encode_integer(out, n as i64);
             changed(n > 0)
         }
@@ -37,7 +37,7 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
             if args.len() < 2 {
                 wrong_args(out, if cmd == b"EXISTS" { "exists" } else { "touch" });
             } else {
-                encode_integer(out, store.exists(&rest_borrowed(args, 1)) as i64);
+                encode_integer(out, with_rest(args, 1, |rest| store.exists(rest)) as i64);
             }
             Effect::Read
         }

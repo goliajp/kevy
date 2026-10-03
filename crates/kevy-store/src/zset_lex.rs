@@ -6,8 +6,7 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::value::Value;
-use crate::{Store, StoreError};
+use crate::{Store, StoreError, ZSpan};
 
 /// One end of a lexicographic range: `-` / `+`, or `[member` / `(member`.
 ///
@@ -33,59 +32,83 @@ pub enum LexBound {
 impl LexBound {
     /// The bound a range argument spells, or `None` when it is no bound.
     pub fn parse(b: &[u8]) -> Option<Self> {
+        Some(match LexEnd::parse(b)? {
+            LexEnd::NegInf => Self::NegInf,
+            LexEnd::PosInf => Self::PosInf,
+            LexEnd::Inclusive(m) => Self::Inclusive(m.to_vec()),
+            LexEnd::Exclusive(m) => Self::Exclusive(m.to_vec()),
+        })
+    }
+
+    /// The same bound, borrowed.
+    ///
+    /// ```
+    /// use kevy_store::{LexBound, LexEnd};
+    /// assert_eq!(LexBound::Exclusive(b"m".to_vec()).as_end(), LexEnd::Exclusive(b"m"));
+    /// ```
+    pub fn as_end(&self) -> LexEnd<'_> {
+        match self {
+            Self::NegInf => LexEnd::NegInf,
+            Self::PosInf => LexEnd::PosInf,
+            Self::Inclusive(m) => LexEnd::Inclusive(m),
+            Self::Exclusive(m) => LexEnd::Exclusive(m),
+        }
+    }
+}
+
+/// One end of a range by bytes, borrowed from the argument that spells
+/// it: what [`LexBound`] holds, without the copy.
+///
+/// ```
+/// use kevy_store::LexEnd;
+/// assert_eq!(LexEnd::parse(b"[b"), Some(LexEnd::Inclusive(b"b")));
+/// assert_eq!(LexEnd::parse(b"+"), Some(LexEnd::PosInf));
+/// assert_eq!(LexEnd::parse(b"b"), None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LexEnd<'a> {
+    /// Below every member.
+    NegInf,
+    /// Above every member.
+    PosInf,
+    /// The member itself is in range.
+    Inclusive(&'a [u8]),
+    /// The member itself is not.
+    Exclusive(&'a [u8]),
+}
+
+impl<'a> LexEnd<'a> {
+    /// The bound a range argument spells, or `None` when it is no bound.
+    pub fn parse(b: &'a [u8]) -> Option<Self> {
         match b {
             b"-" => Some(Self::NegInf),
             b"+" => Some(Self::PosInf),
-            [b'[', rest @ ..] => Some(Self::Inclusive(rest.to_vec())),
-            [b'(', rest @ ..] => Some(Self::Exclusive(rest.to_vec())),
+            [b'[', rest @ ..] => Some(Self::Inclusive(rest)),
+            [b'(', rest @ ..] => Some(Self::Exclusive(rest)),
             _ => None,
         }
     }
 
     /// `m` is at or past this lower bound.
-    fn admits_from_below(&self, m: &[u8]) -> bool {
+    pub(crate) fn admits_from_below(self, m: &[u8]) -> bool {
         match self {
             Self::NegInf => true,
             Self::PosInf => false,
-            Self::Inclusive(b) => m >= b.as_slice(),
-            Self::Exclusive(b) => m > b.as_slice(),
+            Self::Inclusive(b) => m >= b,
+            Self::Exclusive(b) => m > b,
         }
     }
 
     /// `m` is at or before this upper bound.
-    fn admits_from_above(&self, m: &[u8]) -> bool {
+    pub(crate) fn admits_from_above(self, m: &[u8]) -> bool {
         match self {
             Self::NegInf => false,
             Self::PosInf => true,
-            Self::Inclusive(b) => m <= b.as_slice(),
-            Self::Exclusive(b) => m < b.as_slice(),
+            Self::Inclusive(b) => m <= b,
+            Self::Exclusive(b) => m < b,
         }
     }
-}
-
-/// The ranks `[lo, hi)` of a ranked sorted set's members within
-/// `[min, max]` by bytes.
-macro_rules! lex_span {
-    ($z:expr, $min:expr, $max:expr) => {{
-        let z = $z;
-        let at = |r: usize, f: &dyn Fn(&[u8]) -> bool| {
-            z.ordered_from(r).next().is_some_and(|(m, _)| f(m))
-        };
-        let lo = partition(z.len(), |r| at(r, &|m| !$min.admits_from_below(m)));
-        let hi = partition(z.len(), |r| at(r, &|m| $max.admits_from_above(m)));
-        (lo, hi)
-    }};
-}
-
-/// The first rank in `0..len` at which `holds` stops being true, for a
-/// `holds` that is true on a prefix.
-fn partition(len: usize, holds: impl Fn(usize) -> bool) -> usize {
-    let (mut lo, mut hi) = (0, len);
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if holds(mid) { lo = mid + 1 } else { hi = mid }
-    }
-    lo
 }
 
 impl Store {
@@ -105,30 +128,12 @@ impl Store {
         min: &LexBound,
         max: &LexBound,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        let Some(e) = self.live_entry(key) else { return Ok(Vec::new()) };
-        macro_rules! ranked {
-            ($z:expr) => {{
-                let (lo, hi) = lex_span!($z, min, max);
-                $z.ordered_from(lo)
-                    .take(hi.saturating_sub(lo))
-                    .map(|(m, s)| (m.to_vec(), s))
-                    .collect()
-            }};
-        }
-        Ok(match &e.value {
-            Value::ZSet(z) => ranked!(z),
-            Value::SegZSet(z) => ranked!(z),
-            Value::SmallZSetInline(z) => {
-                let mut v: Vec<(Vec<u8>, f64)> = z
-                    .iter()
-                    .filter(|(m, _)| min.admits_from_below(m) && max.admits_from_above(m))
-                    .map(|(m, s)| (m.to_vec(), s))
-                    .collect();
-                v.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                v
-            }
-            _ => return Err(StoreError::WrongType),
-        })
+        Ok(crate::zset_range::owned(self.zrange_select(
+            key,
+            ZSpan::Lex(min.as_end(), max.as_end()),
+            false,
+            None,
+        )?))
     }
 
     /// `ZLEXCOUNT` — how many members fall within `[min, max]` by bytes:
@@ -147,22 +152,7 @@ impl Store {
         min: &LexBound,
         max: &LexBound,
     ) -> Result<usize, StoreError> {
-        let Some(e) = self.live_entry(key) else { return Ok(0) };
-        Ok(match &e.value {
-            Value::ZSet(z) => {
-                let (lo, hi) = lex_span!(z, min, max);
-                hi.saturating_sub(lo)
-            }
-            Value::SegZSet(z) => {
-                let (lo, hi) = lex_span!(z, min, max);
-                hi.saturating_sub(lo)
-            }
-            Value::SmallZSetInline(z) => z
-                .iter()
-                .filter(|(m, _)| min.admits_from_below(m) && max.admits_from_above(m))
-                .count(),
-            _ => return Err(StoreError::WrongType),
-        })
+        Ok(self.zrange_select(key, ZSpan::Lex(min.as_end(), max.as_end()), false, None)?.len())
     }
 
     /// `ZREMRANGEBYLEX` — remove the members within `[min, max]` by bytes;
@@ -173,12 +163,25 @@ impl Store {
         min: &LexBound,
         max: &LexBound,
     ) -> Result<usize, StoreError> {
-        let gone = self.zrange_by_lex(key, min, max)?;
-        if gone.is_empty() {
-            return Ok(0);
-        }
-        let members: Vec<&[u8]> = gone.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &members)
+        self.zremrange_by_lex_ends(key, min.as_end(), max.as_end())
+    }
+
+    /// [`Self::zremrange_by_lex`] for borrowed bounds.
+    ///
+    /// ```
+    /// use kevy_store::LexEnd;
+    /// let mut s = kevy_store::Store::new();
+    /// s.zadd(b"z", &[(0.0, b"a".as_slice()), (0.0, b"b"), (0.0, b"c")])?;
+    /// assert_eq!(s.zremrange_by_lex_ends(b"z", LexEnd::Inclusive(b"b"), LexEnd::PosInf)?, 2);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zremrange_by_lex_ends(
+        &mut self,
+        key: &[u8],
+        min: LexEnd<'_>,
+        max: LexEnd<'_>,
+    ) -> Result<usize, StoreError> {
+        self.zrem_span(key, ZSpan::Lex(min, max))
     }
 }
 

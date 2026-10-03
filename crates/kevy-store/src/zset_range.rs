@@ -5,9 +5,9 @@
 
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
-use crate::util::range_bounds;
-use crate::value::{ScoreBound, Value};
-use crate::{Store, StoreError};
+use crate::value::{ScoreBound, SmallBytes, Value};
+use crate::zset::member_weight;
+use crate::{Store, StoreError, ZSpan};
 
 impl Store {
     /// `ZRANGE key start stop` by rank.
@@ -17,39 +17,7 @@ impl Store {
         start: i64,
         stop: i64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        match self.live_entry(key) {
-            None => Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(match range_bounds(start, stop, z.len()) {
-                    None => Vec::new(),
-                    // O(log N) seek to the start rank, then walk M items —
-                    // no skip-walk from the front.
-                    Some((s, end)) => z
-                        .ordered_from(s)
-                        .take(end - s + 1)
-                        .map(|(m, sc)| (m.to_vec(), sc))
-                        .collect(),
-                }),
-                Value::SegZSet(z) => Ok(match range_bounds(start, stop, z.len()) {
-                    None => Vec::new(),
-                    Some((s, end)) => z
-                        .ordered_from(s)
-                        .take(end - s + 1)
-                        .map(|(m, sc)| (m.to_vec(), sc))
-                        .collect(),
-                }),
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> =
-                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    Ok(match range_bounds(start, stop, entries.len()) {
-                        None => Vec::new(),
-                        Some((s, end)) => entries.into_iter().skip(s).take(end - s + 1).collect(),
-                    })
-                }
-                _ => Err(StoreError::WrongType),
-            },
-        }
+        Ok(owned(self.zrange_select(key, ZSpan::Rank(start, stop), false, None)?))
     }
 
     /// `ZRANGEBYSCORE`.
@@ -59,106 +27,26 @@ impl Store {
         min: ScoreBound,
         max: ScoreBound,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        match self.live_entry(key) {
-            None => Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => {
-                    // Two O(log N) rank descents bracket the score range,
-                    // then only the M matches are walked — no scan+filter.
-                    let lo = z.score_start_rank(&min);
-                    let hi = z.score_end_rank(&max);
-                    Ok(z.ordered_from(lo)
-                        .take(hi.saturating_sub(lo))
-                        .map(|(m, sc)| (m.to_vec(), sc))
-                        .collect())
-                }
-                Value::SegZSet(z) => {
-                    let lo = z.score_start_rank(&min);
-                    let hi = z.score_end_rank(&max);
-                    Ok(z.ordered_from(lo)
-                        .take(hi.saturating_sub(lo))
-                        .map(|(m, sc)| (m.to_vec(), sc))
-                        .collect())
-                }
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> = z
-                        .iter()
-                        .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                        .map(|(m, sc)| (m.to_vec(), sc))
-                        .collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    Ok(entries)
-                }
-                _ => Err(StoreError::WrongType),
-            },
-        }
+        Ok(owned(self.zrange_select(key, ZSpan::Score(min, max), false, None)?))
     }
 
-    /// `ZCOUNT`.
+    /// `ZCOUNT`: two rank descents, nothing walked.
     pub fn zcount(
         &mut self,
         key: &[u8],
         min: ScoreBound,
         max: ScoreBound,
     ) -> Result<usize, StoreError> {
-        match self.live_entry(key) {
-            None => Ok(0),
-            Some(e) => match &e.value {
-                // Two rank descents — O(log N), no iteration at all.
-                Value::ZSet(z) => {
-                    Ok(z.score_end_rank(&max).saturating_sub(z.score_start_rank(&min)))
-                }
-                Value::SegZSet(z) => {
-                    Ok(z.score_end_rank(&max).saturating_sub(z.score_start_rank(&min)))
-                }
-                Value::SmallZSetInline(z) => {
-                    Ok(z.iter().filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc)).count())
-                }
-                _ => Err(StoreError::WrongType),
-            },
-        }
+        Ok(self.zrange_select(key, ZSpan::Score(min, max), false, None)?.len())
     }
 
     /// `ZPOPMIN key [count]` — pop and return the `count` lowest-scored
     /// members (ascending by `(score, member)`). Returns `(member,
     /// score)` pairs in pop order; empty when the key is absent / empty.
     pub fn zpopmin(&mut self, key: &[u8], count: usize) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        if count == 0 {
-            // Validate type up-front so ZPOPMIN k 0 against a wrong-type
-            // key still reports WRONGTYPE (Redis behaviour).
-            if let Some(e) = self.live_entry(key) {
-                match &e.value {
-                    Value::ZSet(_) | Value::SegZSet(_) | Value::SmallZSetInline(_) => {}
-                    _ => return Err(StoreError::WrongType),
-                }
-            }
-            return Ok(Vec::new());
-        }
-        // Snapshot the lowest `count` members first (immutable borrow),
-        // then remove them via the shared zrem path (which handles the
-        // encoding, weight accounting, and empty-key cleanup uniformly).
-        let to_pop: Vec<(Vec<u8>, f64)> = match self.live_entry(key) {
-            None => return Ok(Vec::new()),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect(),
-                Value::SegZSet(z) => {
-                    z.ordered().take(count).map(|(m, sc)| (m.to_vec(), sc)).collect()
-                }
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> =
-                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    entries.into_iter().take(count).collect()
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-        };
-        if to_pop.is_empty() {
-            return Ok(to_pop);
-        }
-        let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &borrowed)?;
-        Ok(to_pop)
+        let mut low = Vec::new();
+        self.zpop_each(key, count, false, |m, s| low.push((m.to_vec(), s)))?;
+        Ok(low)
     }
 
     /// `zpopmin_below` — pop up to `count` lowest-scored members
@@ -221,41 +109,7 @@ impl Store {
         start: i64,
         stop: i64,
     ) -> Result<usize, StoreError> {
-        let to_remove: Vec<Vec<u8>> = match self.live_entry(key) {
-            None => return Ok(0),
-            Some(e) => match &e.value {
-                Value::ZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
-                    None => return Ok(0),
-                    // Seek to the start rank (O(log N)), collect the M hits.
-                    Some((s, end)) => {
-                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
-                    }
-                },
-                Value::SegZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
-                    None => return Ok(0),
-                    Some((s, end)) => {
-                        z.ordered_from(s).take(end - s + 1).map(|(m, _)| m.to_vec()).collect()
-                    }
-                },
-                Value::SmallZSetInline(z) => {
-                    let mut entries: Vec<(Vec<u8>, f64)> =
-                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
-                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-                    match crate::util::range_bounds(start, stop, entries.len()) {
-                        None => return Ok(0),
-                        Some((s, end)) => {
-                            entries.into_iter().skip(s).take(end - s + 1).map(|(m, _)| m).collect()
-                        }
-                    }
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-        };
-        if to_remove.is_empty() {
-            return Ok(0);
-        }
-        let borrowed: Vec<&[u8]> = to_remove.iter().map(Vec::as_slice).collect();
-        self.zrem(key, &borrowed)
+        self.zrem_span(key, ZSpan::Rank(start, stop))
     }
 
     /// `ZREMRANGEBYSCORE key min max` — remove every member whose score
@@ -267,17 +121,7 @@ impl Store {
         min: ScoreBound,
         max: ScoreBound,
     ) -> Result<usize, StoreError> {
-        // Reuse zrange_by_score's bound logic to materialise the hit set
-        // — keeps inline / heap parity in one place.
-        let hits = self.zrange_by_score(key, min, max)?;
-        if hits.is_empty() {
-            // Still need to honour wrong-type errors that zrange_by_score
-            // already surfaced; here Ok([]) means empty match, not type
-            // mismatch, so it's safe to early-return.
-            return Ok(0);
-        }
-        let borrowed: Vec<&[u8]> = hits.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem(key, &borrowed)
+        self.zrem_span(key, ZSpan::Score(min, max))
     }
 
     /// `ZREVRANGEBYSCORE` — `zrange_by_score` reversed. Bounds are
@@ -290,43 +134,92 @@ impl Store {
         min: ScoreBound,
         max: ScoreBound,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        let mut v = self.zrange_by_score(key, min, max)?;
-        v.reverse();
-        Ok(v)
+        Ok(owned(self.zrange_select(key, ZSpan::Score(min, max), true, None)?))
     }
-}
 
-impl Store {
     /// `ZREVRANGE key start stop` — the rank window counted from the
-    /// high end.
-    ///
-    /// One implementation, called by both the server's dispatch and the
-    /// embedded facade. Each had written its own before this existed,
-    /// and both had written the same bug: a positive start was clamped
-    /// up to the last rank, so `ZREVRANGE z 5 10` on a three-member set
-    /// answered one member where Redis answers none. They agreed with
-    /// each other, which is why the wire-vs-facade differential passed
-    /// it and the three-way against a real valkey did not.
-    ///
-    /// `range_bounds` has the rule right — floor a negative start at
-    /// zero, cap only the end, and call the window empty when the start
-    /// is past the last index — so the reversed window is computed from
-    /// it rather than beside it.
+    /// high end, which [`ZSpan::Rank`] reads the way `range_bounds`
+    /// does: a negative start floors at zero, only the end is capped,
+    /// and a start past the last index is an empty window.
     pub fn zrevrange(
         &mut self,
         key: &[u8],
         start: i64,
         stop: i64,
     ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
-        let n = self.zcard(key)?;
-        let Some((s, e)) = range_bounds(start, stop, n) else {
-            return Ok(Vec::new());
-        };
-        // Rank r from the top is rank n-1-r from the bottom, so the
-        // reversed window [s, e] is the ascending window [n-1-e, n-1-s].
-        let (asc_lo, asc_hi) = (n - 1 - e, n - 1 - s);
-        let mut out = self.zrange(key, asc_lo as i64, asc_hi as i64)?;
-        out.reverse();
-        Ok(out)
+        Ok(owned(self.zrange_select(key, ZSpan::Rank(start, stop), true, None)?))
     }
+}
+
+/// A selection copied out.
+pub(crate) fn owned(r: crate::ZRange<'_>) -> Vec<(Vec<u8>, f64)> {
+    r.map(|(m, s)| (m.to_vec(), s)).collect()
+}
+
+impl Store {
+    /// Remove the members of `key` in `span`, none of them copied out: the
+    /// key is found once, the window bracketed as two ranks, then the
+    /// member at its first rank goes, as many times as the window is wide
+    /// — a short member held inline while it goes. How many went.
+    ///
+    /// ```
+    /// use kevy_store::{ScoreBound, Store, ZSpan};
+    /// let mut s = Store::new();
+    /// s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b"), (3.0, b"c")])?;
+    /// let low = ZSpan::Score(ScoreBound::inclusive(0.0), ScoreBound::inclusive(2.0));
+    /// assert_eq!(s.zrem_span(b"z", low)?, 2);
+    /// assert_eq!(s.zcard(b"z")?, 1);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn zrem_span(&mut self, key: &[u8], span: ZSpan<'_>) -> Result<usize, StoreError> {
+        let Some(e) = self.live_entry_mut(key) else { return Ok(0) };
+        let (lo, hi) = crate::zset_select::bounds_in(&e.value, span)?;
+        if lo == hi {
+            return Ok(0);
+        }
+        let delta = remove_ranks(&mut e.value, lo, hi - lo);
+        self.account_delta(key, delta);
+        self.drop_if_empty_zset(key);
+        Ok(hi - lo)
+    }
+}
+
+/// Remove `n` members from rank `lo` of a sorted set value; the weight it
+/// shed.
+fn remove_ranks(value: &mut Value, lo: usize, n: usize) -> i64 {
+    let mut d = 0;
+    match value {
+        Value::ZSet(z) => {
+            let z = alloc::sync::Arc::make_mut(z);
+            for _ in 0..n {
+                let Some((_, m)) = z.by_score.select(lo).cloned() else { break };
+                z.remove(m.as_slice());
+                d -= member_weight(m.as_slice());
+            }
+        }
+        Value::SegZSet(z) => {
+            let z = alloc::sync::Arc::make_mut(z);
+            for _ in 0..n {
+                let Some((m, _)) = z.ordered_from(lo).next() else { break };
+                let m = SmallBytes::from_slice(m);
+                if let Some(shell) = z.remove_weighed(m.as_slice()) {
+                    d += shell - member_weight(m.as_slice());
+                }
+            }
+        }
+        Value::SmallZSetInline(z) => {
+            let mut two = [(SmallBytes::new(), 0.0), (SmallBytes::new(), 0.0)];
+            let k = z
+                .iter()
+                .zip(two.iter_mut())
+                .map(|((m, s), slot)| *slot = (SmallBytes::from_slice(m), s))
+                .count();
+            two[..k].sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            for (m, _) in &two[lo..(lo + n).min(k)] {
+                z.try_remove(m.as_slice());
+            }
+        }
+        _ => {}
+    }
+    d
 }

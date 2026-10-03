@@ -7,7 +7,7 @@
 use super::group::ReadGroupId;
 use super::{
     AckMode, ClaimMode, GroupCreateMode, MissingStream, PendingExtended, PendingSummary,
-    StreamData, StreamId, XAddIdSpec, XClaimOpts,
+    StreamData, StreamId, XClaimOpts,
 };
 #[cfg(not(feature = "std"))]
 use crate::nostd_prelude::*;
@@ -117,38 +117,6 @@ impl Store {
     /// `WrongType` for a non-stream value at `key`.
     pub fn stream_view(&mut self, key: &[u8]) -> Result<Option<&StreamData>, StoreError> {
         self.stream_ref(key)
-    }
-
-    /// `XADD key <spec> field value [field value ...]`. Returns the
-    /// assigned ID; with [`MissingStream::Refuse`] (`NOMKSTREAM`) a
-    /// missing key stays missing and the answer is `Ok(None)`. `now_ms`
-    /// is the wall-clock used for `XAddIdSpec::AutoAll`.
-    pub fn xadd(
-        &mut self,
-        key: &[u8],
-        spec: XAddIdSpec,
-        fields: Vec<(Vec<u8>, Vec<u8>)>,
-        missing: MissingStream,
-        now_ms: u64,
-    ) -> Result<Option<StreamId>, StoreError> {
-        if missing == MissingStream::Refuse && self.live_entry(key).is_none() {
-            return Ok(None);
-        }
-        let id;
-        let weight_delta;
-        {
-            let s = self.stream_mut(key, true)?.expect("created");
-            id = s.resolve_xadd_id(spec, now_ms)?;
-            let smb_fields: Vec<(SmallBytes, SmallBytes)> = fields
-                .into_iter()
-                .map(|(f, v)| (SmallBytes::from_slice(&f), SmallBytes::from_slice(&v)))
-                .collect();
-            weight_delta = super::stream_entry_weight(&smb_fields);
-            s.insert(id, smb_fields);
-        }
-        self.bump_if_watched(key);
-        self.account_delta(key, weight_delta as i64);
-        Ok(Some(id))
     }
 
     /// `XLEN key`. Returns 0 for a missing key.

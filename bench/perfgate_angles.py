@@ -61,9 +61,20 @@ CALLGRIND = {
     # the instruction side of zinterstore, whose throughput rounds disagree
     # on instructions with identical code
     "zinterstore": ("zinterstore", "ZINTERSTORE zalg:dst:__rand_int__ 2 zalg:a zalg:b"),
+    # reads and writes that go to the stored data in place: a range window
+    # each way, a range removal, a pop from small lists, bits and a sketch
+    # written inside an existing value
+    "zrangebyscore": ("ZADD zr __rand_int__ m__rand_int__", "ZRANGEBYSCORE zr __rand_int__ +inf LIMIT 0 10"),
+    "zrevrange": ("ZADD zr __rand_int__ m__rand_int__", "ZRANGE zr 0 9 REV WITHSCORES"),
+    "zremrangebyscore": ("ZADD zr __rand_int__ m__rand_int__", "ZREMRANGEBYSCORE zr __rand_int__ __rand_int__"),
+    "lpop": ("RPUSH q:__rand_int__ v", "LPOP q:__rand_int__"),
+    "setbit": (None, "SETBIT bm __rand_int__ 1"),
+    "pfadd": (None, "PFADD hll __rand_int__"),
 }
 # angles whose single request costs far more than a GET count fewer
-CALLGRIND_OPS = {"zinterstore": 5_000}
+# zrangebyscore: a build that collects the whole range before LIMIT walks
+# ~50,000 members a request
+CALLGRIND_OPS = {"zinterstore": 5_000, "zrangebyscore": 2_000}
 
 
 def crc16(data):

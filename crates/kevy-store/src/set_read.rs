@@ -151,6 +151,75 @@ impl Store {
     }
 }
 
+impl Store {
+    /// `SINTERCARD`: how many members every set at `keys` shares, counting
+    /// up to `limit` (0 for no limit). Every key's type is checked first,
+    /// as Redis does, so a later wrong-typed key is an error even after a
+    /// missing one; then a missing set makes the answer 0. The smallest
+    /// set is walked and the others probed: nothing is copied.
+    ///
+    /// ```
+    /// let mut s = kevy_store::Store::new();
+    /// s.sadd(b"a", &[b"1", b"2", b"3"])?;
+    /// s.sadd(b"b", &[b"2", b"3", b"4"])?;
+    /// assert_eq!(s.sintercard(&[b"a", b"b"], 0)?, 2);
+    /// assert_eq!(s.sintercard(&[b"a", b"b"], 1)?, 1);
+    /// assert_eq!(s.sintercard(&[b"a", b"none"], 0)?, 0);
+    /// # Ok::<(), kevy_store::StoreError>(())
+    /// ```
+    pub fn sintercard(&mut self, keys: &[&[u8]], limit: usize) -> Result<usize, StoreError> {
+        let mut smallest = (usize::MAX, 0);
+        for (i, k) in keys.iter().enumerate() {
+            let n = self.scard(k)?;
+            if n < smallest.0 {
+                smallest = (n, i);
+            }
+        }
+        if smallest.0 == 0 {
+            return Ok(0);
+        }
+        let value = |k: &[u8]| self.map.get(k).map(|e| &e.value);
+        let others = || keys.iter().enumerate().filter(|&(i, _)| i != smallest.1);
+        let limit = if limit == 0 { usize::MAX } else { limit };
+        let mut n = 0;
+        if let Some(walked) = value(keys[smallest.1]) {
+            each_member(walked, |m| {
+                if others().all(|(_, k)| value(k).is_some_and(|v| set_contains(v, m))) {
+                    n += 1;
+                }
+                n < limit
+            });
+        }
+        Ok(n)
+    }
+}
+
+/// Membership in a set value; `false` for any other type.
+fn set_contains(v: &Value, m: &[u8]) -> bool {
+    match v {
+        Value::Set(s) => s.contains(m),
+        Value::SegSet(s) => s.contains_key(m),
+        Value::SmallSetInline(s) => s.contains(m),
+        _ => false,
+    }
+}
+
+/// Each member of a set value to `f`, until it answers `false`.
+fn each_member(v: &Value, mut f: impl FnMut(&[u8]) -> bool) {
+    match v {
+        Value::Set(s) => {
+            s.iter().all(|m| f(m.as_slice()));
+        }
+        Value::SegSet(s) => {
+            s.keys().all(|m| f(m.as_slice()));
+        }
+        Value::SmallSetInline(s) => {
+            s.iter().all(f);
+        }
+        _ => {}
+    }
+}
+
 /// SRANDMEMBER over a sharded set: rejection-probe via the weighted
 /// random walk; degenerate huge counts fall back to the copy regime
 /// like the flat path.

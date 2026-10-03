@@ -92,12 +92,27 @@ impl Store {
     /// use std::time::Duration;
     /// let mut s = kevy_store::Store::new();
     /// s.set(b"k", b"a".to_vec(), Some(Duration::from_secs(100)), kevy_store::SetCondition::Always);
+    /// let at = s.deadline_unix_ms(b"k");
     /// s.set_slice_keep_ttl(b"k", b"b");
-    /// assert!(s.pttl(b"k") > 99_000);
+    /// assert_eq!(s.deadline_unix_ms(b"k"), at, "the same deadline, not a new one");
+    /// assert_eq!(s.expires_count(), 1);
     /// assert_eq!(s.get(b"k").unwrap().as_deref(), Some(&b"b"[..]));
+    /// s.set(b"n", b"a".to_vec(), None, kevy_store::SetCondition::Always);
+    /// s.set_slice_keep_ttl(b"n", b"b");
+    /// assert_eq!((s.pttl(b"n"), s.expires_count()), (-1, 1), "no deadline to keep");
     /// ```
     pub fn set_slice_keep_ttl(&mut self, key: &[u8], value: &[u8]) {
-        self.put_keep_ttl(key.to_vec(), pick_value_for_set(value));
+        if self.clock_on() {
+            return self.put_keep_ttl(key.to_vec(), pick_value_for_set(value));
+        }
+        // the plain SET's overwrite, then its deadline put back as it was:
+        // a rare option pays two probes so the SET path stays as it is
+        let kept = self.live_entry(key).and_then(|e| e.expire_at_ns);
+        self.set_value(key, pick_value_for_set(value), None, SetCondition::Always);
+        if let (Some(at), Some(e)) = (kept, self.map.get_mut(key)) {
+            e.expire_at_ns = Some(at);
+            self.adjust_expires(1);
+        }
     }
 
     fn set_value(

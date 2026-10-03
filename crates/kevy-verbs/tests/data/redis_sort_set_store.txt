@@ -1,0 +1,9 @@
+FLUSHALL	=>	+OK\r\n
+SADD	s	10	9	100	2	=>	:4\r\n
+SORT	s	STORE	d	=>	:4\r\n
+LRANGE	d	0	-1	=>	*4\r\n$1\r\n2\r\n$1\r\n9\r\n$2\r\n10\r\n$3\r\n100\r\n
+SORT	s	BY	nosort	STORE	d	=>	:4\r\n
+LRANGE	d	0	-1	=>	*4\r\n$2\r\n10\r\n$3\r\n100\r\n$1\r\n2\r\n$1\r\n9\r\n
+SORT	s	ALPHA	STORE	d	=>	:4\r\n
+LRANGE	d	0	-1	=>	*4\r\n$2\r\n10\r\n$3\r\n100\r\n$1\r\n2\r\n$1\r\n9\r\n
+SORT	s	NOSORT	STORE	d	=>	-ERR syntax error\r\n

@@ -11,11 +11,11 @@ mod parse;
 
 pub(super) use parse::{Form, GeoError, Query, bad_pair, plan};
 
-use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges};
+use kevy_geo::{EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_ranges};
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_integer,
 };
-use kevy_store::{ScoreBound, Store};
+use kevy_store::{ScoreBound, Store, ZSpan};
 
 /// `GEOSEARCH key <FROMMEMBER member|FROMLONLAT lon lat>
 /// <BYRADIUS r unit|BYBOX w h unit> [ASC|DESC] [COUNT n [ANY]]
@@ -39,13 +39,16 @@ pub(crate) fn cmd_geosearch<A: ArgvView + ?Sized>(
 /// Shared search core: fans out over the candidate neighbour ranges
 /// around the centre, filters by exact shape, then applies sort + count.
 /// A missing source key finds nothing.
-pub(super) fn run_search(store: &mut Store, q: &Query) -> Result<Vec<Hit>, kevy_store::StoreError> {
+pub(super) fn run_search<'s>(
+    store: &'s mut Store,
+    q: &Query,
+) -> Result<Vec<Hit<'s>>, kevy_store::StoreError> {
     if q.src_missing {
         return Ok(Vec::new());
     }
     let (clon, clat) = q.opts.center;
-    let ranges = neighbor_score_ranges(clon, clat, q.opts.shape.bounding_radius_meters());
-    let mut hits = collect_hits(store, &q.src, &ranges, &q.opts)?;
+    let ranges = neighbor_ranges(clon, clat, q.opts.shape.bounding_radius_meters());
+    let mut hits = collect_hits(store, q.src, &ranges, &q.opts)?;
     apply_sort(&mut hits, q.opts.sort);
     apply_count(&mut hits, q.opts.sort, q.opts.count, q.opts.any);
     Ok(hits)
@@ -67,11 +70,11 @@ pub(super) fn search_pairs(
 /// `km` search stores 166.27, not 166274.15 (Redis's `geoAppendIfWithinShape`
 /// divides by the shape's `conversion`). Without it, the score is the source
 /// member's geohash, which is what makes a stored key a valid GEO key again.
-fn store_pairs(hits: &[Hit], opts: &Opts) -> Vec<(Vec<u8>, f64)> {
+fn store_pairs(hits: &[Hit<'_>], opts: &Opts) -> Vec<(Vec<u8>, f64)> {
     hits.iter()
         .map(|h| {
             let score = if opts.storedist { h.dist_m / opts.unit } else { h.score };
-            (h.member.clone(), score)
+            (h.member.to_vec(), score)
         })
         .collect()
 }
@@ -128,28 +131,29 @@ pub(super) struct Opts {
 
 // ───────────── candidate collection ─────────────
 
-pub(super) struct Hit {
-    pub(super) member: Vec<u8>,
+pub(super) struct Hit<'s> {
+    pub(super) member: &'s [u8],
     pub(super) score: f64,
     pub(super) dist_m: f64,
 }
 
-fn collect_hits(
-    store: &mut Store,
+fn collect_hits<'s>(
+    store: &'s mut Store,
     key: &[u8],
     ranges: &[(f64, f64)],
     opts: &Opts,
-) -> Result<Vec<Hit>, kevy_store::StoreError> {
-    let mut hits = Vec::new();
-    for (min, max) in ranges {
-        let members =
-            store.zrange_by_score(key, ScoreBound::inclusive(*min), ScoreBound::inclusive(*max))?;
-        for (member, score) in members {
-            if let Some(dist_m) = within(opts.shape, opts.center, decode_score(score)) {
-                hits.push(Hit { member, score, dist_m });
-            }
-        }
+) -> Result<Vec<Hit<'s>>, kevy_store::StoreError> {
+    // nine cells at most, read in one pass over the key, members borrowed
+    let mut spans = [ZSpan::Rank(0, -1); 9];
+    for (slot, &(min, max)) in spans.iter_mut().zip(ranges) {
+        *slot = ZSpan::Score(ScoreBound::inclusive(min), ScoreBound::inclusive(max));
     }
+    let mut hits = Vec::new();
+    store.zrange_each_span(key, &spans[..ranges.len().min(9)], |member, score| {
+        if let Some(dist_m) = within(opts.shape, opts.center, decode_score(score)) {
+            hits.push(Hit { member, score, dist_m });
+        }
+    })?;
     Ok(hits)
 }
 
@@ -170,7 +174,7 @@ fn within(shape: Shape, (clon, clat): (f64, f64), (plon, plat): (f64, f64)) -> O
     }
 }
 
-fn apply_sort(hits: &mut [Hit], sort: Sort) {
+fn apply_sort(hits: &mut [Hit<'_>], sort: Sort) {
     match sort {
         Sort::Asc => hits.sort_by(|a, b| {
             a.dist_m.partial_cmp(&b.dist_m).expect(
@@ -186,7 +190,7 @@ fn apply_sort(hits: &mut [Hit], sort: Sort) {
     }
 }
 
-fn apply_count(hits: &mut Vec<Hit>, sort: Sort, count: Option<usize>, any: bool) {
+fn apply_count(hits: &mut Vec<Hit<'_>>, sort: Sort, count: Option<usize>, any: bool) {
     let Some(n) = count else { return };
     // COUNT with no explicit ASC/DESC implies "the closest n" — Redis sorts
     // ascending before truncating. An explicit sort has already ordered the
@@ -202,34 +206,6 @@ fn apply_count(hits: &mut Vec<Hit>, sort: Sort, count: Option<usize>, any: bool)
         });
     }
     hits.truncate(n);
-}
-
-/// What `emit_or_store` did with the hits: emitted them as a wire
-/// reply already, or wrote them into a destination ZSet (returning
-/// the integer count to be encoded by the caller).
-pub(super) enum RadiusReply {
-    Replied,
-    Stored(usize),
-}
-
-pub(super) fn emit_or_store(
-    out: &mut Vec<u8>,
-    store: &mut Store,
-    hits: &[Hit],
-    parsed: &Query,
-) -> RadiusReply {
-    match &parsed.store_dst {
-        None => {
-            emit_reply(hits, &parsed.opts, out);
-            RadiusReply::Replied
-        }
-        // Single-shard path only: with the two keys on different shards the
-        // runtime never gets here — it routes the write to `dst`'s shard.
-        Some(dst) => {
-            let pairs = store_pairs(hits, &parsed.opts);
-            RadiusReply::Stored(store.zstore_result(dst, &pairs))
-        }
-    }
 }
 
 // ───────────── GEOSEARCHSTORE ─────────────
@@ -270,12 +246,12 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
 
 // ───────────── reply ─────────────
 
-fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
+pub(super) fn emit_reply(hits: &[Hit<'_>], opts: &Opts, out: &mut Vec<u8>) {
     let any_with = opts.with_coord || opts.with_dist || opts.with_hash;
     encode_array_len(out, hits.len() as i64);
     if !any_with {
         for h in hits {
-            encode_bulk(out, &h.member);
+            encode_bulk(out, h.member);
         }
         return;
     }
@@ -283,9 +259,9 @@ fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
         let extras =
             i64::from(opts.with_dist) + i64::from(opts.with_hash) + i64::from(opts.with_coord);
         encode_array_len(out, 1 + extras);
-        encode_bulk(out, &h.member);
+        encode_bulk(out, h.member);
         if opts.with_dist {
-            encode_bulk(out, format!("{:.4}", h.dist_m / opts.unit).as_bytes());
+            crate::reply::encode_bulk_fmt(out, format_args!("{:.4}", h.dist_m / opts.unit));
         }
         if opts.with_hash {
             encode_integer(out, h.score as i64);
@@ -305,7 +281,5 @@ pub(super) fn emit_coord(out: &mut Vec<u8>, v: f64, proto: RespVersion) {
     if proto == RespVersion::V3 {
         return encode_double(out, v);
     }
-    let mut text = Vec::with_capacity(24);
-    kevy_resp::write_double(&mut text, v);
-    encode_bulk(out, &text);
+    kevy_resp::encode_bulk_double(out, v);
 }

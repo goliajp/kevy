@@ -208,3 +208,23 @@ fn field_ttl_judged_as_of_an_instant() {
     assert_eq!(p.hget(b"row:1", b"dept").unwrap(), None);
     assert_eq!(g.hget(b"row:1", b"dept").unwrap(), None);
 }
+
+// the per-field callback forms the command layer writes replies from
+#[test]
+fn field_ttl_callbacks_agree_with_the_general_hash() {
+    let (mut p, mut g, _) = both();
+    let now = kevy_store::now_unix_ms();
+    let cond = kevy_store::HExpireCond::Always;
+    let mut answers = Vec::new();
+    for s in [&mut p, &mut g] {
+        let mut set = Vec::new();
+        s.hexpire_as_of_each(b"row:1", &[b"id", b"nope"], now + 60_000, now, cond, |c| set.push(c))
+            .unwrap();
+        let mut cleared = Vec::new();
+        s.hpersist_each(b"row:1", &[b"id", b"dept", b"nope"], |c| cleared.push(c)).unwrap();
+        answers.push((set, cleared));
+    }
+    assert!(p.is_packed(b"row:1"));
+    assert_eq!(answers[0], answers[1]);
+    assert_eq!(answers[0], (vec![1, -2], vec![1, -1, -2]));
+}

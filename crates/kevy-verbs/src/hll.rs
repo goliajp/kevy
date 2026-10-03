@@ -3,7 +3,7 @@
 use kevy_resp::{ArgvView, encode_integer, encode_simple_string};
 use kevy_store::Store;
 
-use crate::args::rest_borrowed;
+use crate::args::with_rest;
 use crate::reply::{store_err, wrong_args};
 use crate::{Effect, changed};
 
@@ -25,16 +25,16 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         return Some(Effect::Unchanged);
     }
     let result = match cmd {
-        b"PFADD" => store.pfadd(&args[1], &rest_borrowed(args, 2)).map(|added| {
+        b"PFADD" => with_rest(args, 2, |rest| store.pfadd(&args[1], rest)).map(|added| {
             encode_integer(out, i64::from(added));
             changed(added)
         }),
         // writing a key's cached estimate changes its bytes, so it is a write
-        b"PFCOUNT" => store.pfcount(&rest_borrowed(args, 1)).map(|(card, cached)| {
+        b"PFCOUNT" => with_rest(args, 1, |rest| store.pfcount(rest)).map(|(card, cached)| {
             encode_integer(out, card as i64);
             if cached { Effect::Write } else { Effect::Read }
         }),
-        _ => store.pfmerge(&args[1], &rest_borrowed(args, 2)).map(|()| {
+        _ => with_rest(args, 2, |rest| store.pfmerge(&args[1], rest)).map(|()| {
             encode_simple_string(out, "OK");
             Effect::Write
         }),

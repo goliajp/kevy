@@ -107,10 +107,12 @@ pub use hash_read::FieldValuePairs;
 mod hash_ttl;
 mod hash_ttl_read;
 pub use hash_ttl::{HExpireCode, HExpireCond};
+mod elements;
 mod keyspace;
 mod keyspace_load;
 mod keyspace_map;
 mod list;
+mod list_pop;
 mod list_read;
 pub mod list_seg;
 mod notify;
@@ -179,6 +181,7 @@ mod zset_lex;
 mod zset_pick;
 mod zset_range;
 pub mod zset_seg;
+mod zset_select;
 pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use bitfield::{BitFieldOp, BitType, Overflow};
@@ -193,7 +196,8 @@ pub use string::{GetReply, GetShared};
 pub use util::glob_match;
 pub use value::*;
 pub use zset_flags::{ZaddFlags, ZaddReport};
-pub use zset_lex::LexBound;
+pub use zset_lex::{LexBound, LexEnd};
+pub use zset_select::{ZRange, ZSpan};
 
 /// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
 /// `Instant`. The embedding host advances time (ns since an arbitrary fixed
@@ -408,63 +412,12 @@ impl Store {
 // paths keep working.
 pub(crate) use util::{apply_delta, key_heap_bytes_for};
 
-const _: () = {
-    const fn send_sync<T: Send + Sync>() {}
-    send_sync::<Store>();
-    send_sync::<StoreError>();
-    send_sync::<KevyError>();
-    send_sync::<RenameOutcome>();
-    send_sync::<EvictionPolicy>();
-    send_sync::<SetCondition>();
-    send_sync::<ListEnd>();
-    send_sync::<InsertPosition>();
-    send_sync::<ScoreCompare>();
-    send_sync::<BitOp>();
-    send_sync::<ExpireStats>();
-    send_sync::<DetachedEntries>();
-    send_sync::<HExpireCond>();
-    send_sync::<KeyspaceEvent>();
-    send_sync::<SnapshotView>();
-    send_sync::<ZAggregate>();
-    send_sync::<StreamData>();
-    send_sync::<StreamId>();
-    send_sync::<StreamIdError>();
-    send_sync::<XAddIdSpec>();
-    send_sync::<XClaimOpts>();
-    send_sync::<MissingStream>();
-    send_sync::<AckMode>();
-    send_sync::<ClaimMode>();
-    send_sync::<ConsumerGroup>();
-    send_sync::<ConsumerState>();
-    send_sync::<PelEntry>();
-    send_sync::<GroupCreateMode>();
-    send_sync::<ReadGroupId>();
-    send_sync::<PendingSummary>();
-    send_sync::<PendingExtended>();
-    send_sync::<AutoclaimResult>();
-    send_sync::<LoadedGroup>();
-    send_sync::<GetReply<'static>>();
-    send_sync::<GetShared>();
-    send_sync::<Value>();
-    send_sync::<Score>();
-    send_sync::<ScoreBound>();
-    send_sync::<ZaddFlags>();
-    send_sync::<ZaddReport>();
-    send_sync::<packed_row::PackedRow>();
-};
-
-#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
-const _: () = {
-    const fn send_sync<T: Send + Sync>() {}
-    send_sync::<SealedRows>();
-    send_sync::<SegRowsError>();
-    send_sync::<TierStats>();
-    send_sync::<ColdRead>();
-    send_sync::<SyncColdRead>();
-};
+mod send_sync;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bit_in_place;
 #[cfg(test)]
 mod tests_collection_scan;
 #[cfg(test)]
@@ -497,3 +450,5 @@ mod tests_tier_peek;
 mod tests_zadd_same_score;
 #[cfg(test)]
 mod tests_zset_seg;
+#[cfg(test)]
+mod tests_zset_select;

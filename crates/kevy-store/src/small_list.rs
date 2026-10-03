@@ -121,6 +121,29 @@ impl SmallListData {
         PushResult::Pushed
     }
 
+    /// Take the first (`front`) or the last element, handed to `f` just
+    /// before it goes; `false` when there is none.
+    pub(crate) fn pop_with(&mut self, front: bool, f: impl FnOnce(&[u8])) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        let used = self.used as usize;
+        let mut at = 0;
+        if !front {
+            for _ in 1..self.count {
+                at += 1 + self.buf[at] as usize;
+            }
+        }
+        let len = self.buf[at] as usize;
+        f(&self.buf[at + 1..at + 1 + len]);
+        if front {
+            self.buf.copy_within(1 + len..used, 0);
+        }
+        self.used = (used - 1 - len) as u8;
+        self.count -= 1;
+        true
+    }
+
     fn room_for(&self, elem: &[u8]) -> bool {
         elem.len() <= SMALL_LIST_ELEM_MAX
             && (self.count as usize) < SMALL_LIST_COUNT_MAX
@@ -239,5 +262,44 @@ mod tests {
         assert_eq!(v[0], b"a");
         assert_eq!(v[1], b"bb");
         assert_eq!(v[2], b"ccc");
+    }
+}
+
+#[cfg(test)]
+mod tests_pop {
+    use super::{PushResult, SmallListData};
+    use alloc::collections::VecDeque;
+    use alloc::vec::Vec;
+
+    /// Pushes and pops at both ends against a deque, element lengths from
+    /// empty to the most one slot takes.
+    #[test]
+    fn pops_at_both_ends_match_a_deque() {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut l = SmallListData::new();
+        let mut model: VecDeque<Vec<u8>> = VecDeque::new();
+        for i in 0..20_000u32 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let front = x & 1 == 0;
+            if x & 6 == 0 || model.is_empty() {
+                let e: Vec<u8> =
+                    (0..(x >> 8) % 12).map(|j| (i as u8).wrapping_add(j as u8)).collect();
+                let pushed = if front { l.try_push_front(&e) } else { l.try_push_back(&e) };
+                if matches!(pushed, PushResult::Pushed) {
+                    if front { model.push_front(e) } else { model.push_back(e) }
+                }
+            } else {
+                let mut got = None;
+                assert!(l.pop_with(front, |e| got = Some(e.to_vec())));
+                let want = if front { model.pop_front() } else { model.pop_back() };
+                assert_eq!(got, want);
+            }
+            assert_eq!(l.len(), model.len());
+            assert!(l.iter().eq(model.iter().map(Vec::as_slice)));
+        }
+        while l.pop_with(true, |_| {}) {}
+        assert!(!l.pop_with(false, |_| {}), "nothing left to pop");
     }
 }

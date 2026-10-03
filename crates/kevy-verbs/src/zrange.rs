@@ -5,10 +5,10 @@
 //! fixed, and `ZRANGESTORE` the form that keeps the result.
 
 use kevy_resp::{ArgvView, RespVersion, encode_error};
-use kevy_store::{LexBound, Store, StoreError};
+use kevy_store::{LexEnd, Store, StoreError, ZRange, ZSpan};
 
 use crate::args::{arg_i64, parse_score_bound};
-use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, Scores, emit_zrange, store_err, wrong_args};
+use crate::reply::{ERR_NOT_INT, ERR_SYNTAX, Scores, emit_range, store_err, wrong_args};
 
 /// What the range bounds name.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,15 +36,17 @@ pub(crate) enum RangeError {
 
 /// The kind and direction a verb fixes, `None` where its arguments say.
 fn preset(verb: &[u8]) -> (Option<By>, Option<bool>) {
-    let upper = verb.to_ascii_uppercase();
-    match upper.as_slice() {
-        b"ZREVRANGE" => (Some(By::Rank), Some(true)),
-        b"ZRANGEBYSCORE" => (Some(By::Score), Some(false)),
-        b"ZREVRANGEBYSCORE" => (Some(By::Score), Some(true)),
-        b"ZRANGEBYLEX" => (Some(By::Lex), Some(false)),
-        b"ZREVRANGEBYLEX" => (Some(By::Lex), Some(true)),
-        _ => (None, None),
-    }
+    let fixed = [
+        (&b"ZREVRANGE"[..], By::Rank, true),
+        (b"ZRANGEBYSCORE", By::Score, false),
+        (b"ZREVRANGEBYSCORE", By::Score, true),
+        (b"ZRANGEBYLEX", By::Lex, false),
+        (b"ZREVRANGEBYLEX", By::Lex, true),
+    ];
+    fixed
+        .into_iter()
+        .find(|(name, ..)| verb.eq_ignore_ascii_case(name))
+        .map_or((None, None), |(_, by, rev)| (Some(by), Some(rev)))
 }
 
 /// The options from argument `from` on, under the kind and direction
@@ -96,63 +98,37 @@ pub(crate) fn parse<A: ArgvView + ?Sized>(
 }
 
 /// The members `spec` selects from `key` between `start` and `stop` (a
-/// reverse range names its high bound first), in reading order.
-pub(crate) fn query(
-    store: &mut Store,
+/// reverse range names its high bound first), in reading order,
+/// borrowed from the store.
+pub(crate) fn query<'s>(
+    store: &'s mut Store,
     key: &[u8],
     start: &[u8],
     stop: &[u8],
     spec: Spec,
-) -> Result<Vec<(Vec<u8>, f64)>, RangeError> {
+) -> Result<ZRange<'s>, RangeError> {
     let (lo, hi) = if spec.rev { (stop, start) } else { (start, stop) };
-    let items = match spec.by {
+    let span = match spec.by {
         By::Rank => {
             let (Some(a), Some(b)) = (arg_i64(start), arg_i64(stop)) else {
                 return Err(RangeError::Wire(ERR_NOT_INT));
             };
-            let r = if spec.rev { store.zrevrange(key, a, b) } else { store.zrange(key, a, b) };
-            return r.map_err(RangeError::Store);
+            ZSpan::Rank(a, b)
         }
         By::Score => {
             let (Some(min), Some(max)) = (parse_score_bound(lo), parse_score_bound(hi)) else {
                 return Err(RangeError::Wire("ERR min or max is not a float"));
             };
-            if spec.rev {
-                store.zrev_range_by_score(key, min, max)
-            } else {
-                store.zrange_by_score(key, min, max)
-            }
+            ZSpan::Score(min, max)
         }
         By::Lex => {
-            let (Some(min), Some(max)) = (LexBound::parse(lo), LexBound::parse(hi)) else {
+            let (Some(min), Some(max)) = (LexEnd::parse(lo), LexEnd::parse(hi)) else {
                 return Err(RangeError::Wire("ERR min or max not valid string range item"));
             };
-            store.zrange_by_lex(key, &min, &max).map(|mut v| {
-                if spec.rev {
-                    v.reverse();
-                }
-                v
-            })
+            ZSpan::Lex(min, max)
         }
     };
-    let mut items = items.map_err(RangeError::Store)?;
-    if let Some(limit) = spec.limit {
-        apply_limit(&mut items, limit);
-    }
-    Ok(items)
-}
-
-/// Keep `count` items from `offset` on: a negative offset keeps nothing,
-/// a negative count everything after the offset.
-fn apply_limit(items: &mut Vec<(Vec<u8>, f64)>, (off, cnt): (i64, i64)) {
-    if off < 0 || off as usize >= items.len() {
-        items.clear();
-    } else {
-        items.drain(..off as usize);
-        if cnt >= 0 {
-            items.truncate(cnt as usize);
-        }
-    }
+    store.zrange_select(key, span, spec.rev, spec.limit).map_err(RangeError::Store)
 }
 
 /// Any of the six range reads, in the reply shape of `proto`.
@@ -181,7 +157,7 @@ pub fn zrange<A: ArgvView + ?Sized>(
     };
     let scores = if spec.withscores { Scores::Included } else { Scores::Omitted };
     match query(store, &args[1], &args[2], &args[3], spec) {
-        Ok(items) => emit_zrange(Ok(items), scores, proto, out),
+        Ok(items) => emit_range(items, scores, proto, out),
         Err(RangeError::Wire(e)) => encode_error(out, e),
         Err(RangeError::Store(e)) => store_err(out, e),
     }
@@ -217,8 +193,8 @@ pub(crate) fn zrangestore<A: ArgvView + ?Sized>(
             return crate::Effect::Unchanged;
         }
     };
-    let items = match query(store, &args[2], &args[3], &args[4], spec) {
-        Ok(items) => items,
+    let items: Vec<(Vec<u8>, f64)> = match query(store, &args[2], &args[3], &args[4], spec) {
+        Ok(items) => items.map(|(m, s)| (m.to_vec(), s)).collect(),
         Err(RangeError::Wire(e)) => {
             encode_error(out, e);
             return crate::Effect::Unchanged;
