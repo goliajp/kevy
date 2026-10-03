@@ -138,3 +138,10 @@ fn stream_trims_over_nodes_match_redis() {
 fn sintercard_matches_redis() {
     assert_eq!(run_table(include_str!("data/redis_sintercard.txt")), 8);
 }
+
+/// `SORT` of a set into a key: sorted as asked, by bytes only under `BY
+/// nosort`.
+#[test]
+fn sort_of_a_set_into_a_key_matches_redis() {
+    assert_eq!(run_table(include_str!("data/redis_sort_set_store.txt")), 9);
+}

@@ -104,25 +104,45 @@ fn zpop<A: ArgvView + ?Sized>(
             return Effect::Unchanged;
         }
     };
-    let res = if max { store.zpopmax(&args[1], count) } else { store.zpopmin(&args[1], count) };
-    match res {
+    pop_into(store, &args[1], count, max, proto, out)
+}
+
+/// Pop up to `count` from `key` straight into the reply. ZPOPMAX is newer
+/// than some readers of the log, so it is recorded as the ZREM of what it
+/// took, and that record owns the members.
+fn pop_into(
+    store: &mut Store,
+    key: &[u8],
+    count: usize,
+    max: bool,
+    proto: RespVersion,
+    out: &mut Vec<u8>,
+) -> Effect {
+    let mut frame: Vec<Vec<u8>> = Vec::new();
+    let start = out.len();
+    let taken = store.zpop_each(key, count, max, |m, s| {
+        encode_bulk(out, m);
+        score(out, s, proto);
+        if max {
+            frame.push(m.to_vec());
+        }
+    });
+    let n = match taken {
+        Ok(n) => n,
         Err(e) => {
             store_err(out, e);
-            Effect::Unchanged
+            return Effect::Unchanged;
         }
-        Ok(items) => {
-            encode_array_len(out, (items.len() * 2) as i64);
-            for (m, s) in &items {
-                encode_bulk(out, m);
-                score(out, *s, proto);
-            }
-            // ZPOPMAX is newer than some readers of the log
-            if max && !items.is_empty() {
-                zrem_record(&args[1], &items)
-            } else {
-                changed(!items.is_empty())
-            }
-        }
+    };
+    let body = out.len();
+    encode_array_len(out, (n * 2) as i64);
+    let head = out.len() - body;
+    out[start..].rotate_right(head);
+    if max && n > 0 {
+        frame.splice(0..0, [b"ZREM".to_vec(), key.to_vec()]);
+        Effect::Record(frame)
+    } else {
+        changed(n > 0)
     }
 }
 
