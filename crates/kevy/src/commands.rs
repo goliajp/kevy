@@ -252,6 +252,20 @@ impl Commands for KevyCommands {
         self.read_denied_gated(args)
     }
 
+    fn on_db_gauges(&self, dbs: &[(u16, u64, u64)]) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.shard_ctx().with_stats_slot(|s| {
+            for &(db, keys, expires) in dbs {
+                if let (Some(k), Some(e)) =
+                    (s.keys_db.get(db as usize), s.expires_db.get(db as usize))
+                {
+                    k.store(keys, Relaxed);
+                    e.store(expires, Relaxed);
+                }
+            }
+        });
+    }
+
     fn on_shard_tick(&self, store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {

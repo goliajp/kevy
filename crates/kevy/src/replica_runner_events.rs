@@ -56,7 +56,7 @@ impl LoadingGuard {
     /// finishes its load.
     pub(crate) fn observe(&mut self, event: &ReplicaEvent) -> Option<SnapshotGate> {
         match event {
-            ReplicaEvent::SnapshotBegin if self.token.is_none() => {
+            ReplicaEvent::SnapshotBegin { .. } if self.token.is_none() => {
                 self.progress.begin_loading();
                 self.token = Some(Arc::new(LoadingToken { progress: Arc::clone(&self.progress) }));
                 None
@@ -211,7 +211,7 @@ pub(crate) fn gen_still_matches(heartbeat_gen: u64, ack_gen: u64) -> bool {
 /// before this, or an event this runner cannot name).
 fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> Option<ReplicaApply> {
     match event {
-        ReplicaEvent::SnapshotBegin => Some(ReplicaApply::SnapshotBegin),
+        ReplicaEvent::SnapshotBegin { db } => Some(ReplicaApply::SnapshotBegin { db }),
         ReplicaEvent::SnapshotChunk(bytes) => Some(ReplicaApply::SnapshotChunk(bytes)),
         ReplicaEvent::SnapshotEnd { ack_offset } => {
             *from_offset = ack_offset;
@@ -235,7 +235,7 @@ mod tests {
     fn loading_lowers_only_when_the_apply_gate_drops() {
         let progress = Arc::new(ReplicaProgress::default());
         let mut guard = LoadingGuard::new(Arc::clone(&progress));
-        assert!(guard.observe(&ReplicaEvent::SnapshotBegin).is_none());
+        assert!(guard.observe(&ReplicaEvent::SnapshotBegin { db: 0 }).is_none());
         assert!(progress.loading(), "SnapshotBegin raises the gate");
         let gate = guard
             .observe(&ReplicaEvent::SnapshotEnd { ack_offset: 9 })
@@ -255,7 +255,7 @@ mod tests {
     fn early_exit_drop_lowers_loading() {
         let progress = Arc::new(ReplicaProgress::default());
         let mut guard = LoadingGuard::new(Arc::clone(&progress));
-        let _ = guard.observe(&ReplicaEvent::SnapshotBegin);
+        let _ = guard.observe(&ReplicaEvent::SnapshotBegin { db: 0 });
         assert!(progress.loading());
         drop(guard); // link drop / stop mid-ship
         assert!(!progress.loading(), "mid-ship exit never strands -LOADING");
@@ -264,8 +264,8 @@ mod tests {
     #[test]
     fn event_to_apply_snapshot_begin_passthrough() {
         let mut off = 7;
-        let out = event_to_apply(ReplicaEvent::SnapshotBegin, &mut off);
-        assert!(matches!(out, Some(ReplicaApply::SnapshotBegin)));
+        let out = event_to_apply(ReplicaEvent::SnapshotBegin { db: 0 }, &mut off);
+        assert!(matches!(out, Some(ReplicaApply::SnapshotBegin { db: 0 })));
         assert_eq!(off, 7, "SnapshotBegin must not touch the offset");
     }
 
@@ -305,7 +305,7 @@ mod tests {
         let mut off = 5;
         let ping = ReplicaEvent::Ping(kevy_replicate::feed::FeedPosition::new(1, 9));
         assert_eq!(forward_event(ping, &mut off, &mut loading, &tx), Ok(()), "no send tried");
-        let begin = ReplicaEvent::SnapshotBegin;
+        let begin = ReplicaEvent::SnapshotBegin { db: 0 };
         assert_eq!(forward_event(begin, &mut off, &mut loading, &tx), Err(()), "a send is tried");
         assert_eq!(off, 5);
     }

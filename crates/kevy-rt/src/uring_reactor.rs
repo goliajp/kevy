@@ -302,7 +302,12 @@ impl<C: Commands> Shard<C> {
             // Empty-buffer fast path = predicted-not-taken length
             // check, so the cost on iters that did no overwrite is
             // sub-ns.
-            self.store.flush_pending_drops();
+            // Multi-DB: drop batches flush per db, not just the cursor's.
+            for db in 0..self.store.databases() {
+                self.store.set_cur(db);
+                self.store.flush_pending_drops();
+            }
+            self.store.set_cur(0);
             self.uring_aof_tick(&mut ring);
             reap_counter = reap_counter.wrapping_add(1);
             if reap_counter & 0xF == 0 {
@@ -347,10 +352,30 @@ impl<C: Commands> Shard<C> {
                         // applies verbatim: the tick's lateness IS the
                         // single-iteration stall upper bound.
                         self.commands.on_tick_gap((gap - iv).as_micros() as u64);
+                        // Tick gauges report db0 deterministically (multi-DB: the INFO
+                        // keyspace line is db0's; per-db lines are Phase 2).
+                        self.store.set_cur(0);
                         self.commands.on_shard_tick(&mut self.store);
+                        // Multi-DB: publish per-db keyspace gauges for INFO keyspace.
+                        let ndbs = self.store.databases();
+                        if ndbs > 1 {
+                            let dbs: Vec<(u16, u64, u64)> = (0..ndbs)
+                                .map(|db| {
+                                    let st = self.store.store(db);
+                                    (db, st.dbsize() as u64, st.expires_count() as u64)
+                                })
+                                .collect();
+                            self.commands.on_db_gauges(&dbs);
+                        }
                         self.drain_tick_frames();
-                        self.drain_store_notify();
-                        self.drain_expired_keys();
+                        // Multi-DB: the notify/expiry drains run per db,
+                        // not just on the cursor (db0).
+                        for db in 0..self.store.databases() {
+                            self.store.set_cur(db);
+                            self.drain_store_notify();
+                            self.drain_expired_keys();
+                        }
+                        self.store.set_cur(0);
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.uring_tick_persist();
                         self.tick_conn_gauge();

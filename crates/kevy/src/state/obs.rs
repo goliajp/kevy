@@ -30,6 +30,11 @@ pub(crate) struct ShardStats {
     pub evicted_keys: AtomicU64,
     pub commands_processed: AtomicU64,
     pub connections_received: AtomicU64,
+    /// Per-db keyspace gauges for `INFO keyspace` (multi-DB): slot db's
+    /// `keys`/`expires`. Empty in single-db builds. Sized in
+    /// [`ObsState::new`].
+    pub keys_db: Vec<AtomicU64>,
+    pub expires_db: Vec<AtomicU64>,
     /// Live client conns on this shard right now (gauge, published per
     /// tick from the reactor's conn table; cluster-bus links excluded).
     pub clients_connected: AtomicU64,
@@ -121,6 +126,10 @@ pub(crate) struct Totals {
     pub used_memory_peak: u64,
     pub keys: u64,
     pub expires: u64,
+    /// Per-db keyspace sums for `INFO keyspace` (multi-DB); empty when the
+    /// instance is single-db.
+    pub keys_db: Vec<u64>,
+    pub expires_db: Vec<u64>,
     pub expired_keys: u64,
     pub evicted_keys: u64,
     pub commands_processed: u64,
@@ -256,10 +265,35 @@ pub(crate) struct ReplShardView {
 }
 
 impl ObsState {
+    #[cfg(test)]
     pub(crate) fn new(audit_log_path: &Path, nshards: usize) -> Self {
+        Self::with_databases(audit_log_path, nshards, 1)
+    }
+
+    /// `databases` = logical db count (multi-DB): sizes the per-db
+    /// keyspace gauge vectors. `1` keeps the single-db shape (empty vecs).
+    pub(crate) fn with_databases(audit_log_path: &Path, nshards: usize, databases: usize) -> Self {
+        let make = || {
+            Arc::new(ShardStats {
+                // `1` keeps the single-db shape (empty vecs): INFO keyspace
+                // then falls back to the scalar db0 line, and the per-db
+                // gauge publish stays multi-DB-only.
+                keys_db: if databases > 1 {
+                    (0..databases).map(|_| AtomicU64::new(0)).collect()
+                } else {
+                    Vec::new()
+                },
+                expires_db: if databases > 1 {
+                    (0..databases).map(|_| AtomicU64::new(0)).collect()
+                } else {
+                    Vec::new()
+                },
+                ..ShardStats::default()
+            })
+        };
         Self {
             audit: open_audit_log(audit_log_path),
-            shard_stats: (0..nshards.max(1)).map(|_| Arc::new(ShardStats::default())).collect(),
+            shard_stats: (0..nshards.max(1)).map(|_| make()).collect(),
             ops_ring: Mutex::new(Vec::new()),
             repl_views: (0..nshards.max(1)).map(|_| Mutex::new(ReplShardView::default())).collect(),
             start: Instant::now(),
@@ -294,6 +328,16 @@ impl ObsState {
             t.used_memory_peak += s.used_memory_peak.load(Relaxed);
             t.keys += s.keys.load(Relaxed);
             t.expires += s.expires.load(Relaxed);
+            if t.keys_db.len() < s.keys_db.len() {
+                t.keys_db.resize(s.keys_db.len(), 0);
+                t.expires_db.resize(s.expires_db.len(), 0);
+            }
+            for (i, k) in s.keys_db.iter().enumerate() {
+                t.keys_db[i] += k.load(Relaxed);
+            }
+            for (i, e) in s.expires_db.iter().enumerate() {
+                t.expires_db[i] += e.load(Relaxed);
+            }
             t.expired_keys += s.expired_keys.load(Relaxed);
             t.evicted_keys += s.evicted_keys.load(Relaxed);
             t.commands_processed += s.commands_processed.load(Relaxed);

@@ -13,7 +13,7 @@ use crate::replication::ReplicaState;
 use crate::shard::Shard;
 use kevy_replicate::feed::FeedPosition;
 use kevy_replicate::wire::{
-    SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin,
+    SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin_db,
     encode_snapshot_chunk, encode_snapshot_end,
 };
 use std::io;
@@ -363,17 +363,22 @@ impl<C: Commands> Shard<C> {
                 self.id, self.replicas[idx].fd,
             ));
         }
-        let rx = crate::persist_jobs::spawn_serializer(
-            self.store.collect_snapshot(),
-            self.commands.snapshot_aux(),
-            &replica_id,
-        );
+        // Multi-DB: ship one snapshot stream per logical db, chained —
+        // db 0 first (its marker is the historical `+SNAPSHOT\r\n`), then
+        // `+SNAPSHOT <db>` per remaining db. Empty dbs ship too: the
+        // replica must clear them.
+        let mut views = self.store.collect_snapshot_all();
+        let (cur_db, view) = views.remove(0);
+        let rx =
+            crate::persist_jobs::spawn_serializer(view, self.commands.snapshot_aux(), &replica_id);
         let conn = &mut self.replicas[idx];
-        conn.output.extend_from_slice(&encode_snapshot_begin());
+        conn.output.extend_from_slice(&encode_snapshot_begin_db(cur_db));
         conn.state = ReplicaState::SnapshotShipping {
             replica_id,
             ack_offset,
             generation,
+            cur_db,
+            pending_dbs: views,
             serializing: Some(rx),
             snapshot_buf: Vec::new(),
             snapshot_off: 0,
@@ -459,13 +464,48 @@ impl<C: Commands> Shard<C> {
             // state to Streaming so the next pump fills from the
             // backlog at `ack_offset`.
             if crate::repl_trace() {
+                let cur_db = match &conn.state {
+                    ReplicaState::SnapshotShipping { cur_db, .. } => *cur_db,
+                    _ => 0,
+                };
                 crate::repl_trace_line(format_args!(
-                    "shard {} fd {} ship end: gen {generation} ack_offset {ack_offset}",
+                    "shard {} fd {} ship end: db {cur_db} gen {generation} ack_offset {ack_offset}",
                     self.id, conn.fd,
                 ));
             }
             conn.output.extend_from_slice(&encode_snapshot_end(ack_offset));
-            if let ReplicaState::SnapshotShipping { replica_id, .. } = &conn.state {
+            // Multi-DB: chain the next db's ship, else go Streaming.
+            let next = match &mut conn.state {
+                ReplicaState::SnapshotShipping { pending_dbs, .. } => pending_dbs.pop(),
+                _ => None,
+            };
+            if let Some((db, view)) = next {
+                let (replica_id, ack_offset, generation) = match &conn.state {
+                    ReplicaState::SnapshotShipping {
+                        replica_id, ack_offset, generation, ..
+                    } => (replica_id.clone(), *ack_offset, *generation),
+                    _ => unreachable!(),
+                };
+                let rx = crate::persist_jobs::spawn_serializer(view, None, &replica_id);
+                conn.output.extend_from_slice(&encode_snapshot_begin_db(db));
+                conn.state = ReplicaState::SnapshotShipping {
+                    replica_id,
+                    ack_offset,
+                    generation,
+                    cur_db: db,
+                    pending_dbs: {
+                        let mut p = Vec::new();
+                        if let ReplicaState::SnapshotShipping { pending_dbs, .. } = &mut conn.state
+                        {
+                            std::mem::swap(&mut p, pending_dbs);
+                        }
+                        p
+                    },
+                    serializing: Some(rx),
+                    snapshot_buf: Vec::new(),
+                    snapshot_off: 0,
+                };
+            } else if let ReplicaState::SnapshotShipping { replica_id, .. } = &conn.state {
                 let rid = replica_id.clone();
                 conn.state = ReplicaState::Streaming {
                     replica_id: rid,

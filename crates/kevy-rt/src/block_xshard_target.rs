@@ -26,8 +26,9 @@ impl<C: Commands> Shard<C> {
         kind: BlockKind,
         serve_argv: Argv,
         proto: RespVersion,
+        db: u16,
     ) {
-        if self.target_register(origin, conn, &key, kind, serve_argv, proto) {
+        if self.target_register(origin, conn, &key, kind, serve_argv, proto, db) {
             self.signal_ready(origin, conn, &key);
         }
     }
@@ -44,7 +45,10 @@ impl<C: Commands> Shard<C> {
         kind: BlockKind,
         serve_argv: Argv,
         proto: RespVersion,
+        db: u16,
     ) -> bool {
+        // The waiter's key lives in the origin conn's selected db.
+        self.store.set_cur(db);
         let frozen = self.commands.resolve_block_argv(&mut self.store, &serve_argv, kind);
         let ready = self.commands.block_ready(&mut self.store, &frozen, kind);
         self.xwaiters.arm(key, XWaiter { origin, conn, kind, serve_argv: frozen, proto });
@@ -72,7 +76,13 @@ impl<C: Commands> Shard<C> {
     /// target: serve `(origin, conn)`'s waiter on `key` — replay its frozen
     /// command (popping / consuming) and return the reply bytes. Empty =
     /// raced (key drained between ready and serve) → origin re-arms.
-    pub(crate) fn target_serve(&mut self, origin: usize, conn: u64, key: &[u8]) -> Vec<u8> {
+    pub(crate) fn target_serve(
+        &mut self,
+        origin: usize,
+        conn: u64,
+        key: &[u8],
+        db: u16,
+    ) -> Vec<u8> {
         let Some((argv, proto)) = self.xwaiters.serve_argv(key, origin, conn) else {
             return Vec::new();
         };
@@ -88,6 +98,9 @@ impl<C: Commands> Shard<C> {
         }
         serve_delay_for_tests();
         let mut reply = Vec::new();
+        // The replayed command runs against the origin conn's selected db
+        // (carried in the request — the conn is not local to this shard).
+        self.store.set_cur(db);
         match proto {
             RespVersion::V2 => self.commands.dispatch_into(&mut self.store, &argv, &mut reply),
             RespVersion::V3 => {
@@ -121,10 +134,11 @@ impl<C: Commands> Shard<C> {
 
     /// target: the origin could not deliver — put the element back by
     /// running the undo captured before the pop.
-    pub(crate) fn target_apply_escrow(&mut self, origin: usize, conn: u64) {
+    pub(crate) fn target_apply_escrow(&mut self, origin: usize, conn: u64, db: u16) {
         let Some(undo) = self.xwaiters.escrow_take(origin, conn) else {
             return;
         };
+        self.store.set_cur(db);
         let mut sink = Vec::new();
         self.commands.dispatch_into(&mut self.store, &undo, &mut sink);
         // the undo is a push, so it is recorded like the pop it reverses

@@ -30,6 +30,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "LCS",
     "LPUSHX",
     "MGET",
+    "MOVE",
     "MSET",
     "MSETNX",
     "PEXPIRETIME",

@@ -80,16 +80,17 @@ use std::io::{self, Write};
 /// frozen entries reference. Replay rebuilds the hot stream first,
 /// then each frame re-establishes its rows' stubs — rows the stream
 /// never carried are inserted straight from the segment.
-pub(crate) fn write_segmented_frames<W: Write, S: crate::SnapshotSource>(
+pub(crate) fn write_segmented_frames_db<W: Write, S: crate::SnapshotSource>(
     w: &mut W,
     src: &S,
+    db: u16,
     cold_seqs: &[u32],
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     if cold_seqs.is_empty() {
         return Ok(());
     }
-    let files = src.row_seg_files();
+    let files = src.row_seg_files_in_db(db);
     for seq in cold_seqs {
         let file =
             files.iter().find(|(q, _)| q == seq).map(|(_, f)| f.clone()).ok_or_else(|| {

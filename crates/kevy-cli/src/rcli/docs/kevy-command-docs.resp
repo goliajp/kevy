@@ -1,4 +1,4 @@
-*502
+*504
 $4
 KEYS
 *14
@@ -728,8 +728,40 @@ $78
 O(1) same-shard; O(V) across shards, where V is the value copied over the ring
 $6
 compat
-$185
-differs: the DB argument is not accepted — kevy is single-database. A cross-shard copy is not atomic with anything else, but a failure between its two steps leaves both keys untouched
+$151
+differs: COPY takes no DB argument (use MOVE for that); across shards it is a two-step copy, and a failure between the steps leaves both keys untouched
+$5
+flags
+*1
+$5
+write
+$4
+MOVE
+*14
+$7
+summary
+$54
+Move a key (with its TTL) to another logical database.
+$5
+since
+$5
+1.0.0
+$5
+group
+$7
+generic
+$6
+syntax
+$11
+MOVE key db
+$10
+complexity
+$4
+O(1)
+$6
+compat
+$147
+differs: error strings match Redis (DB index is out of range, value is not an integer, source and destination objects are the same); otherwise full
 $5
 flags
 *1

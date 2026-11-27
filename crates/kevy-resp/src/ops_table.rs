@@ -351,6 +351,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("GEOSEARCHSTORE", WR, GROW, None,          None,    SERVER | REPLAY),
     // ---- keyspace -------------------------------------------------------
     op("COPY",         WR, GROW, None,            None,    SERVER | ESTORE),
+    op("MOVE",         WR, NG,   None,            None,    SERVER | ESTORE | REPLAY),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
     // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
     // embedded parity = changes_since / changes_tail / feed_shards /

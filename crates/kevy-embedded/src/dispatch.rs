@@ -196,6 +196,7 @@ pub(crate) const DISPATCH_VERBS: &[&str] = &[
     "LCS",
     "LPUSHX",
     "MGET",
+    "MOVE",
     "MSET",
     "MSETNX",
     "PEXPIRETIME",

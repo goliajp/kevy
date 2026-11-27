@@ -89,9 +89,11 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn restore_serve_on_teardown(&mut self, conn: u64) {
         if let Some(shard) = self.serve_confirm.remove(&conn) {
             if shard == self.id {
-                self.target_apply_escrow(self.id, conn);
+                let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
+                self.target_apply_escrow(self.id, conn, db);
             } else {
-                self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+                let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
+                self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn, db });
             }
         }
     }
@@ -109,9 +111,11 @@ impl<C: Commands> Shard<C> {
         }
         let shard = self.shard_of(key);
         if shard == self.id {
-            self.target_apply_escrow(self.id, conn);
+            let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
+            self.target_apply_escrow(self.id, conn, db);
         } else {
-            self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+            let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
+            self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn, db });
         }
     }
 

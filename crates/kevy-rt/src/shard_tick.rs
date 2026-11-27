@@ -150,6 +150,7 @@ impl<C: Commands> Shard<C> {
         }
         if let Some(f) = self.replicate.as_mut() {
             f.bump_generation();
+            self.feed_last_db.set(u16::MAX);
             let g = f.generation();
             if let Err(e) = kevy_persist::feed_meta::write_feed_gen(&self.data_dir, self.id, g) {
                 eprintln!("kevy: shard {} promotion feed gen write failed: {e}", self.id);

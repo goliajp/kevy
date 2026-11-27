@@ -234,6 +234,11 @@ use kevy_map::KevyMap;
 /// ```
 #[derive(Debug, Default)]
 pub struct Store {
+    /// Logical database index this store backs (`SELECT <db>`). `0` by
+    /// default; the server stamps it per keyspace so keyspace
+    /// notifications can publish on `__keyevent@<db>__:*`. Pure
+    /// metadata — the store itself is db-agnostic.
+    pub(crate) db_index: u16,
     pub(crate) map: keyspace_map::Keyspace,
     pub(crate) defrag: defrag::DefragState,
     /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;

@@ -434,20 +434,39 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
         // CONFIG moved to crate::ops::dispatch_ops (real GET reads Config;
         // SET / REWRITE return helpful errors until v1.x).
         b"SELECT" => cmd_select(args, out),
+        b"MOVE" => cmd_move(args, out),
         _ => return false,
     }
     true
 }
 
-/// `SELECT <index>` — single-DB acknowledgement.
+/// `SELECT <index>` — fallback for the embedded engine (single keyspace).
 ///
-/// kevy is a single-database server (one keyspace per shard pool, no
-/// `databases N` config). For drop-in client compatibility we accept
-/// `SELECT 0` (the Redis default) with `+OK` and reject any other index
-/// with the byte-identical Redis error.
+/// The network server intercepts SELECT in `kevy-rt` (`exec_db_admin`)
+/// before this dispatch runs, so this arm only serves the embedded
+/// engine, which stays single-db: accept `SELECT 0`, reject the rest.
+/// `MOVE key db` — fallback for the embedded engine (single keyspace).
 ///
-/// Real multi-DB support (SELECT N + `MOVE` + `SWAPDB` + `databases`
-/// config + per-shard `Vec<Store>`) is intentionally not implemented.
+/// The network server routes MOVE in `kevy-rt` (`exec_move`, multi-DB);
+/// the embedded engine is single-db, so only db 0 exists: same-db moves
+/// get Redis's "source and destination" error, any other index is out of
+/// range.
+fn cmd_move<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+    if args.len() != 3 {
+        wrong_args(out, "move");
+        return;
+    }
+    let Ok(s) = std::str::from_utf8(&args[2]) else {
+        encode_error(out, "ERR value is not an integer or out of range");
+        return;
+    };
+    match s.parse::<i64>() {
+        Ok(0) => encode_error(out, "ERR source and destination objects are the same"),
+        Ok(_) => encode_error(out, "ERR DB index is out of range"),
+        Err(_) => encode_error(out, "ERR value is not an integer or out of range"),
+    }
+}
+
 fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 2 {
         wrong_args(out, "select");
@@ -463,13 +482,8 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let parsed: Result<i64, _> = s.parse();
     match parsed {
         Ok(0) => encode_simple_string(out, "OK"),
-        // Explicit: kevy is single-DB (unlike valkey's default 16). Tell the
-        // caller *why* it's rejected so they don't assume it's an arbitrary
-        // index out-of-range that they could config their way around.
-        Ok(_) => encode_error(
-            out,
-            "ERR kevy only supports DB 0 (multi-database support is on the v1.1.0 backlog)",
-        ),
+        // Embedded engine is single-DB; the server handles SELECT itself.
+        Ok(_) => encode_error(out, "ERR DB index is out of range"),
         // Byte-identical to valkey's "value is not an integer or out of range"
         // — this one is a real parser error, not a kevy-specific limit.
         Err(_) => encode_error(out, "ERR value is not an integer or out of range"),

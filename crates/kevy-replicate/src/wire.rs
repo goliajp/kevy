@@ -32,7 +32,7 @@ use kevy_resp::{Argv, ArgvView, ProtocolError, parse_command_into};
 pub use crate::wire_snapshot::{
     SNAPSHOT_CHUNK_MAX, SNAPSHOT_LINE_MAX, SnapshotMarker, decode_replconf_ack,
     decode_snapshot_chunk, decode_snapshot_marker, encode_ping, encode_replconf_ack,
-    encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+    encode_snapshot_begin, encode_snapshot_begin_db, encode_snapshot_chunk, encode_snapshot_end,
 };
 
 /// Wire-layer error. Only [`WireError::Truncated`] is recoverable by

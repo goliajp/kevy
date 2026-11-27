@@ -1110,6 +1110,12 @@ fn both_surfaces_refuse_a_short_call_the_same_way() {
 /// a question the two surfaces are not asked in the same words.
 const CANNOT_COMPARE: &[(&str, &str)] = &[
     (
+        "MOVE",
+        "cross-database: the server routes it across dbs, the embedded \
+         engine is single-db and answers the Redis error — different \
+         surfaces by design, like SELECT beyond db 0",
+    ),
+    (
         "RANDOMKEY",
         "answers with a key of its own choosing, so comparing bytes would \
          assert the two implementations chose alike",

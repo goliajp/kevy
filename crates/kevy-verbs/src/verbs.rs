@@ -166,6 +166,7 @@ registry! {
     b"LREM" WR,
     b"LSET" WR,
     b"LTRIM" WR,
+    b"MOVE" WR,
     b"MSET" WR,
     b"MSETNX" WR,
     b"PERSIST" WR,

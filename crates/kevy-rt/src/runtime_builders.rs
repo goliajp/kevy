@@ -396,6 +396,15 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// Logical database count for `SELECT <index>` (default 16, matching
+    /// Redis). Phase 1 is in-memory only: `databases > 1` requires AOF and
+    /// replication to be off (enforced by the `kevy` binary at boot).
+    #[must_use]
+    pub fn with_databases(mut self, n: u16) -> Self {
+        self.databases = n.max(1);
+        self
+    }
+
     /// Total cap on active client connections. `0` = unlimited.
     /// Default `10_000`. Per-shard slice is `ceil(N / nshards)`.
     #[must_use]

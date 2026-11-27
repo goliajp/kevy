@@ -286,6 +286,11 @@ impl<C: Commands> Shard<C> {
     /// lane off its clone of the renamed-away inode — appends it made
     /// there would be lost at the next boot.
     pub(crate) fn on_aof_reopened(&mut self) {
+        // The swapped-in rewrite image ends on its last db; force a fresh
+        // SELECT marker on the next logged write (multi-DB only).
+        if self.store.databases() > 1 {
+            self.aof_last_db.set(u16::MAX);
+        }
         #[cfg(target_os = "linux")]
         self.uring_aof_mark_all_durable();
         self.epoll_aof_on_swap_finalized();

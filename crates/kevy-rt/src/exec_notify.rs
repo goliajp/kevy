@@ -47,8 +47,9 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Fire `__keyspace@0__:<key>` (`K` flag) and / or
-    /// `__keyevent@0__:<event>` (`E` flag) for one `(key, event)` pair.
+    /// Fire `__keyspace@<db>__:<key>` (`K` flag) and / or
+    /// `__keyevent@<db>__:<event>` (`E` flag) for one `(key, event)` pair,
+    /// on the db the command ran against (multi-DB: `docs/multi-db.md`).
     /// Called by the per-Op notify helpers after they've already
     /// gated on `notify_flags.is_active()` + the per-class flag.
     pub(crate) fn notify_keyspace_event(&mut self, event: &[u8], key: &[u8]) {
@@ -56,15 +57,20 @@ impl<C: Commands> Shard<C> {
         // fixed prefix and the key bytes. We hold both as owned Vecs
         // briefly; the broadcast helper takes them by slice and Arc's
         // up the per-target copies.
+        let db = self.store.cur();
         if self.notify_flags.contains(crate::NotificationFlags::KEYSPACE) {
-            let mut chan = Vec::with_capacity(b"__keyspace@0__:".len() + key.len());
-            chan.extend_from_slice(b"__keyspace@0__:");
+            let mut chan = Vec::with_capacity(16 + key.len());
+            chan.extend_from_slice(b"__keyspace@");
+            chan.extend_from_slice(db.to_string().as_bytes());
+            chan.extend_from_slice(b"__:");
             chan.extend_from_slice(key);
             self.broadcast_notification(&chan, event);
         }
         if self.notify_flags.contains(crate::NotificationFlags::KEYEVENT) {
-            let mut chan = Vec::with_capacity(b"__keyevent@0__:".len() + event.len());
-            chan.extend_from_slice(b"__keyevent@0__:");
+            let mut chan = Vec::with_capacity(16 + event.len());
+            chan.extend_from_slice(b"__keyevent@");
+            chan.extend_from_slice(db.to_string().as_bytes());
+            chan.extend_from_slice(b"__:");
             chan.extend_from_slice(event);
             self.broadcast_notification(&chan, key);
         }
@@ -248,9 +254,22 @@ impl<C: Commands> Shard<C> {
             return;
         }
         // Just the event channel — no per-key keyspace channel applies.
-        let mut chan = Vec::from(b"__keyevent@0__:flushdb".as_slice());
-        let _ = &mut chan; // silence lint
-        self.broadcast_notification(b"__keyevent@0__:flushdb", b"");
+        // Multi-DB: the event carries the db the flush ran against.
+        let db = self.store.cur();
+        let chan = format!("__keyevent@{db}__:flushdb");
+        self.broadcast_notification(chan.as_bytes(), b"");
+    }
+
+    /// `FLUSHALL` fires one `flushdb` event per logical db.
+    pub(crate) fn notify_flushdb_event(&mut self, db: u16) {
+        if !self
+            .notify_flags
+            .contains(crate::NotificationFlags::GENERIC | crate::NotificationFlags::KEYEVENT)
+        {
+            return;
+        }
+        let chan = format!("__keyevent@{db}__:flushdb");
+        self.broadcast_notification(chan.as_bytes(), b"");
     }
 }
 

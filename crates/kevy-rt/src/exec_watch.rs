@@ -54,7 +54,16 @@ impl<C: Commands> Shard<C> {
             if shard == self.id {
                 self.exec_local(conn_id, seq, op);
             } else {
-                self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+                self.send_to(
+                    shard,
+                    Inbound::Request {
+                        origin: self.id,
+                        conn: conn_id,
+                        seq,
+                        op,
+                        db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                    },
+                );
             }
         }
     }
@@ -83,7 +92,7 @@ impl<C: Commands> Shard<C> {
         &mut self,
         conn_id: u64,
         queued: Vec<Argv>,
-        watched: Vec<(Vec<u8>, u64)>,
+        watched: Vec<(Vec<u8>, u64, u16)>,
     ) {
         let n = queued.len();
         let Some((header_seq, base_idx)) = self.preallocate_exec_slots(conn_id, queued) else {
@@ -139,11 +148,11 @@ impl<C: Commands> Shard<C> {
     /// Group `(key, version)` pairs by the key's owning shard.
     fn group_watched_pairs(
         &self,
-        watched: Vec<(Vec<u8>, u64)>,
-    ) -> HashMap<usize, Vec<(Vec<u8>, u64)>> {
-        let mut by_shard: HashMap<usize, Vec<(Vec<u8>, u64)>> = HashMap::new();
-        for (k, v) in watched {
-            by_shard.entry(self.shard_of(&k)).or_default().push((k, v));
+        watched: Vec<(Vec<u8>, u64, u16)>,
+    ) -> HashMap<usize, Vec<(Vec<u8>, u64, u16)>> {
+        let mut by_shard: HashMap<usize, Vec<(Vec<u8>, u64, u16)>> = HashMap::new();
+        for (k, v, db) in watched {
+            by_shard.entry(self.shard_of(&k)).or_default().push((k, v, db));
         }
         by_shard
     }
@@ -154,13 +163,22 @@ impl<C: Commands> Shard<C> {
         conn_id: u64,
         seq: u64,
         shard: usize,
-        pairs: Vec<(Vec<u8>, u64)>,
+        pairs: Vec<(Vec<u8>, u64, u16)>,
     ) {
         let op = Op::CheckWatch(pairs);
         if shard == self.id {
             self.exec_local(conn_id, seq, op);
         } else {
-            self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+            self.send_to(
+                shard,
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
+            );
         }
     }
 
@@ -181,7 +199,7 @@ impl<C: Commands> Shard<C> {
 
     /// `WATCH` completion: move the collated pairs into `conn.watched`,
     /// fill the slot's `done` with `+OK`, drain.
-    fn finalize_watch_collect(&mut self, conn_id: u64, seq: u64, pairs: Vec<(Vec<u8>, u64)>) {
+    fn finalize_watch_collect(&mut self, conn_id: u64, seq: u64, pairs: Vec<(Vec<u8>, u64, u16)>) {
         let Some(c) = self.conns.get_mut(&conn_id) else { return };
         c.watched.extend(pairs);
         let idx = (seq - c.next_emit) as usize;
@@ -278,12 +296,34 @@ impl<C: Commands> Shard<C> {
                 b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb, key_hash: 0 };
+                let db = self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0);
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None, verb, key_hash: 0, db };
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta);
             }
             Route::Single(idx) => {
                 let shard = self.shard_of(&args[idx]);
-                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb, key_hash: 0 };
+                let db = self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0);
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb, key_hash: 0, db };
+                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta);
+            }
+            // MOVE rides the single-key machinery: run_dispatch /
+            // run_dispatch_into intercept it into exec_move on the key's
+            // owning shard. Malformed calls run local to answer the error.
+            Route::Move => {
+                let db = self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0);
+                let (shard, key_hash) = if args.len() >= 2 {
+                    self.route_of(&args[1])
+                } else {
+                    (self.id, None)
+                };
+                let meta = DispatchMeta {
+                    is_write,
+                    wake_idx,
+                    key_idx: Some(1),
+                    verb,
+                    key_hash: key_hash.unwrap_or(0),
+                    db,
+                };
                 self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta);
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),

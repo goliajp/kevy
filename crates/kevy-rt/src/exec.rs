@@ -24,6 +24,11 @@ impl<C: Commands> Shard<C> {
         if Self::try_intercept_client(self, conn_id, args) {
             return;
         }
+        // Multi-db admin verbs (SELECT / FLUSHALL / SWAPDB) need &mut Conn
+        // and whole-shard DbStores — intercepted here like CLIENT SETNAME.
+        if Self::try_intercept_db_admin(self, conn_id, args) {
+            return;
+        }
         // One verb-resolution per cmd (was 4: txn_kind + route + is_quit +
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
@@ -38,13 +43,17 @@ impl<C: Commands> Shard<C> {
         let in_multi = c.multi.is_some();
         let proto = c.proto;
         let cluster_conn = c.cluster;
+        // Route this command's store accesses to the conn's selected db
+        // (shard is single-threaded, so a Cell cursor is race-free).
+        let db = c.db;
+        self.store.set_cur(db);
         if self.cluster.is_some() {
             crate::cluster::set_relayed_client(c.relayed);
         }
         if !in_multi && matches!(resolved.txn_kind, TxnKind::Other | TxnKind::Watch) {
             let seq = c.next_seq;
             c.next_seq += 1;
-            self.start_command(conn_id, seq, proto, args, resolved, cluster_conn);
+            self.start_command(conn_id, seq, proto, args, resolved, cluster_conn, db);
             return;
         }
         self.handle_txn_state(conn_id, in_multi, &resolved.txn_kind, args);
@@ -88,6 +97,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         resolved: ResolvedCmd,
         cluster_conn: bool,
+        db: u16,
     ) {
         // One client command at the dispatch boundary (before fan-out, so a
         // multi-key command counts once) — INFO's total_commands_processed.
@@ -151,6 +161,22 @@ impl<C: Commands> Shard<C> {
             Route::Copy => {
                 self.start_copy(conn_id, seq, args);
                 self.hold_if_pending(conn_id, seq);
+            }
+            Route::Move => {
+                core::mem::forget(route);
+                // Malformed calls (no key) run where they came, to answer
+                // the arity error — same shape as Route::SetMove below.
+                let (shard, key_hash) =
+                    if args.len() >= 2 { self.route_of(&args[1]) } else { (self.id, None) };
+                let meta = DispatchMeta {
+                    is_write,
+                    wake_idx,
+                    key_idx: Some(1),
+                    verb,
+                    key_hash: key_hash.unwrap_or(0),
+                    db,
+                };
+                self.start_move(conn_id, seq, proto, args, meta, shard, is_quit);
             }
             Route::ReadAcross { first, count } => {
                 let across =
@@ -224,7 +250,7 @@ impl<C: Commands> Shard<C> {
                     } => Some(3),
                     _ => None,
                 };
-                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: 0 };
+                let meta = DispatchMeta { is_write, wake_idx, key_idx, verb, key_hash: 0, db };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
@@ -260,8 +286,14 @@ impl<C: Commands> Shard<C> {
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
-                let meta =
-                    DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8), verb, key_hash };
+                let meta = DispatchMeta {
+                    is_write,
+                    wake_idx,
+                    key_idx: Some(idx as u8),
+                    verb,
+                    key_hash,
+                    db,
+                };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
@@ -369,7 +401,16 @@ impl<C: Commands> Shard<C> {
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.xshard_inflight += 1;
-                self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+                self.send_to(
+                    shard,
+                    Inbound::Request {
+                        origin: self.id,
+                        conn: conn_id,
+                        seq,
+                        op,
+                        db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                    },
+                );
             }
         }
     }
@@ -410,11 +451,51 @@ impl<C: Commands> Shard<C> {
     // `impl Shard`, but split so this file stays under 500 LOC.
 
     /// Append a mutating command to this shard's AOF, if enabled (best-effort).
+    /// Multi-DB: when the command's db differs from the last logged one, a
+    /// `SELECT <db>` marker frame is logged first (the same shape Redis's
+    /// AOF uses), so replay reconstructs every db instead of merging them
+    /// into db 0. Single-db (`databases == 1`) never emits a marker.
     pub(crate) fn log<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if let Some(aof) = &mut self.aof
-            && let Err(e) = aof.append(args)
+        if let Some(aof) = &mut self.aof {
+            if self.store.databases() > 1 {
+                let db = self.store.cur();
+                if db != self.aof_last_db.get() {
+                    let mut sel = kevy_resp::Argv::with_capacity(2, 0);
+                    sel.push(b"SELECT");
+                    let ds = db.to_string();
+                    sel.push(ds.as_bytes());
+                    if let Err(e) = aof.append(&sel) {
+                        eprintln!("kevy: shard {} aof append failed: {e}", self.id);
+                    }
+                    self.aof_last_db.set(db);
+                }
+            }
+            if let Err(e) = aof.append(args) {
+                eprintln!("kevy: shard {} aof append failed: {e}", self.id);
+            }
+        }
+    }
+
+    /// Push a mutating frame to this shard's replication feed (backlog).
+    /// Multi-DB: a `SELECT <db>` marker frame is pushed first whenever the db
+    /// changed since the last pushed frame — the same shape the AOF uses — so
+    /// a replica replays each db into its own keyspace.
+    pub(crate) fn push_feed<A: ArgvView + ?Sized>(&mut self, args: &A) {
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
+            && !crate::replication_gate::is_applying_replicated()
         {
-            eprintln!("kevy: shard {} aof append failed: {e}", self.id);
+            if self.store.databases() > 1 {
+                let db = self.store.cur();
+                if db != self.feed_last_db.get() {
+                    let mut sel = kevy_resp::Argv::with_capacity(2, 0);
+                    sel.push(b"SELECT");
+                    let ds = db.to_string();
+                    sel.push(ds.as_bytes());
+                    src.push_mutation(&sel);
+                    self.feed_last_db.set(db);
+                }
+            }
+            src.push_mutation(args);
         }
     }
 

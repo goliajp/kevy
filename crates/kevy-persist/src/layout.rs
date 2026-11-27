@@ -53,6 +53,19 @@ pub fn snapshot_path(dir: &Path, i: usize) -> PathBuf {
     dir.join(snapshot_file(i))
 }
 
+/// Shard `i`'s snapshot path for logical db `db` (multi-DB). db 0 keeps
+/// the historical `dump-<i>.rdb` name so single-db deployments and older
+/// files are unchanged; db N > 0 gets `dump-<i>-db<N>.rdb`.
+///
+/// ```
+/// use std::path::Path;
+/// assert_eq!(kevy_persist::layout::snapshot_db_path(Path::new("/data"), 0, 0), Path::new("/data/dump-0.rdb"));
+/// assert_eq!(kevy_persist::layout::snapshot_db_path(Path::new("/data"), 0, 3), Path::new("/data/dump-0-db3.rdb"));
+/// ```
+pub fn snapshot_db_path(dir: &Path, i: usize, db: u16) -> PathBuf {
+    if db == 0 { snapshot_path(dir, i) } else { dir.join(format!("dump-{i}-db{db}.rdb")) }
+}
+
 /// Shard `i`'s AOF path under `dir`.
 ///
 /// ```
@@ -115,6 +128,19 @@ pub fn shards_meta_path(dir: &Path) -> PathBuf {
 /// ```
 pub fn segs_dir(dir: &Path, i: usize) -> PathBuf {
     dir.join(format!("segs-{i}"))
+}
+
+/// Shard `i`'s row-segment directory for logical db `db` (multi-DB).
+/// db 0 keeps the historical `segs-<i>` dir; db N > 0 gets
+/// `segs-<i>-db<N>` so per-db manifests never collide.
+///
+/// ```
+/// use std::path::Path;
+/// assert_eq!(kevy_persist::layout::segs_dir_db(Path::new("/data"), 2, 0), Path::new("/data/segs-2"));
+/// assert_eq!(kevy_persist::layout::segs_dir_db(Path::new("/data"), 2, 1), Path::new("/data/segs-2-db1"));
+/// ```
+pub fn segs_dir_db(dir: &Path, i: usize, db: u16) -> PathBuf {
+    if db == 0 { segs_dir(dir, i) } else { dir.join(format!("segs-{i}-db{db}")) }
 }
 
 /// Highest `dump-{i}.rdb` / `aof-{i}.aof` index + 1 found in `dir`, or 0

@@ -146,7 +146,11 @@ impl RuntimeState {
             scope: ScopeState::from_config(&cfg)?,
             election: ElectionState::new(nshards),
             catalogs: CatalogState::new(),
-            obs: ObsState::new(&cfg.audit.log_path, nshards),
+            obs: ObsState::with_databases(
+                &cfg.audit.log_path,
+                nshards,
+                cfg.server.databases as usize,
+            ),
             mem: crate::mem_guard::MemGuard::default(),
             control_epoch: replication.control_epoch_handle(),
             replication,

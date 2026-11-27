@@ -306,6 +306,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     let mut runtime = Runtime::builder(commands)
         .bind(cfg.server.bind, cfg.server.port)
         .shards(nshards)
+        .with_databases(cfg.server.databases)
         .with_data_dir(cfg.server.data_dir.clone())
         .with_accept_shards(cfg.server.accept_shards)
         .with_max_clients(cfg.server.max_clients)

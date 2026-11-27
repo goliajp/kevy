@@ -26,6 +26,16 @@ impl<C: Commands> Shard<C> {
     ) -> Part {
         let t0 = self.slowlog_t0();
         self.reply_scratch.clear();
+        // The owning shard executes against the command's selected db.
+        self.store.set_cur(meta.db);
+        // MOVE crosses dbs — needs the whole DbStores, intercepted here.
+        if args.len() >= 1 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"MOVE")) {
+            let part = self.exec_move(args, meta);
+            if meta.is_write {
+                self.post_write_housekeeping(args, meta);
+            }
+            return part;
+        }
         crate::exec_dispatch::dispatch_proto(
             &self.commands,
             &mut self.store,
@@ -87,6 +97,10 @@ impl<C: Commands> Shard<C> {
                 // persist the high-water before serving under it.
                 if let Some(f) = self.replicate.as_mut() {
                     f.bump_generation();
+                    // Multi-DB: force a `SELECT <db>` marker on the next
+                    // pushed frame — after a resync the replica's apply cursor
+                    // restarts at db 0, so a bare frame could land there.
+                    self.feed_last_db.set(u16::MAX);
                     let g = f.generation();
                     if let Err(e) =
                         kevy_persist::feed_meta::write_feed_gen(&self.data_dir, self.id, g)
@@ -245,7 +259,11 @@ impl<C: Commands> Shard<C> {
                 // time) is now dirty on this shard. The origin shard
                 // ORs the partial results across shards and aborts
                 // EXEC if any shard reports `true`.
-                let dirty = keys.iter().any(|(k, v)| self.store.key_version(k) != *v);
+                // Each watched entry carries the db it was registered in
+                // (WATCH is per-db, like Redis's per-dbid watched_keys):
+                // check the key's version in THAT db, not the cursor's.
+                let dirty =
+                    keys.iter().any(|(k, v, db)| self.store.store(*db).key_version(k) != *v);
                 Part::Int(i64::from(dirty))
             }
             Op::Rename { src, dst, nx } => {
@@ -366,9 +384,10 @@ impl<C: Commands> Shard<C> {
                 // origin shard stashes (key, version) pairs into the
                 // conn's watched set; EXEC checks against these via
                 // [`Op::CheckWatch`].
+                let db = self.store.cur();
                 let mut out = Vec::with_capacity(keys.len());
                 for k in &keys {
-                    out.push((k.clone(), self.store.record_watch(k)));
+                    out.push((k.clone(), self.store.record_watch(k), db));
                 }
                 Part::WatchVersions(out)
             }
@@ -429,7 +448,12 @@ impl<C: Commands> Shard<C> {
                 self.op_store_value(key, value, &event, class, keep_ttl)
             }
             Op::FirstHitTry { argv, proto } => {
-                self.run_dispatch(&argv, proto, crate::exec_first_hit::FIRST_HIT_META)
+                // The op carries no DispatchMeta — take the db from the
+                // cursor the caller set (conn db at dispatch / request db
+                // on the forwarded path), not a hardcoded 0.
+                let mut meta = crate::exec_first_hit::FIRST_HIT_META;
+                meta.db = self.store.cur();
+                self.run_dispatch(&argv, proto, meta)
             }
             Op::XReadCheck { index, argv } => Part::XReadElement {
                 index,
@@ -459,6 +483,7 @@ impl<C: Commands> Shard<C> {
                         key_idx,
                         verb: crate::VerbId::UNKNOWN,
                         key_hash: 0,
+                        db: 0,
                     };
                     self.post_write_housekeeping(&argv, meta);
                 }

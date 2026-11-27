@@ -125,8 +125,8 @@ impl ReplicaServer {
                         Some(Ok(ev)) => {
                             let apply = match ev {
                                 kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
-                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
-                                    kevy_rt::ReplicaApply::SnapshotBegin
+                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => {
+                                    kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)
@@ -621,10 +621,10 @@ impl TrackedReplica {
                         Some(Ok(ev)) => {
                             let apply = match ev {
                                 kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
-                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
+                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => {
                                     snapshot_count
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    kevy_rt::ReplicaApply::SnapshotBegin
+                                    kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)

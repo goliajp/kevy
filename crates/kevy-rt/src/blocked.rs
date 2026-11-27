@@ -448,6 +448,9 @@ impl<C: Commands> Shard<C> {
         };
         conn.blocked = false;
         let proto = waiter.proto;
+        // The woken command runs against the waiter conn's selected db.
+        let db = conn.db;
+        self.store.set_cur(db);
         let before = conn.output.len();
         match proto {
             RespVersion::V2 => {

@@ -60,7 +60,7 @@ pub(crate) enum Part {
     /// `WATCH` partial reply: each key this shard owns paired with its
     /// current version, in request order. The origin shard collates
     /// these into the conn's watched set.
-    WatchVersions(Vec<(Vec<u8>, u64)>),
+    WatchVersions(Vec<(Vec<u8>, u64, u16)>),
     /// Cross-shard RENAME step 1 success: src removed; here's the
     /// value + TTL for the orchestrator to ship into step 2.
     RenameTaken {

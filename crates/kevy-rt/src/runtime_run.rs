@@ -16,7 +16,6 @@ use crate::shard::{CachePadded, Shard};
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
-use kevy_store::Store;
 use kevy_sys::{Poller, Socket, Waker};
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -288,29 +287,35 @@ impl<C: Commands> Runtime<C> {
             } else {
                 None
             };
-            let mut store = Store::new();
-            // The reactor loop refreshes the store clock once per batch, so
-            // lazy expiry can trust the cached clock (skip per-command
-            // `Instant::now()`).
-            store.set_cached_clock(true);
-            // Hand the bio-drop channel sender to the store so
-            // SET overwrites of heavy values (Arc<[u8]> ≥ 256 B, non-empty
-            // collections) get freed off-reactor. Sender clone is cheap
-            // (`Arc::clone`); the bio thread is shared across all shards
-            // (single global thread, mirrors valkey `bio.c`).
-            store.set_bio_drop_sender(bio_send.clone());
-            // Tiering: the process budget — resolved
-            // bytes from the builder (`[tiering]` TOML/CLI/env full
-            // surface), or the minimal `KEVY_TIER_BUDGET` plain-bytes
-            // env knob — split evenly across shards; per-shard cold
-            // tier under `<tier root>/<id>`.
-            if let Some(total) = self.resolved_tier_budget() {
-                store.enable_tiering(
-                    &self.tier_root().join(id.to_string()),
-                    Self::per_shard_tier_budget(total, n),
-                )?;
+            // Multi-DB: one keyspace per logical db (see docs/multi-db.md).
+            // Stores are created eagerly — an empty keyspace allocates no
+            // table — and each gets the same clock/bio/tiering/init wiring.
+            let mut store = crate::dbs::DbStores::new(self.databases);
+            for db in 0..self.databases {
+                let s = store.store_mut(db);
+                // The reactor loop refreshes the store clock once per batch, so
+                // lazy expiry can trust the cached clock (skip per-command
+                // `Instant::now()`).
+                s.set_cached_clock(true);
+                // Hand the bio-drop channel sender to the store so
+                // SET overwrites of heavy values (Arc<[u8]> ≥ 256 B, non-empty
+                // collections) get freed off-reactor. Sender clone is cheap
+                // (`Arc::clone`); the bio thread is shared across all shards
+                // (single global thread, mirrors valkey `bio.c`).
+                s.set_bio_drop_sender(bio_send.clone());
+                // Tiering: the process budget — resolved
+                // bytes from the builder (`[tiering]` TOML/CLI/env full
+                // surface), or the minimal `KEVY_TIER_BUDGET` plain-bytes
+                // env knob — split evenly across shards; per-shard cold
+                // tier under `<tier root>/<id>`.
+                if let Some(total) = self.resolved_tier_budget() {
+                    s.enable_tiering(
+                        &self.tier_root().join(format!("{id}/db{db}")),
+                        Self::per_shard_tier_budget(total, n),
+                    )?;
+                }
+                self.commands.on_shard_init(s);
             }
-            self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 #[cfg(target_os = "linux")]
                 aof_offload: Default::default(),
@@ -329,6 +334,9 @@ impl<C: Commands> Runtime<C> {
                 // UDS: only shard 0 holds the (single) unix listener.
                 unix_listener: if id == 0 { unix_listener.take() } else { None },
                 store,
+                aof_last_db: std::cell::Cell::new(0),
+                feed_last_db: std::cell::Cell::new(0),
+                repl_apply_db: std::cell::Cell::new(0),
                 commands: self.commands.clone(),
                 poller: Poller::new()?,
                 listener,

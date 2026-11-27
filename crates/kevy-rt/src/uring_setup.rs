@@ -24,30 +24,35 @@ impl<C: Commands> Shard<C> {
         if let Some(rx) = &self.replica_inbox {
             rx.attach_waker(Arc::clone(&self.waker));
         }
-        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
-        self.store.enable_seg_rows(&segs_dir).map_err(std::io::Error::other)?;
+        self.store.enable_seg_rows_all(&self.data_dir, self.id).map_err(std::io::Error::other)?;
         self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
-            let store = &mut self.store;
+            let data_dir = &self.data_dir;
+            let shard_id = self.id;
+            let dbs = &mut self.store;
             // In-replay demotion — same K-frame watermark
             // drain as the readiness path's replay.
             let mut frames: u64 = 0;
             let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
+                // Multi-DB: SELECT markers move the cursor, SWAPDB swaps dbs.
+                if crate::shard_run::replay_admin_frame(dbs, &args) {
+                    return;
+                }
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // Same stitch handling as the readiness path: a
                     // missing manifest entry is a named startup refusal.
-                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
+                    if let Err(e) = dbs.apply_segmented_cur(data_dir, shard_id, f) {
                         torn.get_or_insert(e);
                     }
                     return;
                 }
-                crate::shard_run::replay_dispatch(commands, store, &args);
+                crate::shard_run::replay_dispatch(commands, dbs, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-                    store.demote_to_watermark();
+                    dbs.demote_all_to_watermark();
                 }
             };
             let report = if self.replay_resync {

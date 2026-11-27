@@ -32,7 +32,7 @@ impl<C: Commands> Shard<C> {
         route: Route,
     ) -> (Vec<(usize, Op)>, Agg) {
         match route {
-            Route::Local | Route::Single(_) => {
+            Route::Local | Route::Single(_) | Route::Move => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached single-target route {route:?} \
                      — routing bug; replying nil to the client"

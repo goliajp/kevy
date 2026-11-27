@@ -88,8 +88,20 @@ impl<C: Commands> Shard<C> {
     /// `&mut self` apply methods need.
     fn apply_replica_event(&mut self, ev: ReplicaApply) {
         match ev {
-            ReplicaApply::SnapshotBegin => {
+            ReplicaApply::SnapshotBegin { db } => {
                 self.replica_snapshot_buf.clear();
+                // Multi-DB: the primary ships one snapshot stream per db.
+                // The db-0 ship replaces the whole replica keyspace; each
+                // ship clears its own db before loading, so a ship that
+                // arrives without a preceding db-0 ship still lands exact.
+                if db < self.store.databases() {
+                    if db == 0 {
+                        self.store.flush_all();
+                    } else {
+                        self.store.store_mut(db).flushall();
+                    }
+                    self.store.set_cur(db);
+                }
             }
             ReplicaApply::SnapshotChunk(bytes) => {
                 self.replica_snapshot_buf.extend_from_slice(&bytes);
@@ -122,7 +134,8 @@ impl<C: Commands> Shard<C> {
         // present upstream (a rejoining old primary's forked suffix, a
         // stale pre-resync keyspace) must be dropped first — otherwise
         // the fork survives the "discard".
-        self.store.flushall();
+        // Multi-DB: the Begin event already flushed (db 0 ship) and moved the
+        // cursor; load this stream into the selected db.
         let res = if routed {
             // Single-source mode: the payload is the whole upstream
             // keyspace — keep only this shard's slice.
@@ -172,6 +185,10 @@ impl<C: Commands> Shard<C> {
         }
         self.drain_persist_on_shutdown();
         let aux = self.commands.snapshot_aux();
+        // The rewritten image ends on the last db it dumped — force a
+        // `SELECT` marker on the next logged frame (same rule as
+        // persist_rewrite's swap path).
+        self.aof_last_db.set(u16::MAX);
         let Some(aof) = self.aof.as_mut() else { return };
         if let Err(e) = aof.rewrite_from(&kevy_persist::WithAux::new(&self.store, aux.as_ref())) {
             eprintln!(
@@ -188,6 +205,37 @@ impl<C: Commands> Shard<C> {
     /// WATCH bump, keyspace notify, BLOCK wake) fires normally.
     fn apply_replica_frame(&mut self, argv: &crate::Argv) {
         let _guard = ReplicatedApplyGuard::enter();
+        // Multi-DB: the feed carries `SELECT <db>` markers exactly like the
+        // AOF. The apply cursor is tracked in `repl_apply_db` (not
+        // `store.cur()` — the snapshot ship leaves the cursor on the last
+        // shipped db); a frame without a marker belongs to the last marked
+        // db, starting at db 0 like the primary's feed.
+        if let Some(db) = crate::shard_run::select_marker(argv) {
+            if db < self.store.databases() {
+                self.repl_apply_db.set(db);
+                self.store.set_cur(db);
+                // Mirror the marker into this replica's own AOF, without a
+                // duplicate prefix: the cursor already moved.
+                self.aof_last_db.set(db);
+                self.log(argv);
+            }
+            return;
+        }
+        let db = self.repl_apply_db.get();
+        self.store.set_cur(db);
+        // SWAPDB / MOVE / FLUSHDB / FLUSHALL frames have no embedded
+        // dispatch route — replay them, and mirror the frame into this
+        // replica's own AOF so a restart replays the same effect (the feed
+        // push stays suppressed by the guard above).
+        if crate::shard_run::replay_admin_frame(&mut self.store, argv) {
+            self.log(argv);
+            if argv.get(0).is_some_and(|v| {
+                v.eq_ignore_ascii_case(b"FLUSHDB") || v.eq_ignore_ascii_case(b"FLUSHALL")
+            }) {
+                self.commands.on_flush(&mut self.store);
+            }
+            return;
+        }
         let resolved = self.commands.resolve(argv);
         let meta = DispatchMeta {
             is_write: resolved.is_write,
@@ -198,6 +246,7 @@ impl<C: Commands> Shard<C> {
             },
             verb: resolved.verb,
             key_hash: 0,
+            db,
         };
         self.reply_scratch.clear();
         self.commands.dispatch_into(&mut self.store, argv, &mut self.reply_scratch);

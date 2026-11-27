@@ -44,6 +44,83 @@ pub(crate) fn replay_dispatch<C: Commands, A: ArgvView + ?Sized>(
     crate::propagation::discard_override();
 }
 
+/// If `args` is an AOF `SELECT <db>` marker frame (multi-DB logs carry one
+/// whenever the db changes — the shape Redis uses), return the db index.
+pub(crate) fn select_marker<A: ArgvView + ?Sized>(args: &A) -> Option<u16> {
+    if args.len() == 2 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"SELECT")) {
+        std::str::from_utf8(args.get(1)?).ok()?.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Apply an admin frame during AOF replay / replica apply that has no
+/// embedded dispatch route: `SELECT <db>` moves the cursor, `SWAPDB a b`
+/// swaps the two dbs, `FLUSHDB` flushes the cursor db, `FLUSHALL` every db.
+/// Returns `true` when the frame was consumed here.
+pub(crate) fn replay_admin_frame<A: ArgvView + ?Sized>(
+    dbs: &mut crate::dbs::DbStores,
+    args: &A,
+) -> bool {
+    if let Some(db) = select_marker(args) {
+        if db < dbs.databases() {
+            dbs.set_cur(db);
+        }
+        return true;
+    }
+    // FLUSHALL reaches the log on every shard (fan-out); replay must clear
+    // every db, not just the cursor's — the embedded FLUSHALL arm only
+    // flushes the deref'd cursor db.
+    if args.len() <= 2
+        && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"FLUSHALL"))
+        && args
+            .get(1)
+            .is_none_or(|v| v.eq_ignore_ascii_case(b"ASYNC") || v.eq_ignore_ascii_case(b"SYNC"))
+    {
+        dbs.flush_all();
+        return true;
+    }
+    // FLUSHDB: the intercept logs it behind a `SELECT <db>` marker when the
+    // db changed, so the cursor is the flushed db at replay.
+    if args.len() <= 2
+        && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"FLUSHDB"))
+        && args
+            .get(1)
+            .is_none_or(|v| v.eq_ignore_ascii_case(b"ASYNC") || v.eq_ignore_ascii_case(b"SYNC"))
+    {
+        let db = dbs.cur();
+        if db < dbs.databases() {
+            dbs.store_mut(db).flushall();
+        }
+        return true;
+    }
+    // `MOVE key db` frames: move the key from the current db to db.
+    if args.len() == 3 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"MOVE")) {
+        let parse = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u16>().ok();
+        if let (Some(key), Some(to_db)) = (args.get(1), args.get(2).and_then(|x| parse(x)))
+            && to_db < dbs.databases()
+            && to_db != dbs.cur()
+            && !dbs.store_mut(to_db).key_exists(key)
+            && let Some((v, ttl)) = dbs.take_with_ttl(key)
+        {
+            dbs.store_mut(to_db).put_with_ttl(key.to_vec(), v, ttl);
+        }
+        return true;
+    }
+    if args.len() == 3 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"SWAPDB")) {
+        let parse = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<u16>().ok();
+        if let (Some(a), Some(b)) =
+            (args.get(1).and_then(|x| parse(x)), args.get(2).and_then(|x| parse(x)))
+            && a < dbs.databases()
+            && b < dbs.databases()
+        {
+            dbs.swap(a, b);
+        }
+        return true;
+    }
+    false
+}
+
 impl<C: Commands> Shard<C> {
     /// Tell the command set the two things about this shard it cannot
     /// otherwise learn: which shard it is, and where this runtime
@@ -97,15 +174,16 @@ impl<C: Commands> Shard<C> {
         // Row segments are truth: load the registered set FIRST — a
         // v7 snapshot's stub records and the AOF's SEGMENTED frames
         // both resolve against it.
-        let segs_dir = kevy_persist::layout::segs_dir(&self.data_dir, self.id);
-        if let Err(e) = self.store.enable_seg_rows(&segs_dir) {
+        if let Err(e) = self.store.enable_seg_rows_all(&self.data_dir, self.id) {
             return Err(io::Error::other(format!("shard {}: {e}", self.id)));
         }
         self.load_boot_snapshot()?;
         if self.aof.is_some() {
             let aof_path = self.aof_path();
             let commands = &self.commands;
-            let store = &mut self.store;
+            let data_dir = &self.data_dir;
+            let shard_id = self.id;
+            let dbs = &mut self.store;
             // In-replay demotion: dispatch already runs the
             // per-write demote hook, but a K-frame watermark drain
             // backstops it so a bigger-than-budget log can never
@@ -113,20 +191,25 @@ impl<C: Commands> Shard<C> {
             let mut frames: u64 = 0;
             let mut torn: Option<kevy_store::SegRowsError> = None;
             let apply = |args: kevy_persist::Argv| {
+                // Multi-DB: SELECT markers move the replay cursor, SWAPDB
+                // frames swap dbs (later frames land in the right keyspace).
+                if replay_admin_frame(dbs, &args) {
+                    return;
+                }
                 if let Some(f) = kevy_persist::segmented_frame(&args) {
                     // The stitch frame re-does a hot-layer eviction; a
                     // manifest that does not hold the segment means the
                     // truth set was damaged — finish the walk, then
                     // refuse startup by name instead of dropping rows.
-                    if let Err(e) = store.apply_segmented(&segs_dir, f) {
+                    if let Err(e) = dbs.apply_segmented_cur(data_dir, shard_id, f) {
                         torn.get_or_insert(e);
                     }
                     return;
                 }
-                replay_dispatch(commands, store, &args);
+                replay_dispatch(commands, dbs, &args);
                 frames += 1;
                 if frames.is_multiple_of(kevy_persist::REPLAY_DEMOTE_INTERVAL) {
-                    store.demote_to_watermark();
+                    dbs.demote_all_to_watermark();
                 }
             };
             let report = if self.replay_resync {
@@ -336,7 +419,12 @@ impl<C: Commands> Shard<C> {
             // batch in RSS, and bound the per-iter drop latency
             // window. Empty-buffer fast path = predicted-not-taken
             // length check, sub-ns on iters that did no overwrite.
-            self.store.flush_pending_drops();
+            // Multi-DB: drop batches flush per db, not just the cursor's.
+            for db in 0..self.store.databases() {
+                self.store.set_cur(db);
+                self.store.flush_pending_drops();
+            }
+            self.store.set_cur(0);
             slow.mark("drops");
             // AOF pump: writer-lane reap/submit/fsync (S3), or the
             // classic synchronous EverySec window when the lane is off.
@@ -378,12 +466,32 @@ impl<C: Commands> Shard<C> {
                         // gauge IS the single-iteration upper bound,
                         // measured without touching the per-iter path.
                         self.commands.on_tick_gap((gap - iv).as_micros() as u64);
+                        // Tick gauges report db0 deterministically (multi-DB: the INFO
+                        // keyspace line is db0's; per-db lines are Phase 2).
+                        self.store.set_cur(0);
                         self.commands.on_shard_tick(&mut self.store);
+                        // Multi-DB: publish per-db keyspace gauges for INFO keyspace.
+                        let ndbs = self.store.databases();
+                        if ndbs > 1 {
+                            let dbs: Vec<(u16, u64, u64)> = (0..ndbs)
+                                .map(|db| {
+                                    let st = self.store.store(db);
+                                    (db, st.dbsize() as u64, st.expires_count() as u64)
+                                })
+                                .collect();
+                            self.commands.on_db_gauges(&dbs);
+                        }
                         slow.mark("t:shard_tick");
                         self.drain_tick_frames();
-                        self.drain_store_notify();
+                        // Multi-DB: the notify/expiry drains run per db,
+                        // not just on the cursor (db0).
+                        for db in 0..self.store.databases() {
+                            self.store.set_cur(db);
+                            self.drain_store_notify();
+                            self.drain_expired_keys();
+                        }
+                        self.store.set_cur(0);
                         slow.mark("t:drains");
-                        self.drain_expired_keys();
                         slow.mark("t:expired");
                         self.apply_live_runtime_config(&mut tick_interval);
                         slow.mark("t:live_cfg");

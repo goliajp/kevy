@@ -36,7 +36,7 @@ pub(crate) fn route_event(
         Ok(())
     };
     match event {
-        ReplicaEvent::SnapshotBegin => send_all(&|| ReplicaApply::SnapshotBegin),
+        ReplicaEvent::SnapshotBegin { db } => send_all(&|| ReplicaApply::SnapshotBegin { db }),
         ReplicaEvent::SnapshotChunk(bytes) => {
             send_all(&|| ReplicaApply::SnapshotChunk(bytes.clone()))
         }
@@ -49,7 +49,17 @@ pub(crate) fn route_event(
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
             let verb = frame.argv.get(0).unwrap_or_default();
-            if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
+            // Admin frames are db-addressed, not key-addressed: SELECT's and
+            // SWAPDB's argv[1] is a db index, so hashing it would land the
+            // frame on one shard only. Broadcast them — every shard must
+            // move its apply cursor / swap its dbs. FLUSHDB/FLUSHALL
+            // broadcast for the same reason; MOVE's argv[1] is the key, so
+            // it routes by hash slot like any keyed frame.
+            if verb.eq_ignore_ascii_case(b"FLUSHALL")
+                || verb.eq_ignore_ascii_case(b"FLUSHDB")
+                || verb.eq_ignore_ascii_case(b"SELECT")
+                || verb.eq_ignore_ascii_case(b"SWAPDB")
+            {
                 return send_all(&|| ReplicaApply::Frame {
                     offset: frame.offset,
                     argv: frame.argv.clone(),

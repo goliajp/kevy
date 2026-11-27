@@ -121,15 +121,16 @@ impl<C: Commands> Shard<C> {
         arms: Vec<(usize, Vec<u8>, Argv)>,
     ) {
         let mut local_ready: Vec<Vec<u8>> = Vec::new();
+        let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
         for (shard, key, serve_argv) in arms {
             if shard == self.id {
-                if self.target_register(self.id, conn, &key, kind, serve_argv, proto) {
+                if self.target_register(self.id, conn, &key, kind, serve_argv, proto, db) {
                     local_ready.push(key);
                 }
             } else {
                 self.send_to(
                     shard,
-                    Inbound::BlockArm { origin: self.id, conn, key, kind, serve_argv, proto },
+                    Inbound::BlockArm { origin: self.id, conn, key, kind, serve_argv, proto, db },
                 );
             }
         }
@@ -159,13 +160,14 @@ impl<C: Commands> Shard<C> {
             return;
         }
 
+        let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
         if shard == self.id {
-            let reply = self.target_serve(self.id, conn, key);
+            let reply = self.target_serve(self.id, conn, key, db);
             self.origin_on_serve_resp(conn, key.to_vec(), reply);
         } else {
             self.send_to(
                 shard,
-                Inbound::BlockServeReq { origin: self.id, conn, key: key.to_vec() },
+                Inbound::BlockServeReq { origin: self.id, conn, key: key.to_vec(), db },
             );
         }
     }
@@ -264,11 +266,12 @@ impl<C: Commands> Shard<C> {
     /// origin: the serve could not be delivered — have the target apply
     /// the undo, then finish the teardown the disconnect deferred.
     fn abort_serve(&mut self, conn: u64, key: &[u8]) {
+        let db = self.conns.get(&conn).map(|c| c.db).unwrap_or(0);
         if let Some(shard) = self.serve_shard_of(conn, key) {
             if shard == self.id {
-                self.target_apply_escrow(self.id, conn);
+                self.target_apply_escrow(self.id, conn, db);
             } else {
-                self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn });
+                self.send_to(shard, Inbound::BlockServeAbort { origin: self.id, conn, db });
             }
         }
         if let Some(ob) = self.origin_blocks.remove(&conn) {

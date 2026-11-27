@@ -33,7 +33,7 @@ use crate::replica::DecodedFrame;
 /// let mut snapshot = Vec::new();
 /// while let Some(event) = client.next_event() {
 ///     match event? {
-///         ReplicaEvent::SnapshotBegin => snapshot.clear(),
+///         ReplicaEvent::SnapshotBegin { .. } => snapshot.clear(),
 ///         ReplicaEvent::SnapshotChunk(bytes) => snapshot.extend(bytes),
 ///         ReplicaEvent::SnapshotEnd { ack_offset } => assert_eq!(ack_offset, 9),
 ///         ReplicaEvent::Frame(frame) => assert_eq!(frame.offset, 9),
@@ -87,10 +87,14 @@ pub enum ReplicaEvent {
     ///
     /// # let (addr, _primary) = fake_primary(b"+ACK 1 0\r\n", kevy_replicate::wire::encode_snapshot_begin());
     /// let mut client = ReplicaClient::connect(addr, "replica-a", 0)?;
-    /// assert_eq!(client.next_event().transpose()?, Some(ReplicaEvent::SnapshotBegin));
+    /// assert_eq!(client.next_event().transpose()?, Some(ReplicaEvent::SnapshotBegin { db: 0 }));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    SnapshotBegin,
+    /// `+SNAPSHOT [<db>]` — a snapshot stream begins; `db` defaults to 0.
+    SnapshotBegin {
+        /// Logical db this snapshot stream covers (0 = the historical marker).
+        db: u16,
+    },
     /// One snapshot chunk's payload bytes (RESP bulk string body).
     ///
     /// ```

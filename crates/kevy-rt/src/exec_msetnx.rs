@@ -54,7 +54,16 @@ impl<C: Commands> Shard<C> {
         if shard == self.id {
             self.exec_local(conn_id, seq, op);
         } else {
-            self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+            self.send_to(
+                shard,
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
+            );
         }
     }
 

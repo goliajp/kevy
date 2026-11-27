@@ -113,7 +113,7 @@ impl std::fmt::Debug for SnapshotGate {
 ///
 /// ```
 /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
-/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 })?;
 /// # Ok::<(), std::sync::mpsc::SendError<kevy_rt::ReplicaApply>>(())
 /// ```
 #[derive(Debug)]
@@ -125,16 +125,19 @@ pub enum ReplicaApply {
     /// ```
     /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
     /// // a snapshot is always shipped as Begin, Chunk…, End
-    /// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+    /// tx.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 })?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    SnapshotBegin,
+    SnapshotBegin {
+        /// Logical db this snapshot stream covers (0 = historical marker).
+        db: u16,
+    },
     /// One chunk of snapshot bytes. The shard appends to its buffer.
     ///
     /// ```
     /// let (tx, _rx) = kevy_rt::replica_inbox_pair();
     /// use kevy_rt::ReplicaApply;
-    /// tx.send(ReplicaApply::SnapshotBegin)?;
+    /// tx.send(ReplicaApply::SnapshotBegin { db: 0 })?;
     /// for chunk in [b"KEVY".to_vec(), b"...".to_vec()] {
     ///     tx.send(ReplicaApply::SnapshotChunk(chunk))?;
     /// }
@@ -237,12 +240,12 @@ pub enum ReplicaApply {
 /// ```
 /// let (tx, rx) = kevy_rt::replica_inbox_pair();
 /// let runner = tx.clone();
-/// std::thread::spawn(move || runner.send(kevy_rt::ReplicaApply::SnapshotBegin))
+/// std::thread::spawn(move || runner.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }))
 ///     .join()
 ///     .map_err(|_| "runner panicked")??;
 /// // once the shard's receiver is gone, a send says so
 /// drop(rx);
-/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin).is_err());
+/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }).is_err());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -299,9 +302,9 @@ impl ReplicaInboxReceiver {
 ///
 /// ```
 /// let (tx, rx) = kevy_rt::replica_inbox_pair();
-/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin)?;
+/// tx.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 })?;
 /// drop(rx);
-/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin).is_err(), "the pair is linked");
+/// assert!(tx.send(kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }).is_err(), "the pair is linked");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
@@ -322,9 +325,9 @@ mod tests {
     #[test]
     fn pair_round_trips_one_event() {
         let (tx, rx) = replica_inbox_pair();
-        tx.send(ReplicaApply::SnapshotBegin).unwrap();
+        tx.send(ReplicaApply::SnapshotBegin { db: 0 }).unwrap();
         match rx.inner.recv().unwrap() {
-            ReplicaApply::SnapshotBegin => {}
+            ReplicaApply::SnapshotBegin { .. } => {}
             other => panic!("expected SnapshotBegin, got {other:?}"),
         }
     }
@@ -333,9 +336,9 @@ mod tests {
     fn drop_receiver_makes_send_fail() {
         let (tx, rx) = replica_inbox_pair();
         drop(rx);
-        let err = tx.send(ReplicaApply::SnapshotBegin).unwrap_err();
+        let err = tx.send(ReplicaApply::SnapshotBegin { db: 0 }).unwrap_err();
         match err.0 {
-            ReplicaApply::SnapshotBegin => {}
+            ReplicaApply::SnapshotBegin { .. } => {}
             other => panic!("expected payload roundtrip, got {other:?}"),
         }
     }

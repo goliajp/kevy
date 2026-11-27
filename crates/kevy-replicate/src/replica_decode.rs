@@ -90,11 +90,11 @@ impl ReplicaClient {
 
     fn try_decode_snapshot_marker(&mut self) -> Option<Result<ReplicaEvent, ReplicaError>> {
         match decode_snapshot_marker(&self.buf[self.cursor..]) {
-            Ok(Some((SnapshotMarker::Begin, used))) => {
+            Ok(Some((SnapshotMarker::Begin(db), used))) => {
                 self.cursor += used;
                 self.maybe_compact_buf();
                 self.in_snapshot = true;
-                Some(Ok(ReplicaEvent::SnapshotBegin))
+                Some(Ok(ReplicaEvent::SnapshotBegin { db }))
             }
             Ok(Some((SnapshotMarker::Ping(tail), used))) => {
                 self.cursor += used;
@@ -169,7 +169,7 @@ mod tests {
         });
         let mut client = ReplicaClient::from_socket_for_test(cli, 0);
 
-        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin))));
+        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin { db: 0 }))));
         match client.next_event() {
             Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => {
                 assert_eq!(bytes, b"hello-snapshot");
@@ -207,7 +207,7 @@ mod tests {
             drop(srv);
         });
         let mut client = ReplicaClient::from_socket_for_test(cli, 0);
-        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin))));
+        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin { db: 0 }))));
         assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotChunk(_)))));
         assert!(matches!(client.next_event(), Some(Err(ReplicaError::UnexpectedInSnapshot))));
     }
@@ -253,7 +253,7 @@ mod tests {
             drop(srv);
         });
         let mut client = ReplicaClient::from_socket_for_test(cli, 0);
-        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin))));
+        assert!(matches!(client.next_event(), Some(Ok(ReplicaEvent::SnapshotBegin { db: 0 }))));
         match client.next_event() {
             Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => assert_eq!(ack_offset, 0),
             other => panic!("expected SnapshotEnd, got {other:?}"),

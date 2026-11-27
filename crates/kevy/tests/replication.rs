@@ -752,7 +752,7 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
     // heartbeats may interleave before the ship starts.
     loop {
         match client.next_event().expect("event").expect("ok") {
-            ReplicaEvent::SnapshotBegin => break,
+            ReplicaEvent::SnapshotBegin { .. } => break,
             kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("expected SnapshotBegin, got {other:?}"),
         }
@@ -815,7 +815,7 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
             .expect("connect");
     assert!(matches!(
         client.next_event().expect("event").expect("ok"),
-        ReplicaEvent::SnapshotBegin
+        ReplicaEvent::SnapshotBegin { .. }
     ));
     let mut snapshot_bytes = Vec::new();
     let ack_offset = loop {
@@ -887,7 +887,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
             .expect("connect + handshake");
     assert!(matches!(
         client.next_event().expect("event").expect("ok"),
-        ReplicaEvent::SnapshotBegin
+        ReplicaEvent::SnapshotBegin { .. }
     ));
     let mut snapshot_bytes = Vec::new();
     let ack_offset = loop {
@@ -1260,8 +1260,8 @@ impl ReplicaServer {
                         Some(Ok(ev)) => {
                             let apply = match ev {
                                 kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
-                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
-                                    kevy_rt::ReplicaApply::SnapshotBegin
+                                kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => {
+                                    kevy_rt::ReplicaApply::SnapshotBegin { db: 0 }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotChunk(b) => {
                                     kevy_rt::ReplicaApply::SnapshotChunk(b)
@@ -2160,7 +2160,7 @@ fn unclean_restart_generation_fence_ships_instead_of_aliasing() {
     // First non-ping event must be SnapshotBegin, not a live frame.
     loop {
         match replica.next_event().expect("event").expect("ok") {
-            kevy_replicate::replica::ReplicaEvent::SnapshotBegin => break,
+            kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => break,
             kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("fence must ship, got {other:?}"),
         }
@@ -2210,7 +2210,7 @@ fn ahead_cursor_ships_snapshot_instead_of_wedging() {
     let mut pings = 0;
     loop {
         match replica.next_event().expect("event").expect("ok") {
-            kevy_replicate::replica::ReplicaEvent::SnapshotBegin => break,
+            kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => break,
             kevy_replicate::replica::ReplicaEvent::Ping { .. } => {
                 pings += 1;
                 assert!(
@@ -2403,7 +2403,7 @@ fn promoted_node_ships_its_keyspace_to_a_fresh_cursor() {
     let mut pings = 0;
     let outcome = loop {
         match cursor.next_event().expect("event").expect("ok") {
-            kevy_replicate::replica::ReplicaEvent::SnapshotBegin => break "snapshot",
+            kevy_replicate::replica::ReplicaEvent::SnapshotBegin { .. } => break "snapshot",
             kevy_replicate::replica::ReplicaEvent::Ping { .. } => {
                 pings += 1;
                 assert!(

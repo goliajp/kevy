@@ -64,7 +64,16 @@ impl<C: Commands> Shard<C> {
                 self.exec_local(conn_id, seq, op);
             } else {
                 let origin = self.id;
-                self.send_to(shard, Inbound::Request { origin, conn: conn_id, seq, op });
+                self.send_to(
+                    shard,
+                    Inbound::Request {
+                        origin,
+                        conn: conn_id,
+                        seq,
+                        op,
+                        db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                    },
+                );
             }
         }
     }
@@ -128,7 +137,16 @@ impl<C: Commands> Shard<C> {
             self.exec_local(conn_id, seq, put);
         } else {
             let origin = self.id;
-            self.send_to(dst_shard, Inbound::Request { origin, conn: conn_id, seq, op: put });
+            self.send_to(
+                dst_shard,
+                Inbound::Request {
+                    origin,
+                    conn: conn_id,
+                    seq,
+                    op: put,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
+            );
         }
     }
 
