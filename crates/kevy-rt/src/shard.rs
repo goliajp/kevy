@@ -17,12 +17,12 @@ use crate::NotificationFlags;
 use crate::batch_lane::BatchLane;
 use crate::blocked::BlockedClients;
 use crate::conn::Conn;
+use crate::dbs::DbStores;
 use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg};
 use crate::park_fence::ParkFlag;
 use kevy_map::KevyMap;
 use kevy_persist::Aof;
 use kevy_ring::{Consumer, Producer};
-use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -62,7 +62,21 @@ pub(crate) struct Shard<C: Commands> {
     /// `Runtime::with_unix_socket` wasn't called.
     #[allow(dead_code)] // used by uring_reactor and shard_run accept paths
     pub(crate) unix_listener: Option<Socket>,
-    pub(crate) store: Store,
+    pub(crate) store: DbStores,
+    /// Last db index written to this shard's AOF. Multi-DB logs carry a
+    /// `SELECT <db>` marker frame whenever the db changes between logged
+    /// writes (Redis's AOF shape); `u16::MAX` forces a marker on the next
+    /// write (used after an AOF rewrite swapped in a fresh image).
+    pub(crate) aof_last_db: std::cell::Cell<u16>,
+    /// Same marker cursor for the replication feed (backlog frames carry
+    /// `SELECT <db>` markers in multi-DB mode, exactly like the AOF).
+    pub(crate) feed_last_db: std::cell::Cell<u16>,
+    /// Replica-side apply cursor for the live feed — the db a frame without
+    /// a `SELECT` marker belongs to. Tracked separately from `store.cur()`
+    /// because the snapshot ship moves the cursor per shipped db; the feed
+    /// itself always starts at db 0, exactly like the primary's
+    /// `feed_last_db` initial value.
+    pub(crate) repl_apply_db: std::cell::Cell<u16>,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
     /// `None` on off-accept-set shards; they don't bind the listener so SO_REUSEPORT redirects.

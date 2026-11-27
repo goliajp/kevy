@@ -45,11 +45,7 @@ impl<C: Commands> Shard<C> {
     /// re-emitting what it just applied is how a chain loops.
     pub(crate) fn log_effect<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(args);
-        }
+        self.push_feed(args);
     }
 
     /// Record a value this shard just placed under `key`, as the write

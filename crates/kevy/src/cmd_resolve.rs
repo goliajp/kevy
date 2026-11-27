@@ -237,6 +237,10 @@ fn route_for_verb<A: ArgvView + ?Sized>(repl: &ReplicationState, upper: &[u8], a
         // `kevy_rt::exec_copy` for what routing it by args[1] would do
         // to the destination.
         b"COPY" => Route::Copy,
+        // MOVE's key is args[1]; the rt handles it on the key's owning
+        // shard (it needs the target db's store, which the embedded
+        // dispatch lacks). Forwarded copies re-enter via run_dispatch.
+        b"MOVE" => Route::Move,
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
         // (BLPOP / BRPOP fold into the Local-routed verb list above —

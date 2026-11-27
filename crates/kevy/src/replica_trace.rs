@@ -33,7 +33,7 @@ pub(crate) fn trace_session_event(
         return;
     }
     match event {
-        ReplicaEvent::SnapshotBegin => {
+        ReplicaEvent::SnapshotBegin { .. } => {
             kevy_rt::repl_trace_line(format_args!("runner slot {runner_slot}: snapshot begin"));
         }
         ReplicaEvent::SnapshotEnd { ack_offset } => {

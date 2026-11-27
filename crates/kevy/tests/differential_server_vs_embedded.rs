@@ -67,6 +67,7 @@ const CORPUS: &[&str] = &[
     "DEL k",
     "GET k",
     "SET n 10",
+    "MOVE k 1",
     "INCR n",
     "INCRBY n 5",
     "DECR n",

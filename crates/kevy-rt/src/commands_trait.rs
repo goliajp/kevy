@@ -130,6 +130,12 @@ pub trait Commands: Clone + Send + 'static {
     #[doc = include_str!("commands_docs/on_shard_tick.md")]
     fn on_shard_tick(&self, _store: &mut Store) {}
 
+    /// Publish per-db keyspace gauges `(db, keys, expires)` for the
+    /// `INFO keyspace` section (multi-DB). Called once per reactor tick
+    /// with every db's current counts. Default: no-op — single-db sources
+    /// report through the scalar `keys` gauge.
+    fn on_db_gauges(&self, _dbs: &[(u16, u64, u64)]) {}
+
     #[doc = include_str!("commands_docs/shutdown_save_requested.md")]
     fn shutdown_save_requested(&self) -> bool {
         false

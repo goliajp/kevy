@@ -83,6 +83,13 @@ pub(crate) fn exec<A: ArgvView + ?Sized>(
         b"MSETNX" => msetnx(store, args, out),
         b"RENAME" => rename(store, args, false, out),
         b"RENAMENX" => rename(store, args, true, out),
+        // MOVE is multi-db only; the embedded engine is single-db, so it
+        // answers the Redis errors (the server routes the real MOVE in
+        // kevy-rt's exec_move).
+        b"MOVE" => {
+            move_key(store, args, out);
+            Effect::Unchanged
+        }
         _ => return None,
     })
 }
@@ -287,6 +294,26 @@ fn msetnx<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) 
     }
     encode_integer(out, 1);
     Effect::Write
+}
+
+/// `MOVE key db` in the single-db embedded engine: db 0 is the same db
+/// (Redis's "source and destination" error), any other index is out of
+/// range. The network server implements the real cross-db move.
+fn move_key<A: ArgvView + ?Sized>(_store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    use kevy_resp::encode_error;
+    if args.len() != 3 {
+        encode_error(out, "ERR wrong number of arguments for 'move' command");
+        return;
+    }
+    let Ok(s) = std::str::from_utf8(&args[2]) else {
+        encode_error(out, "ERR value is not an integer or out of range");
+        return;
+    };
+    match s.parse::<i64>() {
+        Ok(0) => encode_error(out, "ERR source and destination objects are the same"),
+        Ok(_) => encode_error(out, "ERR DB index is out of range"),
+        Err(_) => encode_error(out, "ERR value is not an integer or out of range"),
+    }
 }
 
 /// `RENAME` / `RENAMENX src dst` with both keys here, TTL carried over.

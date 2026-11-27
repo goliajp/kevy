@@ -148,7 +148,7 @@ fn drain_snapshot(client: &mut ReplicaClient) -> (Vec<u8>, u64) {
     let mut payload = Vec::new();
     loop {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::SnapshotBegin)) => {}
+            Some(Ok(ReplicaEvent::SnapshotBegin { .. })) => {}
             Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => payload.extend_from_slice(&bytes),
             Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => return (payload, ack_offset),
             other => panic!("expected snapshot event, got {other:?}"),

@@ -41,6 +41,8 @@ pub struct Runtime<C: Commands> {
     pub(crate) ip: [u8; 4],
     pub(crate) port: u16,
     pub(crate) nshards: usize,
+    /// Logical database count (`SELECT <index>` range). Default 16 (Redis-compatible).
+    pub(crate) databases: u16,
     pub(crate) commands: C,
     /// Directory for per-shard snapshot files (`dump-<id>.rdb`) and AOF logs.
     pub(crate) data_dir: PathBuf,
@@ -162,6 +164,7 @@ impl<C: Commands> Runtime<C> {
             ip: [127, 0, 0, 1],
             port: 6004,
             nshards: 1,
+            databases: 16,
             commands,
             data_dir: PathBuf::from("."),
             enable_aof: true,

@@ -123,6 +123,9 @@ pub enum Route {
     BitOpStore,
     #[doc = include_str!("route_docs/copy.md")]
     Copy,
+    /// `MOVE key db` — key at args[1], target db at args[2]; runs on the
+    /// key's owning shard (both dbs live on every shard).
+    Move,
     #[doc = include_str!("route_docs/geostore.md")]
     GeoStore {
         /// Key the search reads — its shard runs the query.

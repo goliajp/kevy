@@ -26,6 +26,26 @@ impl<C: Commands> Shard<C> {
         out: &mut Vec<u8>,
     ) {
         let t0 = self.slowlog_t0();
+        // Owning shard executes against the command's selected db.
+        self.store.set_cur(meta.db);
+        // MOVE crosses dbs — intercepted here like in run_dispatch.
+        if args.len() >= 1 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"MOVE")) {
+            match self.exec_move(args, meta) {
+                crate::message::Part::Int(i) => {
+                    out.extend_from_slice(format!(":{i}\r\n").as_bytes());
+                }
+                crate::message::Part::Reply(sr) => {
+                    let b = sr.bytes(&[]);
+                    out.extend_from_slice(b);
+                }
+                _ => {}
+            }
+            self.slowlog_maybe(t0, args);
+            if meta.is_write {
+                self.post_write_housekeeping(args, meta);
+            }
+            return;
+        }
         crate::exec_dispatch::dispatch_proto(
             &self.commands,
             &mut self.store,

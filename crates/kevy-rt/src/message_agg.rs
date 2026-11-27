@@ -149,7 +149,7 @@ pub(crate) enum Agg {
     /// shard appends them all and, when the last fan-out reply arrives,
     /// moves the pairs into the connection's `watched` set + emits +OK.
     WatchCollect {
-        pairs: Vec<(Vec<u8>, u64)>,
+        pairs: Vec<(Vec<u8>, u64, u16)>,
     },
     /// Cross-shard non-blocking `XREAD` gather: each watched stream's
     /// owning shard returns its [`Part::XReadElement`], dropped into

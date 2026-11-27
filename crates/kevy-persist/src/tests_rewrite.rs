@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::tests_aof::temp_aof;
+use kevy_store::SetCondition;
 use std::borrow::Cow;
 use std::time::Duration;
 
@@ -751,4 +752,62 @@ fn rewrite_writes_a_packed_row_and_an_integer_score_back() {
     assert_eq!(dst.zscore(b"z", b"a").unwrap(), Some(3.0));
     assert_eq!(dst.zscore(b"z", b"b").unwrap(), Some(-2.5));
     let _ = std::fs::remove_file(&path);
+}
+
+// ───────────── multi-db AOF rewrite (SELECT marker frames) ─────────────
+
+/// A two-db source: db 0 and db 1 as separate stores.
+struct TwoDbs(Store, Store);
+
+impl SnapshotSource for TwoDbs {
+    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.0.for_each_entry(f)
+    }
+    fn db_count(&self) -> u16 {
+        2
+    }
+    fn for_each_entry_in_db(&self, db: u16, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        if db == 0 { self.0.for_each_entry(f) } else { self.1.for_each_entry(f) }
+    }
+}
+
+#[test]
+fn dump_aof_multi_db_emits_select_markers_and_replays_per_db() {
+    let dir = kevy_tmpdir::unique_dir("dump-aof-multidb");
+    let path = dir.join("compact.aof");
+
+    let mut db0 = Store::new();
+    db0.set(b"k", b"v0".to_vec(), None, SetCondition::Always);
+    let mut db1 = Store::new();
+    db1.set(b"k", b"v1".to_vec(), None, SetCondition::Always);
+    db1.set(b"only1", b"x".to_vec(), None, SetCondition::Always);
+
+    let stats = dump_aof(&path, &TwoDbs(db0, db1)).unwrap();
+    assert_eq!(stats.keys, 3);
+
+    // the log carries SELECT marker frames
+    let raw = std::fs::read(&path).unwrap();
+    let marker = b"SELECT";
+    assert!(raw.windows(marker.len()).any(|w| w == marker), "SELECT marker present");
+
+    // replay with a SELECT-aware applier into a per-db sink
+    let mut out0 = Store::new();
+    let mut out1 = Store::new();
+    let mut cur = 0u16;
+    replay_aof(&path, |args| {
+        if args.len() == 2 && &args[0][..] == b"SELECT" {
+            cur = std::str::from_utf8(&args[1]).unwrap().parse().unwrap();
+            return;
+        }
+        let dst = if cur == 0 { &mut out0 } else { &mut out1 };
+        apply_for_test(dst, &args);
+    })
+    .unwrap();
+    assert_eq!(out0.get(b"k").unwrap().as_deref(), Some(b"v0".as_slice()));
+    assert_eq!(out0.dbsize(), 1);
+    assert_eq!(out1.get(b"k").unwrap().as_deref(), Some(b"v1".as_slice()));
+    assert_eq!(out1.get(b"only1").unwrap().as_deref(), Some(b"x".as_slice()));
+    assert_eq!(out1.dbsize(), 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

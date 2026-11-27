@@ -71,6 +71,19 @@ impl Store {
         Store::default()
     }
 
+    /// The logical database index this store backs (`0` unless the server
+    /// assigned one — see `docs/multi-db.md`). Used to label keyspace
+    /// notification channels (`__keyevent@<db>__:*`).
+    pub fn db_index(&self) -> u16 {
+        self.db_index
+    }
+
+    /// Stamp the logical db index. Called once by the server when it
+    /// builds the per-db keyspaces; never mutated afterwards.
+    pub fn set_db_index(&mut self, db: u16) {
+        self.db_index = db;
+    }
+
     /// Refresh the coarse cached clock (`Self::cached_ns`) from a single
     /// `Instant::now()`. Call once per reactor-loop batch / reaper tick; the
     /// per-access read path then skips its own clock read. Lazy expiry is
@@ -246,6 +259,15 @@ impl Store {
         if let Some(v) = self.watch_versions.get_mut(key) {
             *v = v.wrapping_add(1);
         }
+    }
+
+    /// Swap only the WATCH version maps between two stores. Used by
+    /// `SWAPDB` (multi-DB): the keyspaces swap whole-store, but watch
+    /// registrations must stay attached to their logical db slot —
+    /// Redis keeps `watched_keys` per dbid and does not move them on
+    /// swap, it dirties them (`touchAllWatchedKeysForDb` on both).
+    pub fn swap_watch_versions(&mut self, other: &mut Store) {
+        std::mem::swap(&mut self.watch_versions, &mut other.watch_versions);
     }
 
     /// Invalidate every watched key in one shot. Called from `FLUSHDB`

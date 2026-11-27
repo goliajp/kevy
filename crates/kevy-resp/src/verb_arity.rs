@@ -160,6 +160,7 @@ pub const VERB_ARITY: &[(&str, i8)] = &[
     ("LTRIM", 4),
     ("MEMORY", -2),
     ("MGET", -2),
+    ("MOVE", 3),
     ("MSET", -3),
     ("MSETNX", -3),
     ("MULTI", 1),

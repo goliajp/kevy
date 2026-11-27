@@ -77,41 +77,66 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<cr
     crate::log_base::write_image_base(&mut w, &mut scratch)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
-    let mut cold_seqs: Vec<u32> = Vec::new();
     let mut since_drop: u64 = 0;
-    src.for_each_entry(|key, value, ttl_ms| {
-        if err.is_some() {
-            return;
-        }
-        // Seg-backed stub: the row's data does NOT re-enter the log —
-        // its segment's trailing SEGMENTED frame re-establishes the
-        // stub at replay (demote-or-insert).
-        if let kevy_store::Value::Cold(c) = value
-            && let Some((seq, _)) = c.seg_parts()
-        {
-            if !cold_seqs.contains(&seq) {
-                cold_seqs.push(seq);
-            }
-            return;
-        }
-        if let Err(e) =
-            write_value_as_commands(&mut w, key, value, ttl_ms, crate::AofFormat::V2, &mut scratch)
-        {
-            err = Some(e);
-        } else {
-            keys += 1;
-            // scratch underestimates multi-frame values ⇒ drops only more often.
-            since_drop = since_drop.saturating_add(scratch.len() as u64);
-            if since_drop >= DROP_BEHIND {
-                since_drop = 0;
-                crate::dump_cache::drop_behind_step(&mut w);
+    // Multi-DB sources (db_count > 1) are written one db at a time, each
+    // preceded by a `SELECT <db>` marker frame — the same shape Redis's
+    // AOF uses — so a replay reconstructs every db, not just db 0.
+    let ndbs = src.db_count();
+    for db in 0..ndbs {
+        if ndbs > 1 {
+            let mut argv = kevy_resp::Argv::with_capacity(2, 0);
+            argv.push(b"SELECT");
+            let dbs = db.to_string();
+            argv.push(dbs.as_bytes());
+            if let Err(e) = emit(&mut w, &argv, crate::AofFormat::V2, &mut scratch) {
+                return Err(e);
             }
         }
-    });
-    if let Some(e) = err {
-        return Err(e);
+        let mut cold_seqs: Vec<u32> = Vec::new();
+        src.for_each_entry_in_db(db, |key, value, ttl_ms| {
+            if err.is_some() {
+                return;
+            }
+            // Seg-backed stub: the row's data does NOT re-enter the log —
+            // its segment's trailing SEGMENTED frame re-establishes the
+            // stub at replay (demote-or-insert).
+            if let kevy_store::Value::Cold(c) = value
+                && let Some((seq, _)) = c.seg_parts()
+            {
+                if !cold_seqs.contains(&seq) {
+                    cold_seqs.push(seq);
+                }
+                return;
+            }
+            if let Err(e) = write_value_as_commands(
+                &mut w,
+                key,
+                value,
+                ttl_ms,
+                crate::AofFormat::V2,
+                &mut scratch,
+            ) {
+                err = Some(e);
+            } else {
+                keys += 1;
+                // scratch underestimates multi-frame values ⇒ drops only more often.
+                since_drop = since_drop.saturating_add(scratch.len() as u64);
+                if since_drop >= DROP_BEHIND {
+                    since_drop = 0;
+                    crate::dump_cache::drop_behind_step(&mut w);
+                }
+            }
+        });
+        if let Some(e) = err {
+            return Err(e);
+        }
+        // Per-db tail: hash-TTL + SEGMENTED frames belong to the db whose
+        // entries just went out, so a replay re-anchors them on the right
+        // keyspace (the SELECT frame above set the cursor).
+        write_hash_ttl_frames_db(&mut w, src, db, crate::AofFormat::V2, &mut scratch)?;
+        crate::segmented::write_segmented_frames_db(&mut w, src, db, &cold_seqs, &mut scratch)?;
     }
-    finish_dump(w, src, &cold_seqs, &mut scratch, keys)
+    finish_dump(w, src, &mut scratch, keys)
 }
 
 /// `dump_aof`'s tail: trailing hash-TTL + SEGMENTED frames, final
@@ -119,12 +144,9 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<cr
 fn finish_dump<S: crate::SnapshotSource>(
     mut w: BufWriter<File>,
     src: &S,
-    cold_seqs: &[u32],
     scratch: &mut Vec<u8>,
     keys: u64,
 ) -> io::Result<crate::RewriteStats> {
-    write_hash_ttl_frames(&mut w, src, crate::AofFormat::V2, scratch)?;
-    crate::segmented::write_segmented_frames(&mut w, src, cold_seqs, scratch)?;
     if let Some(frame) = src.aux_frame() {
         emit(&mut w, &frame, crate::AofFormat::V2, scratch)?;
     }
@@ -137,14 +159,15 @@ fn finish_dump<S: crate::SnapshotSource>(
 
 /// Hash field TTLs re-emitted as absolute HPEXPIREAT frames (after the
 /// HSETs that recreate their fields).
-fn write_hash_ttl_frames<W: Write, S: crate::SnapshotSource>(
+fn write_hash_ttl_frames_db<W: Write, S: crate::SnapshotSource>(
     w: &mut W,
     src: &S,
+    db: u16,
     fmt: crate::AofFormat,
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
     let mut err: Option<io::Error> = None;
-    src.for_each_hash_ttl(|key, field, deadline_ms| {
+    src.for_each_hash_ttl_in_db(db, |key, field, deadline_ms| {
         if err.is_some() {
             return;
         }
@@ -200,19 +223,30 @@ pub fn dump_store_to_buf<S: crate::SnapshotSource>(
         let _ = crate::log_base::write_image_base(&mut buf, &mut scratch);
     }
     let mut keys = 0u64;
-    src.for_each_entry(|key, value, ttl_ms| {
-        let _ = crate::rewrite_frames::write_value_into_vec(
-            &mut buf,
-            key,
-            value,
-            ttl_ms,
-            fmt,
-            &mut scratch,
-        );
-        keys += 1;
-    });
-    // the per-field deadlines, as `dump_aof` writes them after the values
-    let _ = write_hash_ttl_frames(&mut buf, src, fmt, &mut scratch);
+    // Multi-DB sources get one SELECT marker frame per db (same as dump_aof).
+    let ndbs = src.db_count();
+    for db in 0..ndbs {
+        if ndbs > 1 {
+            let mut argv = kevy_resp::Argv::with_capacity(2, 0);
+            argv.push(b"SELECT");
+            let dbs = db.to_string();
+            argv.push(dbs.as_bytes());
+            let _ = emit(&mut buf, &argv, fmt, &mut scratch);
+        }
+        src.for_each_entry_in_db(db, |key, value, ttl_ms| {
+            let _ = crate::rewrite_frames::write_value_into_vec(
+                &mut buf,
+                key,
+                value,
+                ttl_ms,
+                fmt,
+                &mut scratch,
+            );
+            keys += 1;
+        });
+        // the per-field deadlines, as `dump_aof` writes them after the values
+        let _ = write_hash_ttl_frames_db(&mut buf, src, db, fmt, &mut scratch);
+    }
     if let Some(frame) = src.aux_frame() {
         let _ = emit(&mut buf, &frame, fmt, &mut scratch);
     }

@@ -45,6 +45,21 @@ pub struct ServerSection {
     /// # Ok::<(), kevy_config::ConfigError>(())
     /// ```
     pub threads: usize,
+    /// Number of logical databases (`SELECT <index>`). Default `16`,
+    /// matching Redis, so drop-in clients that `SELECT 1` (Gitea sessions,
+    /// …) work unchanged. Stores are allocated eagerly per shard but an
+    /// empty keyspace costs no table memory. `1` restores the historical
+    /// single-DB behaviour (and is the only mode with AOF/snapshot
+    /// persistence until the multi-DB persistence phase lands — see
+    /// `docs/multi-db.md`).
+    ///
+    /// ```
+    /// assert_eq!(kevy_config::Config::default().server.databases, 16);
+    /// let cfg = kevy_config::Config::from_toml_str("[server]\ndatabases = 1\n", None)?;
+    /// assert_eq!(cfg.server.databases, 1);
+    /// # Ok::<(), kevy_config::ConfigError>(())
+    /// ```
+    pub databases: u16,
     /// Only shards `0..N` arm accept SQE; rest stay compute-only.
     ///
     /// ```
@@ -110,6 +125,7 @@ impl Default for ServerSection {
             bind: [127, 0, 0, 1],
             port: 6004,
             threads: 0,
+            databases: 16,
             accept_shards: None,
             packed_rows: true,
             max_clients: 10_000,

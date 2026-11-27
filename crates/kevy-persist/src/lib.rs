@@ -242,6 +242,38 @@ pub trait SnapshotSource {
     fn aux_frame(&self) -> Option<Argv> {
         None
     }
+
+    /// How many logical databases this source holds. Default `1` (every
+    /// existing source is single-db). Sources with more than one db are
+    /// written by AOF rewrite as one `SELECT <db>` marker frame per db
+    /// followed by that db's entries — the same shape Redis uses.
+    fn db_count(&self) -> u16 {
+        1
+    }
+
+    /// Visit every live entry of logical db `db`. Default forwards to
+    /// [`SnapshotSource::for_each_entry`] (correct for single-db sources,
+    /// where only db 0 is ever queried).
+    fn for_each_entry_in_db(&self, db: u16, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        let _ = db;
+        self.for_each_entry(f)
+    }
+
+    /// The live row segments of logical db `db`, as `(seq, file)` — the
+    /// AOF rewrite writes each db's trailing SEGMENTED frames after its
+    /// entries. Default: db 0's [`SnapshotSource::row_seg_files`], empty
+    /// for other dbs.
+    fn row_seg_files_in_db(&self, db: u16) -> Vec<(u32, String)> {
+        if db == 0 { self.row_seg_files() } else { Vec::new() }
+    }
+
+    /// Visit the live hash-field TTLs of logical db `db`. Default: db 0's
+    /// [`SnapshotSource::for_each_hash_ttl`], none for other dbs.
+    fn for_each_hash_ttl_in_db(&self, db: u16, f: impl FnMut(&[u8], &[u8], u64)) {
+        if db == 0 {
+            self.for_each_hash_ttl(f)
+        }
+    }
 }
 
 /// Whether `v` is a row-segment stub (persisted as a reference).

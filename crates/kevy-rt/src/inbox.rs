@@ -247,7 +247,62 @@ impl<C: Commands> Shard<C> {
             while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
                 did += 1;
                 match msg {
-                    Inbound::Request { origin, conn, seq, op } => {
+                    Inbound::DbAdmin(op) => match op {
+                        crate::message::DbAdminOp::FlushDb(db) => {
+                            self.store.store_mut(db).flushall();
+                            self.store.store_mut(db).bump_all_watched();
+                            self.commands.on_flush(&mut self.store);
+                            // Log on every receiving shard too: each shard has
+                            // its own AOF, and replay must see the flush there
+                            // or flushed keys would resurrect on restart.
+                            self.store.set_cur(db);
+                            let mut c = kevy_resp::Argv::with_capacity(1, 8);
+                            c.push(b"FLUSHDB");
+                            self.log(&c);
+                            // Replicate the flush on this shard's feed too —
+                            // every shard owns a slice of every db's
+                            // keyspace, and every replica shard must see it.
+                            self.push_feed(&c);
+                        }
+                        crate::message::DbAdminOp::FlushAll => {
+                            self.store.flush_all();
+                            self.commands.on_flush(&mut self.store);
+                            // Same feed contract as the origin arm: bump this
+                            // shard's generation so its replicas resync via
+                            // snapshot ship instead of replaying a flush frame.
+                            if let Some(f) = self.replicate.as_mut() {
+                                f.bump_generation();
+                                // Multi-DB: force a `SELECT <db>` marker on the next
+                                // pushed frame — after a resync the replica's apply cursor
+                                // restarts at db 0, so a bare frame could land there.
+                                self.feed_last_db.set(u16::MAX);
+                                let g = f.generation();
+                                if let Err(e) = kevy_persist::feed_meta::write_feed_gen(
+                                    &self.data_dir,
+                                    self.id,
+                                    g,
+                                ) {
+                                    eprintln!("kevy: shard {} feed gen write failed: {e}", self.id);
+                                }
+                            }
+                            let mut c = kevy_resp::Argv::with_capacity(1, 8);
+                            c.push(b"FLUSHALL");
+                            self.log(&c);
+                        }
+                        crate::message::DbAdminOp::SwapDb(a, b) => {
+                            self.store.swap(a, b);
+                            let mut c = kevy_resp::Argv::with_capacity(3, 8);
+                            c.push(b"SWAPDB");
+                            let as_ = a.to_string();
+                            let bs = b.to_string();
+                            c.push(as_.as_bytes());
+                            c.push(bs.as_bytes());
+                            self.log(&c);
+                            self.push_feed(&c);
+                        }
+                    },
+                    Inbound::Request { origin, conn, seq, op, db } => {
+                        self.store.set_cur(db);
                         let part = self.exec_op(op);
                         self.reply_forwarded(origin, None, conn, seq, part);
                     }
@@ -292,12 +347,12 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     // ── Cross-shard BLOCK arbiter (see `block_xshard`) ──
-                    Inbound::BlockArm { origin, conn, key, kind, serve_argv, proto } => {
-                        self.target_arm(origin, conn, key, kind, serve_argv, proto)
+                    Inbound::BlockArm { origin, conn, key, kind, serve_argv, proto, db } => {
+                        self.target_arm(origin, conn, key, kind, serve_argv, proto, db)
                     }
                     Inbound::BlockReady { conn, key } => self.origin_on_ready(conn, &key),
-                    Inbound::BlockServeReq { origin, conn, key } => {
-                        let reply = self.target_serve(origin, conn, &key);
+                    Inbound::BlockServeReq { origin, conn, key, db } => {
+                        let reply = self.target_serve(origin, conn, &key, db);
                         self.send_to(origin, Inbound::BlockServeResp { conn, key, reply });
                     }
                     Inbound::BlockServeResp { conn, key, reply } => {
@@ -315,8 +370,8 @@ impl<C: Commands> Shard<C> {
                     Inbound::BlockServeAck { origin, conn } => {
                         self.target_release_escrow(origin, conn);
                     }
-                    Inbound::BlockServeAbort { origin, conn } => {
-                        self.target_apply_escrow(origin, conn);
+                    Inbound::BlockServeAbort { origin, conn, db } => {
+                        self.target_apply_escrow(origin, conn, db);
                     }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
                     // ── WAIT / REPL.WAIT barriers ──

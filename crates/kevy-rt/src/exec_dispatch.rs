@@ -108,7 +108,7 @@ impl<C: Commands> Shard<C> {
     /// Materialised owned at the handoff, into a pool-recycled `Argv`, so
     /// the steady state mallocs nothing. The single-shard hot path never
     /// reaches here.
-    fn forward_to<A: ArgvView + ?Sized>(
+    pub(crate) fn forward_to<A: ArgvView + ?Sized>(
         &mut self,
         shard: usize,
         conn_id: u64,
@@ -213,13 +213,55 @@ impl<C: Commands> Shard<C> {
             }
             return true;
         }
+        // Pending check first (in-order requirement); the borrow ends here
+        // so the MOVE intercept below can take all of self.
+        {
+            let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            else {
+                return false;
+            };
+            if !conn.pending.is_empty() {
+                return false;
+            }
+        }
+        // MOVE crosses dbs — needs the whole DbStores, intercepted here
+        // like in run_dispatch. Compute the reply first (exec_move borrows
+        // all of self), then write it into the conn output.
+        if args.len() >= 1 && args.get(0).is_some_and(|v| v.eq_ignore_ascii_case(b"MOVE")) {
+            self.store.set_cur(meta.db);
+            let part = self.exec_move(args, meta);
+            if let Some(conn) =
+                crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
+            {
+                match part {
+                    crate::message::Part::Reply(sr) => {
+                        let b = sr.bytes(&[]);
+                        conn.output.extend_from_slice(b);
+                    }
+                    crate::message::Part::Int(i) => {
+                        conn.output.extend_from_slice(format!(":{i}\r\n").as_bytes());
+                    }
+                    _ => {}
+                }
+                conn.next_emit += 1;
+                if is_quit {
+                    conn.closing = true;
+                }
+            }
+            if is_quit {
+                self.closing_uring_conns.push(conn_id);
+            }
+            self.slowlog_maybe(t0, args);
+            if meta.is_write {
+                self.post_write_housekeeping(args, meta);
+            }
+            return true;
+        }
         let Some(conn) = crate::conn::conn_at(&mut self.conns, &mut self.conn_slot_hint, conn_id)
         else {
             return false;
         };
-        if !conn.pending.is_empty() {
-            return false;
-        }
         let out_pre_len = conn.output.len();
         dispatch_proto(&self.commands, &mut self.store, args, proto, meta, &mut conn.output);
         let wrote_reply = conn.output.len() > out_pre_len;
@@ -413,11 +455,7 @@ impl<C: Commands> Shard<C> {
             // window during `REPLICAOF NO ONE` promotion when both an
             // upstream link and a downstream source can coexist. The
             // thread-local read is a cheap branch on the cold path here.
-            if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-                && !crate::replication_gate::is_applying_replicated()
-            {
-                src.push_mutation(args);
-            }
+            self.push_feed(args);
         } else {
             self.record_propagation_override(prop, args);
         }

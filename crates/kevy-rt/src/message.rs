@@ -139,7 +139,7 @@ pub(crate) enum Op {
     /// reply ([`Part::Int`]) is `1` if ANY key on this shard has been
     /// modified since the recorded version, else `0`. The origin shard
     /// ORs the partial replies and aborts EXEC on any `1`.
-    CheckWatch(Vec<(Vec<u8>, u64)>),
+    CheckWatch(Vec<(Vec<u8>, u64, u16)>),
     /// `RENAME` / `RENAMENX` — both keys on the same shard. Atomic on
     /// that shard via [`kevy_store::Store::rename`]. Reply: `Part::Reply`
     /// carrying `+OK\r\n` (RENAME ok), `:1\r\n` / `:0\r\n` (RENAMENX
@@ -328,13 +328,28 @@ pub(crate) enum SmallReply {
 pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion, DispatchMeta)>;
 pub(crate) use crate::batch_lane::RespBatch;
 
+/// Whole-instance admin op fanned out to every shard (multi-DB).
+#[derive(Clone, Copy)]
+pub(crate) enum DbAdminOp {
+    FlushDb(u16),
+    FlushAll,
+    SwapDb(u16, u16),
+}
+
 /// Inter-core message (each core has one inbound queue carrying both).
 pub(crate) enum Inbound {
+    /// Admin op that must run on EVERY shard (each shard owns a slice of
+    /// every db's keyspace): FLUSHDB/FLUSHALL/SWAPDB. Fire-and-forget —
+    /// the origin applies locally and replies without waiting.
+    DbAdmin(DbAdminOp),
     Request {
         origin: usize,
         conn: u64,
         seq: u64,
         op: Op,
+        /// Logical db of the originating conn — the target shard sets its
+        /// `DbStores` cursor to this before executing the op.
+        db: u16,
     },
     Response {
         conn: u64,
@@ -385,6 +400,9 @@ pub(crate) enum Inbound {
         key: Vec<u8>,
         kind: BlockKind,
         serve_argv: Argv,
+        /// The origin conn's selected db — the target's `conns` map has no
+        /// entry for a remote conn, so the db must travel with the message.
+        db: u16,
         /// The origin conn's RESP version, so the target shapes the served
         /// reply (V2 array / V3 map) correctly without a round-trip.
         proto: RespVersion,
@@ -402,6 +420,7 @@ pub(crate) enum Inbound {
         origin: usize,
         conn: u64,
         key: Vec<u8>,
+        db: u16,
     },
     /// target → origin: the serve result. Empty `reply` = raced (another
     /// client drained the key between ready and serve) → the origin re-arms.
@@ -441,6 +460,7 @@ pub(crate) enum Inbound {
     BlockServeAbort {
         origin: usize,
         conn: u64,
+        db: u16,
     },
     /// origin → target: drop every waiter for `(origin, conn)` — sent on
     /// successful serve, timeout, or disconnect.

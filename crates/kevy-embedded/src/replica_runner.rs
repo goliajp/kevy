@@ -319,7 +319,7 @@ fn snapshot_event(
     ack_gen: u64,
 ) -> bool {
     match ev {
-        ReplicaEvent::SnapshotBegin => *snap = Some(begin_snapshot(shards)),
+        ReplicaEvent::SnapshotBegin { .. } => *snap = Some(begin_snapshot(shards)),
         ReplicaEvent::SnapshotChunk(bytes) => {
             if let Some(buf) = snap.as_mut() {
                 buf.extend_from_slice(&bytes);

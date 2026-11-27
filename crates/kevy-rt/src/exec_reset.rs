@@ -28,6 +28,9 @@ impl<C: Commands> Shard<C> {
             c.watched.clear();
             c.client_name.clear();
             c.proto = RespVersion::V2;
+            // RESET returns the connection to its initial state —
+            // selected db included (multi-DB: Redis resets to db 0).
+            c.db = 0;
         }
         self.immediate_reply(conn_id, b"+RESET\r\n".to_vec());
     }

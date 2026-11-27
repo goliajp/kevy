@@ -275,8 +275,9 @@ fn option_errors_exit_with_redis_cli_messages() {
 fn failure_paths_and_rare_modes() {
     let s = Srv::start();
     let p = s.port();
-    let select = cli(&["-n", "3", "-p", &p, "PING"], b"", &[]);
-    assert!(select.stderr.starts_with("SELECT 3 failed: ERR"), "{}", select.stderr);
+    // 9999 is beyond the default 16 databases — the handshake SELECT fails.
+    let select = cli(&["-n", "9999", "-p", &p, "PING"], b"", &[]);
+    assert!(select.stderr.starts_with("SELECT 9999 failed: ERR"), "{}", select.stderr);
     assert_eq!(
         select.stdout, "PONG\n",
         "a failed handshake leaves the connection, as redis-cli's does"

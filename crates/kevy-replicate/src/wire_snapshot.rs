@@ -67,10 +67,12 @@ pub enum SnapshotMarker {
     /// ```
     /// use kevy_replicate::wire::{SnapshotMarker, decode_snapshot_marker};
     ///
-    /// assert_eq!(decode_snapshot_marker(b"+SNAPSHOT\r\n")?, Some((SnapshotMarker::Begin, 11)));
+    /// assert_eq!(decode_snapshot_marker(b"+SNAPSHOT\r\n")?, Some((SnapshotMarker::Begin(0), 11)));
     /// # Ok::<(), kevy_replicate::wire::WireError>(())
     /// ```
-    Begin,
+    /// `+SNAPSHOT\r\n` (db 0) or `+SNAPSHOT <db>\r\n` (multi-DB: one ship
+    /// per logical db) — primary is about to stream snapshot chunks.
+    Begin(u16),
     /// `+SNAPSHOT_END <ack_offset>\r\n` — end of snapshot; the next
     /// live frame's offset will equal `ack_offset`.
     ///
@@ -113,7 +115,14 @@ pub enum SnapshotMarker {
 /// assert_eq!(kevy_replicate::wire::encode_snapshot_begin(), b"+SNAPSHOT\r\n");
 /// ```
 pub fn encode_snapshot_begin() -> Vec<u8> {
-    b"+SNAPSHOT\r\n".to_vec()
+    encode_snapshot_begin_db(0)
+}
+
+/// `+SNAPSHOT\r\n` for db 0 (byte-identical to the historical marker), or
+/// `+SNAPSHOT <db>\r\n` for db > 0 — multi-DB primaries ship one snapshot
+/// stream per logical db, each preceded by its marker.
+pub fn encode_snapshot_begin_db(db: u16) -> Vec<u8> {
+    if db == 0 { b"+SNAPSHOT\r\n".to_vec() } else { format!("+SNAPSHOT {db}\r\n").into_bytes() }
 }
 
 /// Encode one snapshot chunk as a RESP bulk string. Caller is
@@ -256,7 +265,7 @@ pub fn encode_snapshot_end(ack_offset: u64) -> Vec<u8> {
 /// ```
 /// use kevy_replicate::wire::{SnapshotMarker, WireError, decode_snapshot_marker};
 ///
-/// assert_eq!(decode_snapshot_marker(b"+SNAPSHOT\r\n$3")?, Some((SnapshotMarker::Begin, 11)));
+/// assert_eq!(decode_snapshot_marker(b"+SNAPSHOT\r\n$3")?, Some((SnapshotMarker::Begin(0), 11)));
 /// assert_eq!(decode_snapshot_marker(b"*2\r\n")?, None); // a live frame: use decode_frame
 /// assert_eq!(decode_snapshot_marker(b"+SNAPSH"), Err(WireError::Truncated));
 /// assert_eq!(decode_snapshot_marker(b"+HELLO\r\n"), Err(WireError::BadEnvelope));
@@ -281,7 +290,12 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
     }
     let line = &buf[1..eol];
     if line == b"SNAPSHOT" {
-        return Ok(Some((SnapshotMarker::Begin, eol + 2)));
+        return Ok(Some((SnapshotMarker::Begin(0), eol + 2)));
+    }
+    if let Some(rest) = line.strip_prefix(b"SNAPSHOT ") {
+        let db = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;
+        let db = u16::try_from(db).map_err(|_| WireError::BadEnvelope)?;
+        return Ok(Some((SnapshotMarker::Begin(db), eol + 2)));
     }
     if let Some(rest) = line.strip_prefix(b"SNAPSHOT_END ") {
         let offset = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;

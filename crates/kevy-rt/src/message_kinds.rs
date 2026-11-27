@@ -198,4 +198,8 @@ pub(crate) struct DispatchMeta {
     /// owning shard can prefetch its bucket without hashing again; 0 when
     /// it did not. Only a prefetch hint: a real hash of 0 is hashed again.
     pub(crate) key_hash: u64,
+    /// Logical db (`SELECT`) of the connection this command came from —
+    /// carried to the owning shard so it executes against the right
+    /// keyspace (multi-DB: docs/multi-db.md).
+    pub(crate) db: u16,
 }

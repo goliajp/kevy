@@ -19,6 +19,10 @@ bind     = "127.0.0.1"
 port     = 6004
 # 0 = auto-detect (CPU count via std::thread::available_parallelism).
 threads  = 0
+# Logical databases (`SELECT <index>`). Default 16 (matches Redis).
+# Phase 1 is in-memory only: databases > 1 requires AOF off (--no-aof)
+# and no replica role — see docs/multi-db.md.
+# databases = 16
 # Where snapshot + AOF live. Resolved relative to the kevy process cwd.
 data_dir = "."
 

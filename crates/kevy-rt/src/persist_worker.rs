@@ -40,8 +40,11 @@ pub(crate) enum PersistJob {
     /// was started; the completion swaps in a fresh log of post-collect
     /// writes (the COW replacement for the old save-then-truncate).
     Save {
-        view: SnapshotView,
-        snap_path: PathBuf,
+        /// One frozen view per logical db (multi-DB: db 0 keeps the
+        /// historical `dump-<shard>.rdb` file, db N gets `dump-<shard>-db<N>.rdb`).
+        views: Vec<(u16, SnapshotView)>,
+        data_dir: PathBuf,
+        shard: usize,
         aof_reset: Option<PathBuf>,
         /// Feed cursor at view-freeze — written into the
         /// snapshot header (recovery-point contract).
@@ -49,8 +52,9 @@ pub(crate) enum PersistJob {
         /// The frame kept beside the keyspace ([`Commands::snapshot_aux`]).
         aux: Option<kevy_resp::Argv>,
     },
-    /// Dump `view` as RESP commands at the AOF's `.rewrite` tmp.
-    Rewrite { view: SnapshotView, tmp: PathBuf, aux: Option<kevy_resp::Argv> },
+    /// Dump every db's `views` as RESP commands at the AOF's `.rewrite`
+    /// tmp, one `SELECT <db>` marker per db (multi-DB).
+    Rewrite { views: Vec<(u16, SnapshotView)>, tmp: PathBuf, aux: Option<kevy_resp::Argv> },
     /// Append a handed-off tee generation to the rewrite tmp and fsync.
     TeeAppend { tmp: PathBuf, bytes: Vec<u8> },
     /// The off-thread half of the final swap: hardlink the live log to
@@ -77,8 +81,9 @@ pub(crate) enum PersistJob {
 
 pub(crate) enum PersistDone {
     Save {
-        result: io::Result<PathBuf>, // the written snapshot tmp
-        snap_path: PathBuf,
+        /// One `(db, write-result, live path)` per db — db 0's tmp drives
+        /// the AOF reset swap at commit.
+        results: Vec<(u16, io::Result<PathBuf>, PathBuf)>,
         aof_reset: Option<PathBuf>,
     },
     Rewrite {
@@ -232,14 +237,31 @@ impl<C: Commands> Shard<C> {
         if !loads {
             return Ok(());
         }
+        // Multi-DB: one snapshot file per db — db 0 keeps the historical
+        // `dump-<shard>.rdb` name, db N > 0 reads `dump-<shard>-db<N>.rdb`.
+        // The settle decision above (snapshot vs. complete-rewrite AOF)
+        // applies to all of them: they are written by the same SAVE.
         // a snapshot loaded in part would be served, and written over,
         // as if it were whole
-        let aux = crate::persist_jobs::load_snapshot_file(&mut self.store, &snap).map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!("shard {}: {} does not load: {e}", self.id, snap.display()),
-            )
-        })?;
+        let mut aux = None;
+        for db in 0..self.store.databases() {
+            let path = kevy_persist::layout::snapshot_db_path(&self.data_dir, self.id, db);
+            if db > 0 && !path.exists() {
+                continue;
+            }
+            self.store.set_cur(db);
+            let a =
+                crate::persist_jobs::load_snapshot_file(&mut self.store, &path).map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!("shard {}: {} does not load: {e}", self.id, path.display()),
+                    )
+                })?;
+            if db == 0 {
+                aux = a;
+            }
+        }
+        self.store.set_cur(0);
         self.commands.load_snapshot_aux(aux.as_ref(), false);
         Ok(())
     }
@@ -249,8 +271,8 @@ impl<C: Commands> Shard<C> {
     /// under the tier budget, let the command set record what it found,
     /// and wait until every other shard has restored too.
     pub(crate) fn finish_restore(&mut self) {
-        self.store.sweep_orphan_row_segs();
-        self.store.demote_to_watermark();
+        self.store.sweep_orphan_row_segs_all();
+        self.store.demote_all_to_watermark();
         // what the restore records goes to the log and to the replicas, as
         // any recorded change does: a replica that resumes the stream
         // after this start takes no snapshot that would carry it
@@ -276,7 +298,7 @@ impl<C: Commands> Shard<C> {
         }
         // collect + begin_view_rewrite back-to-back on this thread: no
         // append can land between them (the tee atomicity contract).
-        let view = self.store.collect_snapshot();
+        let views = self.store.collect_snapshot_all();
         let aof_reset = match &mut self.aof {
             Some(aof) => match aof.begin_view_rewrite() {
                 Ok(tmp) => Some(tmp),
@@ -295,8 +317,14 @@ impl<C: Commands> Shard<C> {
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
         let aux = self.commands.snapshot_aux();
-        let job =
-            PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor, aux };
+        let job = PersistJob::Save {
+            views,
+            data_dir: self.data_dir.clone(),
+            shard: self.id,
+            aof_reset,
+            cursor,
+            aux,
+        };
         if !self.persist.submit(self.id, job) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             if let Some(aof) = &mut self.aof {
@@ -330,7 +358,7 @@ impl<C: Commands> Shard<C> {
             }
             return;
         }
-        let view = self.store.collect_snapshot();
+        let views = self.store.collect_snapshot_all();
         let aof = self.aof.as_mut().expect("checked above");
         let tmp = match aof.begin_view_rewrite() {
             Ok(t) => t,
@@ -340,7 +368,7 @@ impl<C: Commands> Shard<C> {
             }
         };
         let aux = self.commands.snapshot_aux();
-        if !self.persist.submit(self.id, PersistJob::Rewrite { view, tmp, aux }) {
+        if !self.persist.submit(self.id, PersistJob::Rewrite { views, tmp, aux }) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             self.aof.as_mut().expect("checked").abort_concurrent_rewrite();
         }
@@ -452,7 +480,32 @@ impl<C: Commands> Shard<C> {
     #[cold]
     pub(crate) fn commit_persist_done(&mut self, done: PersistDone) {
         match done {
-            PersistDone::Save { result: Ok(tmp), snap_path, aof_reset } => {
+            PersistDone::Save { results, aof_reset } => {
+                // results: one (db, write-result, live path) per db; db 0's
+                // tmp additionally drives the AOF reset swap (commit_snapshot
+                // renames it into place).
+                let mut db0: Option<(PathBuf, PathBuf)> = None;
+                for (db, result, live) in &results {
+                    match result {
+                        Ok(tmp) => {
+                            if *db == 0 {
+                                db0 = Some((tmp.clone(), live.clone()));
+                            } else if let Err(e) = std::fs::rename(tmp, live) {
+                                eprintln!(
+                                    "kevy: shard {} bgsave rename db{db} failed: {e}",
+                                    self.id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("kevy: shard {} bgsave db{db} failed: {e}", self.id);
+                        }
+                    }
+                }
+                let Some((tmp, snap_path)) = db0 else {
+                    self.abort_persist_tee(aof_reset);
+                    return;
+                };
                 let Some((reset_tmp, aof)) = aof_reset.zip(self.aof.as_mut()) else {
                     if let Err(e) = std::fs::rename(&tmp, &snap_path) {
                         eprintln!("kevy: shard {} bgsave rename failed: {e}", self.id);
@@ -466,10 +519,6 @@ impl<C: Commands> Shard<C> {
                         let _ = std::fs::remove_file(&tmp);
                     }
                 }
-            }
-            PersistDone::Save { result: Err(e), aof_reset, .. } => {
-                eprintln!("kevy: shard {} bgsave failed: {e}", self.id);
-                self.abort_persist_tee(aof_reset);
             }
             done @ (PersistDone::Rewrite { .. }
             | PersistDone::TeeAppend { .. }

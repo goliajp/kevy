@@ -24,13 +24,11 @@ fn select_zero_ok_others_rejected() {
     assert_eq!(d(&mut s, &[b"SELECT", b"0"]), b"+OK\r\n");
     assert_eq!(d(&mut s, &[b"select", b"0"]), b"+OK\r\n");
 
-    // Any other index returns an explicit kevy-only-DB-0 error (NOT the
-    // valkey "DB index is out of range" — that one would mislead callers
-    // into thinking they could just config their way around it).
-    let r1 = d(&mut s, &[b"SELECT", b"1"]);
-    assert!(r1.starts_with(b"-ERR kevy only supports DB 0"), "got: {:?}", std::str::from_utf8(&r1));
-    let r15 = d(&mut s, &[b"SELECT", b"15"]);
-    assert!(r15.starts_with(b"-ERR kevy only supports DB 0"));
+    // The embedded engine is single-db: any other index gets Redis's
+    // "DB index is out of range" (the network server handles SELECT itself
+    // via kevy-rt's multi-db support — see docs/multi-db.md).
+    assert_eq!(d(&mut s, &[b"SELECT", b"1"]), b"-ERR DB index is out of range\r\n");
+    assert_eq!(d(&mut s, &[b"SELECT", b"15"]), b"-ERR DB index is out of range\r\n");
 
     // Non-numeric and out-of-range get Redis's "value is not an integer".
     assert_eq!(

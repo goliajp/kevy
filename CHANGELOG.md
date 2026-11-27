@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — multi-database support
+
+- New `[server] databases = N` config (default **16**, matching Redis/Valkey; `1` = previous single-DB behaviour, byte-identical logs and files). See [docs/multi-db.md](docs/multi-db.md).
+- `SELECT <i>` switches logical databases per connection (errors byte-identical to Redis). `FLUSHDB` / `FLUSHALL` / `SWAPDB` fan out to every shard; `DBSIZE` is per-db; keyspace notifications carry the db (`__keyevent@<db>__:*`); `MOVE key db` moves a key (with TTL) across dbs; `WATCH` is per-db.
+- Persistence: AOF carries `SELECT <db>` marker frames (Redis's shape) and one `SELECT` per db on rewrite; snapshots are one file per db per shard (`dump-<shard>-db<N>.rdb`); INFO keyspace prints one `dbN:` line per non-empty db.
+- Replication: the backlog carries the same `SELECT` markers; the primary ships one snapshot stream per db; `MOVE`/`SWAPDB`/`FLUSHDB` frames replicate; `FLUSHALL` resyncs via generation bump. Multi-DB works as primary and as replica.
+
 ## 7.0.0 — the Rust API brought to the guidelines, embedded writes that survive a kill, global indexes, encrypted links
 
 A major release, for four reasons that reach past a running server. The

@@ -323,7 +323,16 @@ pub(super) fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Keyspace\r\n");
     // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
     // a Redis estimate we don't track; report 0 (its "unknown" value).
-    if totals.keys > 0 {
+    // Multi-DB: one line per non-empty db (totals.keys_db); single-db builds
+    // have empty vectors and fall back to the scalar db0 line.
+    if !totals.keys_db.is_empty() {
+        for (db, keys) in totals.keys_db.iter().enumerate() {
+            if *keys > 0 {
+                let expires = totals.expires_db.get(db).copied().unwrap_or(0);
+                b.push_str(&format!("db{db}:keys={keys},expires={expires},avg_ttl=0\r\n"));
+            }
+        }
+    } else if totals.keys > 0 {
         b.push_str(&format!("db0:keys={},expires={},avg_ttl=0\r\n", totals.keys, totals.expires));
     }
     b.push_str("\r\n");

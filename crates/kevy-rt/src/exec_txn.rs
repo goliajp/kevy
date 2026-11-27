@@ -129,7 +129,8 @@ impl<C: Commands> Shard<C> {
             // cluster_conn = false: queued transactions execute with full
             // cross-shard fan-out even on a cluster conn (superset
             // behaviour — the redirect already happened, or never will).
-            self.start_command(conn_id, seq, proto, cmd, resolved, false);
+            let db = self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0);
+            self.start_command(conn_id, seq, proto, cmd, resolved, false, db);
         }
         if marked {
             self.aof_end_group_logged();

@@ -13,7 +13,7 @@ fn snapshot_begin_marker_round_trip() {
     let bytes = encode_snapshot_begin();
     assert_eq!(bytes, b"+SNAPSHOT\r\n");
     let (marker, used) = decode_snapshot_marker(&bytes).unwrap().unwrap();
-    assert_eq!(marker, SnapshotMarker::Begin);
+    assert_eq!(marker, SnapshotMarker::Begin(0));
     assert_eq!(used, bytes.len());
 }
 
@@ -125,7 +125,7 @@ fn full_snapshot_stream_decodes_in_order() {
 
     let mut pos = 0;
     let (marker, used) = decode_snapshot_marker(&buf[pos..]).unwrap().unwrap();
-    assert_eq!(marker, SnapshotMarker::Begin);
+    assert_eq!(marker, SnapshotMarker::Begin(0));
     pos += used;
     for expected in &payloads {
         let (chunk, used) = decode_snapshot_chunk(&buf[pos..]).unwrap();

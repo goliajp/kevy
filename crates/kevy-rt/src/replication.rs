@@ -136,6 +136,10 @@ pub enum ReplicaState {
         /// Empty + `serializing.is_some()` ⇒ still waiting on the
         /// background serializer.
         snapshot_buf: Vec<u8>,
+        /// Logical db this ship covers (multi-DB: one ship per db).
+        cur_db: u16,
+        /// Remaining (db, view) ships to chain after this one ends.
+        pending_dbs: Vec<(u16, kevy_store::SnapshotView)>,
         /// Cursor into `snapshot_buf` — bytes [0..snapshot_off) have
         /// been chunked into `output` already.
         snapshot_off: usize,

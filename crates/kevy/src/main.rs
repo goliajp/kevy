@@ -27,6 +27,7 @@ fn main() -> ! {
     let mut cfg = resolve_config();
     let threads = resolve_thread_count(&mut cfg);
     validate_accept_shards(&cfg, threads);
+    validate_databases(&cfg);
     print_startup_banner(&cfg, threads);
     if !is_loopback(cfg.server.bind) {
         warn_unprotected_bind(cfg.server.bind);
@@ -99,6 +100,20 @@ fn validate_accept_shards(cfg: &Config, threads: usize) {
         eprintln!("kevy: --accept-shards must be in 1..={threads}, got {n} (threads = {threads})");
         std::process::exit(2);
     }
+}
+
+/// `databases` bounds only — AOF, snapshots and replication are all
+/// multi-DB aware now (SELECT marker frames / per-db snapshot files /
+/// per-db snapshot ship, docs/multi-db.md).
+fn validate_databases(cfg: &kevy_config::Config) {
+    let n = cfg.server.databases;
+    if n == 0 || n > 1024 {
+        eprintln!("kevy: [server] databases must be in 1..=1024, got {n}");
+        std::process::exit(1);
+    }
+    // Multi-DB replication is supported: the backlog carries `SELECT <db>`
+    // marker frames (like the AOF) and the snapshot ship is one stream per
+    // db — see docs/multi-db.md.
 }
 
 /// Resolve `threads = 0 (auto)` into the actual count and write it back so

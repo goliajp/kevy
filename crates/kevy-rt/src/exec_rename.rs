@@ -47,7 +47,13 @@ impl<C: Commands> Shard<C> {
             } else {
                 self.send_to(
                     src_shard,
-                    Inbound::Request { origin: self.id, conn: conn_id, seq, op },
+                    Inbound::Request {
+                        origin: self.id,
+                        conn: conn_id,
+                        seq,
+                        op,
+                        db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                    },
                 );
             }
             return;
@@ -99,7 +105,13 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 src_shard,
-                Inbound::Request { origin: self.id, conn: conn_id, seq, op: take_op },
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op: take_op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
             );
         }
     }
@@ -179,7 +191,13 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 dst_shard,
-                Inbound::Request { origin: self.id, conn: conn_id, seq, op: put_op },
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op: put_op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
             );
         }
     }
@@ -256,7 +274,13 @@ impl<C: Commands> Shard<C> {
         } else {
             self.send_to(
                 src_shard,
-                Inbound::Request { origin: self.id, conn: conn_id, seq, op: restore_op },
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op: restore_op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
             );
         }
     }

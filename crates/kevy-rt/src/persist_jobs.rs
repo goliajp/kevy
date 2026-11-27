@@ -80,21 +80,67 @@ pub(crate) fn run_tee_append(tmp: PathBuf, mut bytes: Vec<u8>) -> PersistDone {
     PersistDone::TeeAppend { result, tmp, buf: bytes }
 }
 
+/// A set of per-db frozen views presented as one multi-db
+/// [`kevy_persist::SnapshotSource`], so the AOF rewrite emits one
+/// `SELECT <db>` marker frame per db (see `kevy_persist::dump_aof`).
+pub(crate) struct MultiDbViews<'a>(&'a [(u16, kevy_store::SnapshotView)]);
+
+impl kevy_persist::SnapshotSource for MultiDbViews<'_> {
+    fn for_each_entry(&self, f: impl FnMut(&[u8], &kevy_store::Value, Option<u64>)) {
+        self.0[0].1.for_each_entry(f)
+    }
+
+    fn db_count(&self) -> u16 {
+        self.0.len() as u16
+    }
+
+    fn for_each_entry_in_db(&self, db: u16, f: impl FnMut(&[u8], &kevy_store::Value, Option<u64>)) {
+        self.0.iter().find(|(d, _)| *d == db).unwrap_or(&self.0[0]).1.for_each_entry(f)
+    }
+
+    fn row_seg_files_in_db(&self, db: u16) -> Vec<(u32, String)> {
+        self.0.iter().find(|(d, _)| *d == db).unwrap_or(&self.0[0]).1.row_seg_files()
+    }
+
+    fn for_each_hash_ttl_in_db(&self, db: u16, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.0.iter().find(|(d, _)| *d == db).unwrap_or(&self.0[0]).1.for_each_hash_ttl(f)
+    }
+}
+
 pub(crate) fn run_job(job: PersistJob) -> PersistDone {
     match job {
-        PersistJob::Save { view, snap_path, aof_reset, cursor, aux } => PersistDone::Save {
-            result: kevy_persist::write_snapshot_tmp_with_cursor(
-                &kevy_persist::WithAux::new(&view, aux.as_ref()),
-                &snap_path,
-                cursor,
-            ),
-            snap_path,
-            aof_reset,
-        },
-        PersistJob::Rewrite { view, tmp, aux } => PersistDone::Rewrite {
-            // dump_aof drop-behinds its own cache and sync_all()s.
-            result: kevy_persist::dump_aof(&tmp, &kevy_persist::WithAux::new(&view, aux.as_ref()))
-                .map(|stats| stats.keys),
+        PersistJob::Save { views, data_dir, shard, aof_reset, cursor, aux } => {
+            // One snapshot file per db: db 0 keeps `dump-<shard>.rdb`,
+            // db N > 0 gets `dump-<shard>-db<N>.rdb`. The aux frame and the
+            // feed cursor go into db 0's file (the shard-level records).
+            let mut results = Vec::with_capacity(views.len());
+            for (db, view) in &views {
+                let live = kevy_persist::layout::snapshot_db_path(&data_dir, shard, *db);
+                if *db > 0 && view.len() == 0 {
+                    // Empty db > 0: no file — and remove any stale file from
+                    // an earlier SAVE, or a FLUSHDB'd db would resurrect at boot.
+                    let _ = std::fs::remove_file(&live);
+                    continue;
+                }
+                let src =
+                    kevy_persist::WithAux::new(view, if *db == 0 { aux.as_ref() } else { None });
+                let result = kevy_persist::write_snapshot_tmp_with_cursor(
+                    &src,
+                    &live,
+                    if *db == 0 { cursor } else { None },
+                );
+                results.push((*db, result, live));
+            }
+            PersistDone::Save { results, aof_reset }
+        }
+        PersistJob::Rewrite { views, tmp, aux } => PersistDone::Rewrite {
+            // dump_aof iterates the dbs itself (SELECT marker per db) via
+            // the SnapshotSource db hooks — see MultiDbViews.
+            result: kevy_persist::dump_aof(
+                &tmp,
+                &kevy_persist::WithAux::new(&MultiDbViews(&views), aux.as_ref()),
+            )
+            .map(|stats| stats.keys),
             tmp,
         },
         PersistJob::SwapImage { tmp, live, trash, tail } => run_swap(tmp, live, trash, tail),

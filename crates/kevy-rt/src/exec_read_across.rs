@@ -48,7 +48,16 @@ impl<C: Commands> Shard<C> {
             if shard == self.id {
                 self.exec_local(conn_id, seq, op);
             } else {
-                self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+                self.send_to(
+                    shard,
+                    Inbound::Request {
+                        origin: self.id,
+                        conn: conn_id,
+                        seq,
+                        op,
+                        db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                    },
+                );
             }
         }
     }
@@ -78,6 +87,7 @@ impl<C: Commands> Shard<C> {
             key_idx: None,
             verb: crate::VerbId::UNKNOWN,
             key_hash: 0,
+            db: 0,
         };
         crate::exec_dispatch::dispatch_proto(
             &self.commands,
@@ -135,7 +145,16 @@ impl<C: Commands> Shard<C> {
         if shard == self.id {
             self.exec_local(conn_id, seq, op);
         } else {
-            self.send_to(shard, Inbound::Request { origin: self.id, conn: conn_id, seq, op });
+            self.send_to(
+                shard,
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op,
+                    db: self.conns.get(&conn_id).map(|c| c.db).unwrap_or(0),
+                },
+            );
         }
     }
 

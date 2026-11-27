@@ -68,6 +68,7 @@ impl<C: Commands> Shard<C> {
             key_idx: u8::try_from(key_idx).ok(),
             verb: crate::VerbId::UNKNOWN,
             key_hash: 0,
+            db: 0,
         };
         self.post_write_housekeeping(argv, meta);
     }
@@ -94,11 +95,7 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_some() {
             self.log_write(argv);
         }
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(argv);
-        }
+        self.push_feed(argv);
     }
 }
 

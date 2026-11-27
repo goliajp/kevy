@@ -62,6 +62,18 @@ impl<S: SnapshotSource> SnapshotSource for WithAux<'_, S> {
     fn aux_frame(&self) -> Option<Argv> {
         self.aux.cloned()
     }
+    fn db_count(&self) -> u16 {
+        self.src.db_count()
+    }
+    fn for_each_entry_in_db(&self, db: u16, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.src.for_each_entry_in_db(db, f)
+    }
+    fn row_seg_files_in_db(&self, db: u16) -> Vec<(u32, String)> {
+        self.src.row_seg_files_in_db(db)
+    }
+    fn for_each_hash_ttl_in_db(&self, db: u16, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.src.for_each_hash_ttl_in_db(db, f)
+    }
 }
 
 /// Write `frame` as the snapshot's `OP_AUX` record.

@@ -59,6 +59,7 @@ impl Config {
             }
             "port" => self.server.port = value_as_u16(item)?,
             "threads" => self.server.threads = value_as_usize(item)?,
+            "databases" => self.server.databases = value_as_u16(item)?,
             "accept_shards" => self.server.accept_shards = Some(value_as_usize(item)?),
             "packed_rows" => self.server.packed_rows = value_as_bool(item)?,
             "max_clients" => self.server.max_clients = value_as_usize(item)?,

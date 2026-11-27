@@ -70,6 +70,9 @@ pub(crate) struct Conn {
     /// which point `dispatch_into_resp3` becomes the per-command reply
     /// encoder.
     pub(crate) proto: RespVersion,
+    /// Logical db selected by `SELECT` (default 0). Drives which
+    /// keyspace the shard's `DbStores` derefs to for this conn.
+    pub(crate) db: u16,
     /// QUIT / EOF / protocol error seen — close once drained & flushed.
     pub(crate) closing: bool,
     pub(crate) want_write: bool,
@@ -119,7 +122,7 @@ pub(crate) struct Conn {
     /// `WATCH`-ed keys + the version each had on its owning shard at
     /// `WATCH` time. `EXEC` fans these out via `Op::CheckWatch`; if any
     /// shard reports a mismatch, the transaction aborts (nil multi-bulk).
-    pub(crate) watched: Vec<(Vec<u8>, u64)>,
+    pub(crate) watched: Vec<(Vec<u8>, u64, u16)>,
     /// S3 Always reply gate: `Some(w)` = this conn's pending output
     /// answers writes queued up to record-watermark `w` and must not
     /// leave until the writer lane's durable watermark reaches `w`
@@ -174,6 +177,7 @@ impl Conn {
             held_watermark: None,
             client_name: Vec::new(),
             proto: RespVersion::default(),
+            db: 0,
             blocked: false,
             hold: None,
             cluster: false,
